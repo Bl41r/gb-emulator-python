@@ -244,7 +244,7 @@ class Z80Cpu(object):
             67: (self._ld_rr, ['b', 'e']),  # LDrr_be
             68: (self._ld_rr, ['b', 'h']),  # LDrr_bh
             69: (self._ld_rr, ['b', 'l']),  # LDrr_bl
-            70: ('', {}),  # LDrHLm_b
+            70: (self._ld_r_hlm, ['b']),  # LDrHLm_b
             71: (self._ld_rr, ['b', 'a']),  # LDrr_ba
             72: (self._ld_rr, ['c', 'b']),  # LDrr_cb
             73: (self._ld_rr, ['c', 'c']),  # LDrr_cc (nop?)
@@ -252,7 +252,7 @@ class Z80Cpu(object):
             75: (self._ld_rr, ['c', 'e']),  # LDrr_ce
             76: (self._ld_rr, ['c', 'h']),  # LDrr_ch
             77: (self._ld_rr, ['c', 'l']),  # LDrr_cl
-            78: ('', {}),  # LDrHLm_c
+            78: (self._ld_r_hlm, ['c']),  # LDrHLm_c
             79: (self._ld_rr, ['c', 'a']),  # LDrr_ca
             80: (self._ld_rr, ['d', 'b']),  # LDrr_db
             81: (self._ld_rr, ['d', 'c']),  # LDrr_dc
@@ -260,7 +260,7 @@ class Z80Cpu(object):
             83: (self._ld_rr, ['d', 'e']),  # LDrr_de
             84: (self._ld_rr, ['d', 'h']),  # LDrr_dh
             85: (self._ld_rr, ['d', 'l']),  # LDrr_dl
-            86: ('', {}),  # LDrHLm_d
+            86: (self._ld_r_hlm, ['d']),  # LDrHLm_d
             87: (self._ld_rr, ['d', 'a']),  # LDrr_da
             88: (self._ld_rr, ['e', 'b']),  # LDrr_eb
             89: (self._ld_rr, ['e', 'c']),  # LDrr_ec
@@ -268,7 +268,7 @@ class Z80Cpu(object):
             91: (self._ld_rr, ['e', 'e']),  # LDrr_ee (nop?)
             92: (self._ld_rr, ['e', 'h']),  # LDrr_eh
             93: (self._ld_rr, ['e', 'l']),  # LDrr_el
-            94: ('', {}),  # LDrHLm_e
+            94: (self._ld_r_hlm, ['e']),  # LDrHLm_e
             95: (self._ld_rr, ['e', 'a']),  # LDrr_ea
             96: (self._ld_rr, ['h', 'b']),  # LDrr_hb
             97: (self._ld_rr, ['h', 'c']),  # LDrr_hc
@@ -276,7 +276,7 @@ class Z80Cpu(object):
             99: (self._ld_rr, ['h', 'e']),  # LDrr_he
             100: (self._ld_rr, ['h', 'h']),  # LDrr_hh (nop?)
             101: (self._ld_rr, ['h', 'l']),  # LDrr_hl
-            102: ('', {}),  # LDrHLm_h
+            102: (self._ld_r_hlm, ['h']),  # LDrHLm_h
             103: (self._ld_rr, ['h', 'a']),  # LDrr_ha
             104: (self._ld_rr, ['l', 'b']),  # LDrr_lb
             105: (self._ld_rr, ['l', 'c']),  # LDrr_lc
@@ -284,23 +284,23 @@ class Z80Cpu(object):
             107: (self._ld_rr, ['l', 'e']),  # LDrr_le
             108: (self._ld_rr, ['l', 'h']),  # LDrr_lh
             109: (self._ld_rr, ['l', 'l']),  # LDrr_ll (nop?)
-            110: ('', {}),  # LDrHLm_l
+            110: (self._ld_r_hlm, ['l']),  # LDrHLm_l
             111: (self._ld_rr, ['l', 'a']),  # LDrr_la
-            112: ('', {}),  # LDHLmr_b
-            113: ('', {}),  # LDHLmr_c
-            114: ('', {}),  # LDHLmr_d
-            115: ('', {}),  # LDHLmr_e
-            116: ('', {}),  # LDHLmr_h
-            117: ('', {}),  # LDHLmr_l
+            112: (self._ld_hlm_r, ['b']),  # LDHLmr_b
+            113: (self._ld_hlm_r, ['c']),  # LDHLmr_c
+            114: (self._ld_hlm_r, ['d']),  # LDHLmr_d
+            115: (self._ld_hlm_r, ['e']),  # LDHLmr_e
+            116: (self._ld_hlm_r, ['h']),  # LDHLmr_h
+            117: (self._ld_hlm_r, ['l']),  # LDHLmr_l
             118: ('', {}),  # HALT
-            119: ('', {}),  # LDHLmr_a
+            119: (self._ld_hlm_r, ['a']),  # LDHLmr_a
             120: (self._ld_rr, ['a', 'b']),  # LDrr_ab
             121: (self._ld_rr, ['a', 'c']),  # LDrr_ac
             122: (self._ld_rr, ['a', 'd']),  # LDrr_ad
             123: (self._ld_rr, ['a', 'e']),  # LDrr_ae
             124: (self._ld_rr, ['a', 'h']),  # LDrr_ah
             125: (self._ld_rr, ['a', 'l']),  # LDrr_al
-            126: ('', {}),  # LDrHLm_a
+            126: (self._ld_r_hlm, ['a']),  # LDrHLm_a
             127: (self._ld_rr, ['a', 'a']),  # LDrr_aa (nop?)
             128: ('', {}),  # ADDr_b
             129: ('', {}),  # ADDr_c
@@ -486,18 +486,33 @@ class Z80Cpu(object):
         self.registers['t'] = 4
 
     def _ld_rr(self, r1, r2):
-        """Put value r2 into r1."""
+        """Load value r2 into r1."""
         self.registers[r1] = self.registers[r2]
         self.registers['m'] = 1
         self.registers['t'] = 4
         print('yo', r1, r2)
 
     def _ld_rn(self, r):
-        """Put immediate value into register r."""
+        """Load immediate value into register r."""
         self.registers[r] = self.read8(self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['m'] = 2
         self.registers['t'] = 8
+
+    def _ld_r_hlm(self, r):
+        """Load mem @ HL into registers[r]."""
+        read_byte = self.read8((self.registers['h'] << 8) + self.registers['l'])
+        self.registers[r] = read_byte
+        self.registers['m'] = 2
+        self.registers['t'] = 8
+
+    def _ld_hlm_r(self, r):
+        """Load registers[r] into mem @ HL."""
+        write_adress = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(write_adress, self.registers[r])
+        self.registers['m'] = 2
+        self.registers['t'] = 8
+
 
 
 
