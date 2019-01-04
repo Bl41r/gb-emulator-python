@@ -145,6 +145,13 @@ ss  Any 16-bit source register or memory location.
 Z   Zero Flag.
 """
 
+FLAG_BITS = {
+    'zero': 0x80,           # Z flag
+    'subtraction': 0x40,    # N flag
+    'half-carry': 0x20,     # H flag
+    'carry': 0x10           # C flag
+}
+
 
 class Z80Cpu(object):
     """The Z80 CPU class."""
@@ -158,10 +165,342 @@ class Z80Cpu(object):
             # 8-bit registers
             'a': 0, 'b': 0, 'c': 0, 'd': 0, 'e': 0, 'h': 0, 'l': 0,
             # 8-bit 'flag' register
-            'f': 0,
-            # 16-bit registers
+            'flag': 0,
+            # 16-bit registers (program counter, stack pointer)
             'pc': 0, 'sp': 0,
             # Clock for last instr
             'm': 0, 't': 0
         }
         self.memory = memory
+        self.opcode_map = {
+            # opcode number: func to call, *args
+            0: (self._nop, {}),  # NOP
+            1: ('', {}),  # LDBCnn
+            2: ('', {}),  # LDBCmA
+            3: ('', {}),  # INCBC
+            4: ('', {}),  # INCr_b
+            5: ('', {}),  # DECr_b
+            6: ('', {}),  # LDrn_b
+            7: ('', {}),  # RLCA
+            8: ('', {}),  # LDmmSP
+            9: ('', {}),  # ADDHLBC
+            10: ('', {}),  # LDABCm
+            11: ('', {}),  # DECBC
+            12: ('', {}),  # INCr_c
+            13: ('', {}),  # DECr_c
+            14: ('', {}),  # LDrn_c
+            15: ('', {}),  # RRCA
+            16: ('', {}),  # DJNZn
+            17: ('', {}),  # LDDEnn
+            18: ('', {}),  # LDDEmA
+            19: ('', {}),  # INCDE
+            20: ('', {}),  # INCr_d
+            21: ('', {}),  # DECr_d
+            22: ('', {}),  # LDrn_d
+            23: ('', {}),  # RLA
+            24: ('', {}),  # JRn
+            25: ('', {}),  # ADDHLDE
+            26: ('', {}),  # LDADEm
+            27: ('', {}),  # DECDE
+            28: ('', {}),  # INCr_e
+            29: ('', {}),  # DECr_e
+            30: ('', {}),  # LDrn_e
+            31: ('', {}),  # RRA
+            32: ('', {}),  # JRNZn
+            33: ('', {}),  # LDHLnn
+            34: ('', {}),  # LDHLIA
+            35: ('', {}),  # INCHL
+            36: ('', {}),  # INCr_h
+            37: ('', {}),  # DECr_h
+            38: ('', {}),  # LDrn_h
+            39: ('', {}),  # XX
+            40: ('', {}),  # JRZn
+            41: ('', {}),  # ADDHLHL
+            42: ('', {}),  # LDAHLI
+            43: ('', {}),  # DECHL
+            44: ('', {}),  # INCr_l
+            45: ('', {}),  # DECr_l
+            46: ('', {}),  # LDrn_l
+            47: ('', {}),  # CPL
+            48: ('', {}),  # JRNCn
+            49: ('', {}),  # LDSPnn
+            50: ('', {}),  # LDHLDA
+            51: ('', {}),  # INCSP
+            52: ('', {}),  # INCHLm
+            53: ('', {}),  # DECHLm
+            54: ('', {}),  # LDHLmn
+            55: ('', {}),  # SCF
+            56: ('', {}),  # JRCn
+            57: ('', {}),  # ADDHLSP
+            58: ('', {}),  # LDAHLD
+            59: ('', {}),  # DECSP
+            60: ('', {}),  # INCr_a
+            61: ('', {}),  # DECr_a
+            62: ('', {}),  # LDrn_a
+            63: ('', {}),  # CCF
+            64: (self._ld_rr, {self.registers['b'], self.registers['b']}),  # LDrr_bb (nop?)
+            65: (self._ld_rr, {self.registers['b'], self.registers['c']}),  # LDrr_bc
+            66: (self._ld_rr, {self.registers['b'], self.registers['d']}),  # LDrr_bd
+            67: (self._ld_rr, {self.registers['b'], self.registers['e']}),  # LDrr_be
+            68: (self._ld_rr, {self.registers['b'], self.registers['h']}),  # LDrr_bh
+            69: (self._ld_rr, {self.registers['b'], self.registers['l']}),  # LDrr_bl
+            70: ('', {}),  # LDrHLm_b
+            71: (self._ld_rr, {self.registers['b'], self.registers['a']}),  # LDrr_ba
+            72: (self._ld_rr, {self.registers['c'], self.registers['b']}),  # LDrr_cb
+            73: (self._ld_rr, {self.registers['c'], self.registers['c']}),  # LDrr_cc (nop?)
+            74: (self._ld_rr, {self.registers['c'], self.registers['d']}),  # LDrr_cd
+            75: (self._ld_rr, {self.registers['c'], self.registers['e']}),  # LDrr_ce
+            76: (self._ld_rr, {self.registers['c'], self.registers['h']}),  # LDrr_ch
+            77: (self._ld_rr, {self.registers['c'], self.registers['l']}),  # LDrr_cl
+            78: ('', {}),  # LDrHLm_c
+            79: (self._ld_rr, {self.registers['c'], self.registers['a']}),  # LDrr_ca
+            80: (self._ld_rr, {self.registers['d'], self.registers['b']}),  # LDrr_db
+            81: (self._ld_rr, {self.registers['d'], self.registers['c']}),  # LDrr_dc
+            82: (self._ld_rr, {self.registers['d'], self.registers['d']}),  # LDrr_dd (nop?)
+            83: (self._ld_rr, {self.registers['d'], self.registers['e']}),  # LDrr_de
+            84: (self._ld_rr, {self.registers['d'], self.registers['h']}),  # LDrr_dh
+            85: (self._ld_rr, {self.registers['d'], self.registers['l']}),  # LDrr_dl
+            86: ('', {}),  # LDrHLm_d
+            87: (self._ld_rr, {self.registers['d'], self.registers['a']}),  # LDrr_da
+            88: (self._ld_rr, {self.registers['e'], self.registers['b']}),  # LDrr_eb
+            89: (self._ld_rr, {self.registers['e'], self.registers['c']}),  # LDrr_ec
+            90: (self._ld_rr, {self.registers['e'], self.registers['d']}),  # LDrr_ed
+            91: (self._ld_rr, {self.registers['e'], self.registers['e']}),  # LDrr_ee (nop?)
+            92: (self._ld_rr, {self.registers['e'], self.registers['h']}),  # LDrr_eh
+            93: (self._ld_rr, {self.registers['e'], self.registers['l']}),  # LDrr_el
+            94: ('', {}),  # LDrHLm_e
+            95: (self._ld_rr, {self.registers['e'], self.registers['a']}),  # LDrr_ea
+            96: (self._ld_rr, {self.registers['h'], self.registers['b']}),  # LDrr_hb
+            97: (self._ld_rr, {self.registers['h'], self.registers['c']}),  # LDrr_hc
+            98: (self._ld_rr, {self.registers['h'], self.registers['d']}),  # LDrr_hd
+            99: (self._ld_rr, {self.registers['h'], self.registers['e']}),  # LDrr_he
+            100: (self._ld_rr, {self.registers['h'], self.registers['h']}),  # LDrr_hh (nop?)
+            101: (self._ld_rr, {self.registers['h'], self.registers['l']}),  # LDrr_hl
+            102: ('', {}),  # LDrHLm_h
+            103: (self._ld_rr, {self.registers['h'], self.registers['a']}),  # LDrr_ha
+            104: (self._ld_rr, {self.registers['l'], self.registers['b']}),  # LDrr_lb
+            105: (self._ld_rr, {self.registers['l'], self.registers['c']}),  # LDrr_lc
+            106: (self._ld_rr, {self.registers['l'], self.registers['d']}),  # LDrr_ld
+            107: (self._ld_rr, {self.registers['l'], self.registers['e']}),  # LDrr_le
+            108: (self._ld_rr, {self.registers['l'], self.registers['h']}),  # LDrr_lh
+            109: (self._ld_rr, {self.registers['l'], self.registers['l']}),  # LDrr_ll (nop?)
+            110: ('', {}),  # LDrHLm_l
+            111: (self._ld_rr, {self.registers['l'], self.registers['a']}),  # LDrr_la
+            112: ('', {}),  # LDHLmr_b
+            113: ('', {}),  # LDHLmr_c
+            114: ('', {}),  # LDHLmr_d
+            115: ('', {}),  # LDHLmr_e
+            116: ('', {}),  # LDHLmr_h
+            117: ('', {}),  # LDHLmr_l
+            118: ('', {}),  # HALT
+            119: ('', {}),  # LDHLmr_a
+            120: (self._ld_rr, {self.registers['a'], self.registers['b']}),  # LDrr_ab
+            121: (self._ld_rr, {self.registers['a'], self.registers['c']}),  # LDrr_ac
+            122: (self._ld_rr, {self.registers['a'], self.registers['d']}),  # LDrr_ad
+            123: (self._ld_rr, {self.registers['a'], self.registers['e']}),  # LDrr_ae
+            124: (self._ld_rr, {self.registers['a'], self.registers['h']}),  # LDrr_ah
+            125: (self._ld_rr, {self.registers['a'], self.registers['l']}),  # LDrr_al
+            126: ('', {}),  # LDrHLm_a
+            127: (self._ld_rr, {self.registers['a'], self.registers['a']}),  # LDrr_aa (nop?)
+            128: ('', {}),  # ADDr_b
+            129: ('', {}),  # ADDr_c
+            130: ('', {}),  # ADDr_d
+            131: ('', {}),  # ADDr_e
+            132: ('', {}),  # ADDr_h
+            133: ('', {}),  # ADDr_l
+            134: ('', {}),  # ADDHL
+            135: ('', {}),  # ADDr_a
+            136: ('', {}),  # ADCr_b
+            137: ('', {}),  # ADCr_c
+            138: ('', {}),  # ADCr_d
+            139: ('', {}),  # ADCr_e
+            140: ('', {}),  # ADCr_h
+            141: ('', {}),  # ADCr_l
+            142: ('', {}),  # ADCHL
+            143: ('', {}),  # ADCr_a
+            144: ('', {}),  # SUBr_b
+            145: ('', {}),  # SUBr_c
+            146: ('', {}),  # SUBr_d
+            147: ('', {}),  # SUBr_e
+            148: ('', {}),  # SUBr_h
+            149: ('', {}),  # SUBr_l
+            150: ('', {}),  # SUBHL
+            151: ('', {}),  # SUBr_a
+            152: ('', {}),  # SBCr_b
+            153: ('', {}),  # SBCr_c
+            154: ('', {}),  # SBCr_d
+            155: ('', {}),  # SBCr_e
+            156: ('', {}),  # SBCr_h
+            157: ('', {}),  # SBCr_l
+            158: ('', {}),  # SBCHL
+            159: ('', {}),  # SBCr_a
+            160: ('', {}),  # ANDr_b
+            161: ('', {}),  # ANDr_c
+            162: ('', {}),  # ANDr_d
+            163: ('', {}),  # ANDr_e
+            164: ('', {}),  # ANDr_h
+            165: ('', {}),  # ANDr_l
+            166: ('', {}),  # ANDHL
+            167: ('', {}),  # ANDr_a
+            168: ('', {}),  # XORr_b
+            169: ('', {}),  # XORr_c
+            170: ('', {}),  # XORr_d
+            171: ('', {}),  # XORr_e
+            172: ('', {}),  # XORr_h
+            173: ('', {}),  # XORr_l
+            174: ('', {}),  # XORHL
+            175: ('', {}),  # XORr_a
+            176: ('', {}),  # ORr_b
+            177: ('', {}),  # ORr_c
+            178: ('', {}),  # ORr_d
+            179: ('', {}),  # ORr_e
+            180: ('', {}),  # ORr_h
+            181: ('', {}),  # ORr_l
+            182: ('', {}),  # ORHL
+            183: ('', {}),  # ORr_a
+            184: ('', {}),  # CPr_b
+            185: ('', {}),  # CPr_c
+            186: ('', {}),  # CPr_d
+            187: ('', {}),  # CPr_e
+            188: ('', {}),  # CPr_h
+            189: ('', {}),  # CPr_l
+            190: ('', {}),  # CPHL
+            191: ('', {}),  # CPr_a
+            192: ('', {}),  # RETNZ
+            193: ('', {}),  # POPBC
+            194: ('', {}),  # JPNZnn
+            195: ('', {}),  # JPnn
+            196: ('', {}),  # CALLNZnn
+            197: ('', {}),  # PUSHBC
+            198: ('', {}),  # ADDn
+            199: ('', {}),  # RST00
+            200: ('', {}),  # RETZ
+            201: ('', {}),  # RET
+            202: ('', {}),  # JPZnn
+            203: ('', {}),  # MAPcb
+            204: ('', {}),  # CALLZnn
+            205: ('', {}),  # CALLnn
+            206: ('', {}),  # ADCn
+            207: ('', {}),  # RST08
+            208: ('', {}),  # RETNC
+            209: ('', {}),  # POPDE
+            210: ('', {}),  # JPNCnn
+            211: ('', {}),  # XX
+            212: ('', {}),  # CALLNCnn
+            213: ('', {}),  # PUSHDE
+            214: ('', {}),  # SUBn
+            215: ('', {}),  # RST10
+            216: ('', {}),  # RETC
+            217: ('', {}),  # RETI
+            218: ('', {}),  # JPCnn
+            219: ('', {}),  # XX
+            220: ('', {}),  # CALLCnn
+            221: ('', {}),  # XX
+            222: ('', {}),  # SBCn
+            223: ('', {}),  # RST18
+            224: ('', {}),  # LDIOnA
+            225: ('', {}),  # POPHL
+            226: ('', {}),  # LDIOCA
+            227: ('', {}),  # XX
+            228: ('', {}),  # XX
+            229: ('', {}),  # PUSHHL
+            230: ('', {}),  # ANDn
+            231: ('', {}),  # RST20
+            232: ('', {}),  # ADDSPn
+            233: ('', {}),  # JPHL
+            234: ('', {}),  # LDmmA
+            235: ('', {}),  # XX
+            236: ('', {}),  # XX
+            237: ('', {}),  # XX
+            238: ('', {}),  # ORn
+            239: ('', {}),  # RST28
+            240: ('', {}),  # LDAIOn
+            241: ('', {}),  # POPAF
+            242: ('', {}),  # LDAIOC
+            243: ('', {}),  # DI
+            244: ('', {}),  # XX
+            245: ('', {}),  # PUSHAF
+            246: ('', {}),  # XORn
+            247: ('', {}),  # RST30
+            248: ('', {}),  # LDHLSPn
+            249: ('', {}),  # XX
+            250: ('', {}),  # LDAmm
+            251: ('', {}),  # EI
+            252: ('', {}),  # XX
+            253: ('', {}),  # XX
+            254: ('', {}),  # CPn
+            255: ('', {}),  # RST38
+        }
+
+    def execute_next_operation(self):
+        """Execute the next operation."""
+        op = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+        self.registers['pc'] &= 65535   # mask to 16-bits
+        instruction = self.opcode_map[op]
+        print(instruction)
+        opcode, kwargs = instruction[0], instruction[1]
+        opcode(**kwargs)
+        self._inc_clock()
+
+    def execute_specific_instruction(self, op):
+        """Execute an instruction (for testing)."""
+        instruction = self.opcode_map[op]
+        print(instruction)
+        opcode, kwargs = instruction[0], instruction[1]
+        opcode(**kwargs)
+        self._inc_clock()
+
+    def reset(self):
+        """Reset registers."""
+        for k in self.clock.items():
+            self.clock[k] = 0
+        for k in self.registers.items():
+            self.registers[k] = 0
+
+    def read8(self, address):
+        """Return a byte from memory at address."""
+        return self.memory.read_byte(address)
+
+    def write8(self, address, val):
+        """Write a byte to memory at address."""
+        self.memory.write_byte(address, val)
+
+    def read16(self, address):
+        """Return a word(16-bits) from memory."""
+        return self.memory.read_word(address)
+
+    def write16(self, address, val):
+        """Write a word to memory at address."""
+        self.memory.write_word(address, val)
+
+    def _inc_clock(self):
+        """Increment clock registers."""
+        self.clock['m'] += self.registers['m']
+        self.clock['t'] += self.registers['t']
+
+    # Opcodes
+    def _nop(self, **kwargs):
+        """NOP opcode."""
+        self.registers['m'] = 1
+        self.registers['t'] = 4
+
+    def _ld_rr(self, r1, r2):
+        """LD r1,r2.
+
+        Put value r2 into r1.
+        """
+        self.registers[r1] = self.registers[r2]
+        self.registers['m'] = 1
+        self.registers['t'] = 4
+
+
+
+
+
+
+
+
+
+
+
