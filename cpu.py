@@ -160,6 +160,8 @@ class Z80Cpu(object):
         """Initialize an instance."""
         self.clock = {'m': 0, 't': 0}  # Time clocks: 2 types of clock
 
+        self.memory = memory
+
         # Register set
         self.registers = {
             # 8-bit registers
@@ -171,12 +173,12 @@ class Z80Cpu(object):
             # Clock for last instr
             'm': 0, 't': 0
         }
-        self.memory = memory
+
         self.opcode_map = {
             # opcode number: func to call, args
             0: (self._nop, []),  # NOP
             1: ('', []),  # LDBCnn
-            2: ('', []),  # LDBCmA
+            2: (self._ld_r1r2m_a, ['b', 'c']),  # LDBCmA
             3: ('', []),  # INCBC
             4: ('', []),  # INCr_b
             5: ('', []),  # DECr_b
@@ -184,7 +186,7 @@ class Z80Cpu(object):
             7: ('', []),  # RLCA
             8: ('', []),  # LDmmSP
             9: ('', []),  # ADDHLBC
-            10: ('', []),  # LDABCm
+            10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
             11: ('', []),  # DECBC
             12: ('', []),  # INCr_c
             13: ('', []),  # DECr_c
@@ -192,7 +194,7 @@ class Z80Cpu(object):
             15: ('', []),  # RRCA
             16: ('', []),  # DJNZn
             17: ('', []),  # LDDEnn
-            18: ('', []),  # LDDEmA
+            18: (self._ld_r1r2m_a, ['d', 'e']),  # LDDEmA
             19: ('', []),  # INCDE
             20: ('', []),  # INCr_d
             21: ('', []),  # DECr_d
@@ -200,7 +202,7 @@ class Z80Cpu(object):
             23: ('', []),  # RLA
             24: ('', []),  # JRn
             25: ('', []),  # ADDHLDE
-            26: ('', []),  # LDADEm
+            26: (self._ld_a_r1r2m, ['d', 'e']),  # LDADEm
             27: ('', []),  # DECDE
             28: ('', []),  # INCr_e
             29: ('', []),  # DECr_e
@@ -408,7 +410,7 @@ class Z80Cpu(object):
             231: ('', []),  # RST20
             232: ('', []),  # ADDSPn
             233: ('', []),  # JPHL
-            234: ('', []),  # LDmmA
+            234: (self._ld_mm_a, []),  # LDmmA
             235: ('', []),  # XX
             236: ('', []),  # XX
             237: ('', []),  # XX
@@ -424,7 +426,7 @@ class Z80Cpu(object):
             247: ('', []),  # RST30
             248: ('', []),  # LDHLSPn
             249: ('', []),  # XX
-            250: ('', []),  # LDAmm
+            250: (self._ld_a_mm, []),  # LDAmm
             251: ('', []),  # EI
             252: ('', []),  # XX
             253: ('', []),  # XX
@@ -486,7 +488,6 @@ class Z80Cpu(object):
         self.registers['t'] = 4
 
     # Loads
-
     def _ld_rr(self, r1, r2):
         """Load value r2 into r1."""
         self.registers[r1] = self.registers[r2]
@@ -510,18 +511,52 @@ class Z80Cpu(object):
 
     def _ld_hlm_r(self, r):
         """Load registers[r] into mem @ HL."""
-        write_adress = (self.registers['h'] << 8) + self.registers['l']
-        self.write8(write_adress, self.registers[r])
+        write_address = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(write_address, self.registers[r])
         self.registers['m'] = 2
         self.registers['t'] = 8
 
     def _ld_hlm_n(self):
         """Load mem @ pc into mem @ HL."""
-        write_adress = (self.registers['h'] << 8) + self.registers['l']
-        self.write8(write_adress, self.registers['pc'])
+        write_address = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(write_address, self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['m'] = 3
         self.registers['t'] = 12
+
+    def _ld_r1r2m_a(self, r1, r2):
+        """Load registers[a] into mem @ BC."""
+        write_address = (self.registers[r1] << 8) + self.registers[r2]
+        self.write8(write_address, self.registers['a'])
+        self.registers['m'] = 2
+        self.registers['t'] = 8
+
+    def _ld_mm_a(self):
+        """Load byte registers['a'] into mem @ 16-bit address.
+
+        address = mem @ registers[pc]
+        """
+        self.write8(self.read16(self.registers['pc']), self.registers['a'])
+        self.registers['pc'] += 2
+        self.registers['m'] = 4
+        self.registers['t'] = 16
+
+    def _ld_a_r1r2m(self, r1, r2):
+        """Load mem @ r1r2 into registers[a]."""
+        address = (self.registers[r1] << 8) + self.registers[r2]
+        self.registers['a'] = self.read8(address)
+        self.registers['m'] = 2
+        self.registers['t'] = 8
+
+    def _ld_a_mm(self):
+        """Load byte into registers[a].
+
+        byte = mem(byte) @ mem(word) @ registers[pc]
+        """
+        self.registers['a'] = self.read8(self.read16(self.registers['pc']))
+        self.registers['pc'] += 2
+        self.registers['m'] = 4
+        self.registers['t'] = 16
 
 
 
