@@ -173,14 +173,14 @@ class Z80Cpu(object):
         }
         self.memory = memory
         self.opcode_map = {
-            # opcode number: func to call, *args
-            0: (self._nop, {}),  # NOP
+            # opcode number: func to call, args
+            0: (self._nop, ""),  # NOP
             1: ('', {}),  # LDBCnn
             2: ('', {}),  # LDBCmA
             3: ('', {}),  # INCBC
             4: ('', {}),  # INCr_b
             5: ('', {}),  # DECr_b
-            6: ('', {}),  # LDrn_b
+            6: (self._ld_rn, ['b']),  # LDrn_b
             7: ('', {}),  # RLCA
             8: ('', {}),  # LDmmSP
             9: ('', {}),  # ADDHLBC
@@ -188,7 +188,7 @@ class Z80Cpu(object):
             11: ('', {}),  # DECBC
             12: ('', {}),  # INCr_c
             13: ('', {}),  # DECr_c
-            14: ('', {}),  # LDrn_c
+            14: (self._ld_rn, ['c']),  # LDrn_c
             15: ('', {}),  # RRCA
             16: ('', {}),  # DJNZn
             17: ('', {}),  # LDDEnn
@@ -196,7 +196,7 @@ class Z80Cpu(object):
             19: ('', {}),  # INCDE
             20: ('', {}),  # INCr_d
             21: ('', {}),  # DECr_d
-            22: ('', {}),  # LDrn_d
+            22: (self._ld_rn, ['d']),  # LDrn_d
             23: ('', {}),  # RLA
             24: ('', {}),  # JRn
             25: ('', {}),  # ADDHLDE
@@ -204,7 +204,7 @@ class Z80Cpu(object):
             27: ('', {}),  # DECDE
             28: ('', {}),  # INCr_e
             29: ('', {}),  # DECr_e
-            30: ('', {}),  # LDrn_e
+            30: (self._ld_rn, ['e']),  # LDrn_e
             31: ('', {}),  # RRA
             32: ('', {}),  # JRNZn
             33: ('', {}),  # LDHLnn
@@ -212,7 +212,7 @@ class Z80Cpu(object):
             35: ('', {}),  # INCHL
             36: ('', {}),  # INCr_h
             37: ('', {}),  # DECr_h
-            38: ('', {}),  # LDrn_h
+            38: (self._ld_rn, ['h']),  # LDrn_h
             39: ('', {}),  # XX
             40: ('', {}),  # JRZn
             41: ('', {}),  # ADDHLHL
@@ -220,7 +220,7 @@ class Z80Cpu(object):
             43: ('', {}),  # DECHL
             44: ('', {}),  # INCr_l
             45: ('', {}),  # DECr_l
-            46: ('', {}),  # LDrn_l
+            46: (self._ld_rn, ['l']),  # LDrn_l
             47: ('', {}),  # CPL
             48: ('', {}),  # JRNCn
             49: ('', {}),  # LDSPnn
@@ -236,56 +236,56 @@ class Z80Cpu(object):
             59: ('', {}),  # DECSP
             60: ('', {}),  # INCr_a
             61: ('', {}),  # DECr_a
-            62: ('', {}),  # LDrn_a
+            62: (self._ld_rn, ['a']),  # LDrn_a
             63: ('', {}),  # CCF
-            64: (self._ld_rr, {self.registers['b'], self.registers['b']}),  # LDrr_bb (nop?)
-            65: (self._ld_rr, {self.registers['b'], self.registers['c']}),  # LDrr_bc
-            66: (self._ld_rr, {self.registers['b'], self.registers['d']}),  # LDrr_bd
-            67: (self._ld_rr, {self.registers['b'], self.registers['e']}),  # LDrr_be
-            68: (self._ld_rr, {self.registers['b'], self.registers['h']}),  # LDrr_bh
-            69: (self._ld_rr, {self.registers['b'], self.registers['l']}),  # LDrr_bl
+            64: (self._ld_rr, ['b', 'b']),  # LDrr_bb (nop?)
+            65: (self._ld_rr, ['b', 'c']),  # LDrr_bc
+            66: (self._ld_rr, ['b', 'd']),  # LDrr_bd
+            67: (self._ld_rr, ['b', 'e']),  # LDrr_be
+            68: (self._ld_rr, ['b', 'h']),  # LDrr_bh
+            69: (self._ld_rr, ['b', 'l']),  # LDrr_bl
             70: ('', {}),  # LDrHLm_b
-            71: (self._ld_rr, {self.registers['b'], self.registers['a']}),  # LDrr_ba
-            72: (self._ld_rr, {self.registers['c'], self.registers['b']}),  # LDrr_cb
-            73: (self._ld_rr, {self.registers['c'], self.registers['c']}),  # LDrr_cc (nop?)
-            74: (self._ld_rr, {self.registers['c'], self.registers['d']}),  # LDrr_cd
-            75: (self._ld_rr, {self.registers['c'], self.registers['e']}),  # LDrr_ce
-            76: (self._ld_rr, {self.registers['c'], self.registers['h']}),  # LDrr_ch
-            77: (self._ld_rr, {self.registers['c'], self.registers['l']}),  # LDrr_cl
+            71: (self._ld_rr, ['b', 'a']),  # LDrr_ba
+            72: (self._ld_rr, ['c', 'b']),  # LDrr_cb
+            73: (self._ld_rr, ['c', 'c']),  # LDrr_cc (nop?)
+            74: (self._ld_rr, ['c', 'd']),  # LDrr_cd
+            75: (self._ld_rr, ['c', 'e']),  # LDrr_ce
+            76: (self._ld_rr, ['c', 'h']),  # LDrr_ch
+            77: (self._ld_rr, ['c', 'l']),  # LDrr_cl
             78: ('', {}),  # LDrHLm_c
-            79: (self._ld_rr, {self.registers['c'], self.registers['a']}),  # LDrr_ca
-            80: (self._ld_rr, {self.registers['d'], self.registers['b']}),  # LDrr_db
-            81: (self._ld_rr, {self.registers['d'], self.registers['c']}),  # LDrr_dc
-            82: (self._ld_rr, {self.registers['d'], self.registers['d']}),  # LDrr_dd (nop?)
-            83: (self._ld_rr, {self.registers['d'], self.registers['e']}),  # LDrr_de
-            84: (self._ld_rr, {self.registers['d'], self.registers['h']}),  # LDrr_dh
-            85: (self._ld_rr, {self.registers['d'], self.registers['l']}),  # LDrr_dl
+            79: (self._ld_rr, ['c', 'a']),  # LDrr_ca
+            80: (self._ld_rr, ['d', 'b']),  # LDrr_db
+            81: (self._ld_rr, ['d', 'c']),  # LDrr_dc
+            82: (self._ld_rr, ['d', 'd']),  # LDrr_dd (nop?)
+            83: (self._ld_rr, ['d', 'e']),  # LDrr_de
+            84: (self._ld_rr, ['d', 'h']),  # LDrr_dh
+            85: (self._ld_rr, ['d', 'l']),  # LDrr_dl
             86: ('', {}),  # LDrHLm_d
-            87: (self._ld_rr, {self.registers['d'], self.registers['a']}),  # LDrr_da
-            88: (self._ld_rr, {self.registers['e'], self.registers['b']}),  # LDrr_eb
-            89: (self._ld_rr, {self.registers['e'], self.registers['c']}),  # LDrr_ec
-            90: (self._ld_rr, {self.registers['e'], self.registers['d']}),  # LDrr_ed
-            91: (self._ld_rr, {self.registers['e'], self.registers['e']}),  # LDrr_ee (nop?)
-            92: (self._ld_rr, {self.registers['e'], self.registers['h']}),  # LDrr_eh
-            93: (self._ld_rr, {self.registers['e'], self.registers['l']}),  # LDrr_el
+            87: (self._ld_rr, ['d', 'a']),  # LDrr_da
+            88: (self._ld_rr, ['e', 'b']),  # LDrr_eb
+            89: (self._ld_rr, ['e', 'c']),  # LDrr_ec
+            90: (self._ld_rr, ['e', 'd']),  # LDrr_ed
+            91: (self._ld_rr, ['e', 'e']),  # LDrr_ee (nop?)
+            92: (self._ld_rr, ['e', 'h']),  # LDrr_eh
+            93: (self._ld_rr, ['e', 'l']),  # LDrr_el
             94: ('', {}),  # LDrHLm_e
-            95: (self._ld_rr, {self.registers['e'], self.registers['a']}),  # LDrr_ea
-            96: (self._ld_rr, {self.registers['h'], self.registers['b']}),  # LDrr_hb
-            97: (self._ld_rr, {self.registers['h'], self.registers['c']}),  # LDrr_hc
-            98: (self._ld_rr, {self.registers['h'], self.registers['d']}),  # LDrr_hd
-            99: (self._ld_rr, {self.registers['h'], self.registers['e']}),  # LDrr_he
-            100: (self._ld_rr, {self.registers['h'], self.registers['h']}),  # LDrr_hh (nop?)
-            101: (self._ld_rr, {self.registers['h'], self.registers['l']}),  # LDrr_hl
+            95: (self._ld_rr, ['e', 'a']),  # LDrr_ea
+            96: (self._ld_rr, ['h', 'b']),  # LDrr_hb
+            97: (self._ld_rr, ['h', 'c']),  # LDrr_hc
+            98: (self._ld_rr, ['h', 'd']),  # LDrr_hd
+            99: (self._ld_rr, ['h', 'e']),  # LDrr_he
+            100: (self._ld_rr, ['h', 'h']),  # LDrr_hh (nop?)
+            101: (self._ld_rr, ['h', 'l']),  # LDrr_hl
             102: ('', {}),  # LDrHLm_h
-            103: (self._ld_rr, {self.registers['h'], self.registers['a']}),  # LDrr_ha
-            104: (self._ld_rr, {self.registers['l'], self.registers['b']}),  # LDrr_lb
-            105: (self._ld_rr, {self.registers['l'], self.registers['c']}),  # LDrr_lc
-            106: (self._ld_rr, {self.registers['l'], self.registers['d']}),  # LDrr_ld
-            107: (self._ld_rr, {self.registers['l'], self.registers['e']}),  # LDrr_le
-            108: (self._ld_rr, {self.registers['l'], self.registers['h']}),  # LDrr_lh
-            109: (self._ld_rr, {self.registers['l'], self.registers['l']}),  # LDrr_ll (nop?)
+            103: (self._ld_rr, ['h', 'a']),  # LDrr_ha
+            104: (self._ld_rr, ['l', 'b']),  # LDrr_lb
+            105: (self._ld_rr, ['l', 'c']),  # LDrr_lc
+            106: (self._ld_rr, ['l', 'd']),  # LDrr_ld
+            107: (self._ld_rr, ['l', 'e']),  # LDrr_le
+            108: (self._ld_rr, ['l', 'h']),  # LDrr_lh
+            109: (self._ld_rr, ['l', 'l']),  # LDrr_ll (nop?)
             110: ('', {}),  # LDrHLm_l
-            111: (self._ld_rr, {self.registers['l'], self.registers['a']}),  # LDrr_la
+            111: (self._ld_rr, ['l', 'a']),  # LDrr_la
             112: ('', {}),  # LDHLmr_b
             113: ('', {}),  # LDHLmr_c
             114: ('', {}),  # LDHLmr_d
@@ -294,14 +294,14 @@ class Z80Cpu(object):
             117: ('', {}),  # LDHLmr_l
             118: ('', {}),  # HALT
             119: ('', {}),  # LDHLmr_a
-            120: (self._ld_rr, {self.registers['a'], self.registers['b']}),  # LDrr_ab
-            121: (self._ld_rr, {self.registers['a'], self.registers['c']}),  # LDrr_ac
-            122: (self._ld_rr, {self.registers['a'], self.registers['d']}),  # LDrr_ad
-            123: (self._ld_rr, {self.registers['a'], self.registers['e']}),  # LDrr_ae
-            124: (self._ld_rr, {self.registers['a'], self.registers['h']}),  # LDrr_ah
-            125: (self._ld_rr, {self.registers['a'], self.registers['l']}),  # LDrr_al
+            120: (self._ld_rr, ['a', 'b']),  # LDrr_ab
+            121: (self._ld_rr, ['a', 'c']),  # LDrr_ac
+            122: (self._ld_rr, ['a', 'd']),  # LDrr_ad
+            123: (self._ld_rr, ['a', 'e']),  # LDrr_ae
+            124: (self._ld_rr, ['a', 'h']),  # LDrr_ah
+            125: (self._ld_rr, ['a', 'l']),  # LDrr_al
             126: ('', {}),  # LDrHLm_a
-            127: (self._ld_rr, {self.registers['a'], self.registers['a']}),  # LDrr_aa (nop?)
+            127: (self._ld_rr, ['a', 'a']),  # LDrr_aa (nop?)
             128: ('', {}),  # ADDr_b
             129: ('', {}),  # ADDr_c
             130: ('', {}),  # ADDr_d
@@ -447,8 +447,8 @@ class Z80Cpu(object):
         """Execute an instruction (for testing)."""
         instruction = self.opcode_map[op]
         print(instruction)
-        opcode, kwargs = instruction[0], instruction[1]
-        opcode(**kwargs)
+        opcode, args = instruction[0], instruction[1]
+        opcode(*args)
         self._inc_clock()
 
     def reset(self):
@@ -480,19 +480,24 @@ class Z80Cpu(object):
         self.clock['t'] += self.registers['t']
 
     # Opcodes
-    def _nop(self, **kwargs):
+    def _nop(self):
         """NOP opcode."""
         self.registers['m'] = 1
         self.registers['t'] = 4
 
     def _ld_rr(self, r1, r2):
-        """LD r1,r2.
-
-        Put value r2 into r1.
-        """
+        """Put value r2 into r1."""
         self.registers[r1] = self.registers[r2]
         self.registers['m'] = 1
         self.registers['t'] = 4
+        print('yo', r1, r2)
+
+    def _ld_rn(self, r):
+        """Put immediate value into register r."""
+        self.registers[r] = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+        self.registers['m'] = 2
+        self.registers['t'] = 8
 
 
 
