@@ -151,8 +151,7 @@ class Z80Cpu(object):
 
     def __init__(self, memory):
         """Initialize an instance."""
-        # Time clock: The Z80 holds two types of clock (m and t)
-        self.clock = {'m': 0, 't': 0}
+        self.clock = {'m': 0, 't': 0}  # Time clocks: 2 types of clock
 
         # Register set
         self.registers = {
