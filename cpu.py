@@ -174,7 +174,7 @@ class Z80Cpu(object):
         self.memory = memory
         self.opcode_map = {
             # opcode number: func to call, args
-            0: (self._nop, ""),  # NOP
+            0: (self._nop, []),  # NOP
             1: ('', []),  # LDBCnn
             2: ('', []),  # LDBCmA
             3: ('', []),  # INCBC
@@ -228,7 +228,7 @@ class Z80Cpu(object):
             51: ('', []),  # INCSP
             52: ('', []),  # INCHLm
             53: ('', []),  # DECHLm
-            54: ('', []),  # LDHLmn
+            54: (self._ld_hlm_n, []),  # LDHLmn
             55: ('', []),  # SCF
             56: ('', []),  # JRCn
             57: ('', []),  # ADDHLSP
@@ -439,8 +439,8 @@ class Z80Cpu(object):
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
         print(instruction)
-        opcode, kwargs = instruction[0], instruction[1]
-        opcode(**kwargs)
+        opcode, args = instruction[0], instruction[1]
+        opcode(*args)
         self._inc_clock()
 
     def execute_specific_instruction(self, op):
@@ -485,6 +485,8 @@ class Z80Cpu(object):
         self.registers['m'] = 1
         self.registers['t'] = 4
 
+    # Loads
+
     def _ld_rr(self, r1, r2):
         """Load value r2 into r1."""
         self.registers[r1] = self.registers[r2]
@@ -493,7 +495,7 @@ class Z80Cpu(object):
         print('yo', r1, r2)
 
     def _ld_rn(self, r):
-        """Load immediate value into register r."""
+        """Load mem @ pc into register r."""
         self.registers[r] = self.read8(self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['m'] = 2
@@ -513,7 +515,13 @@ class Z80Cpu(object):
         self.registers['m'] = 2
         self.registers['t'] = 8
 
-
+    def _ld_hlm_n(self):
+        """Load mem @ pc into mem @ HL."""
+        write_adress = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(write_adress, self.registers['pc'])
+        self.registers['pc'] += 1
+        self.registers['m'] = 3
+        self.registers['t'] = 12
 
 
 
