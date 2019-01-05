@@ -187,7 +187,7 @@ class GbZ80Cpu(object):
             8: (self._ld_nn_sp, []),  # LDnnSP -- double check this one...
             9: (self._raise_opcode_unimplemented, []),  # ADDHLBC
             10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
-            11: (self._raise_opcode_unimplemented, []),  # DECBC
+            11: (self._dec_r_r, ['b', 'c']),  # DECBC
             12: (self._raise_opcode_unimplemented, []),  # INCr_c
             13: (self._raise_opcode_unimplemented, []),  # DECr_c
             14: (self._ld_rn, ['c']),  # LDrn_c
@@ -203,7 +203,7 @@ class GbZ80Cpu(object):
             24: (self._raise_opcode_unimplemented, []),  # JRn
             25: (self._raise_opcode_unimplemented, []),  # ADDHLDE
             26: (self._ld_a_r1r2m, ['d', 'e']),  # LDADEm
-            27: (self._raise_opcode_unimplemented, []),  # DECDE
+            27: (self._dec_r_r, ['d', 'e']),  # DECDE
             28: (self._raise_opcode_unimplemented, []),  # INCr_e
             29: (self._raise_opcode_unimplemented, []),  # DECr_e
             30: (self._ld_rn, ['e']),  # LDrn_e
@@ -219,14 +219,14 @@ class GbZ80Cpu(object):
             40: (self._raise_opcode_unimplemented, []),  # JRZn
             41: (self._raise_opcode_unimplemented, []),  # ADDHLHL
             42: (self._raise_opcode_unimplemented, []),  # LDAHLI
-            43: (self._raise_opcode_unimplemented, []),  # DECHL
+            43: (self._dec_r_r, ['h', 'l']),  # DECHL
             44: (self._raise_opcode_unimplemented, []),  # INCr_l
             45: (self._raise_opcode_unimplemented, []),  # DECr_l
             46: (self._ld_rn, ['l']),  # LDrn_l
             47: (self._raise_opcode_unimplemented, []),  # CPL
             48: (self._raise_opcode_unimplemented, []),  # JRNCn
             49: (self._ld_sp_nn, []),  # LDSPnn
-            50: (self._raise_opcode_unimplemented, []),  # LDHLDA
+            50: (self._ld_hlmd_a, []),  # LDHLDA
             51: (self._inc_sp, []),  # INCSP
             52: (self._raise_opcode_unimplemented, []),  # INCHLm
             53: (self._raise_opcode_unimplemented, []),  # DECHLm
@@ -582,21 +582,39 @@ class GbZ80Cpu(object):
         self.write8(address, self.registers['a'])
         self._inc_r_r('h', 'l', m=2)
 
+    def _ld_hlmd_a(self):
+        """Put A into memory address HL. Decrement HL.
+
+        Same as: LD (HL),A - DEC HL
+        """
+        address = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(address, self.registers['a'])
+        self._dec_r_r('h', 'l', m=2)
+
     def _inc_r_r(self, r1, r2, m=1):
         """Increment registers.
 
         INC HL, INC DE, INC BC
         """
-        self.registers[r2] &= 255
+        self.registers[r2] = (self.registers[r2] + 1) & 255
         if not self.registers[r2]:
-            self.registers[r1] &= 255
+            self.registers[r1] = (self.registers[r1] + 1) & 255
+        self.registers['m'] = m
+
+    def _dec_r_r(self, r1, r2, m=1):
+        """Decrement registers.
+
+        DEC HL, DEC DE, DEC BC
+        """
+        self.registers[r2] = (self.registers[r2] - 1) & 255
+        if self.registers[r2]:
+            self.registers[r1] = (self.registers[r1] - 1) & 255
         self.registers['m'] = m
 
     def _inc_sp(self):
         """Increment stack pointer."""
-        self.registers['sp'] &= 65535
+        self.registers['sp'] = (self.registers['sp'] + 1) & 65535
         self.registers['m'] = 1
-
 
 
 
