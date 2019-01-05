@@ -102,3 +102,8 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+boot-roms/
+test-roms/
+documents/
+
