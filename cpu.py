@@ -218,7 +218,7 @@ class GbZ80Cpu(object):
             39: (self._raise_opcode_unimplemented, []),  # XX
             40: (self._raise_opcode_unimplemented, []),  # JRZn
             41: (self._raise_opcode_unimplemented, []),  # ADDHLHL
-            42: (self._raise_opcode_unimplemented, []),  # LDAHLI
+            42: (self._ld_a_hl_i, []),  # LDAHLI
             43: (self._dec_r_r, ['h', 'l']),  # DECHL
             44: (self._raise_opcode_unimplemented, []),  # INCr_l
             45: (self._raise_opcode_unimplemented, []),  # DECr_l
@@ -234,8 +234,8 @@ class GbZ80Cpu(object):
             55: (self._raise_opcode_unimplemented, []),  # SCF
             56: (self._raise_opcode_unimplemented, []),  # JRCn
             57: (self._raise_opcode_unimplemented, []),  # ADDHLSP
-            58: (self._raise_opcode_unimplemented, []),  # LDAHLD
-            59: (self._raise_opcode_unimplemented, []),  # DECSP
+            58: (self._ld_a_hl_d, []),  # LDAHLD
+            59: (self._dec_sp, []),  # DECSP
             60: (self._raise_opcode_unimplemented, []),  # INCr_a
             61: (self._raise_opcode_unimplemented, []),  # DECr_a
             62: (self._ld_rn, ['a']),  # LDrn_a
@@ -591,6 +591,23 @@ class GbZ80Cpu(object):
         self.write8(address, self.registers['a'])
         self._dec_r_r('h', 'l', m=2)
 
+    def _ld_a_hl_i(self):
+        """Load mem @ hl into reg a and increment."""
+        address = (self.registers['h'] << 8) + self.registers['l']
+        self.registers['a'] = self.read8(address)
+        self._inc_r_r('h', 'l', m=2)
+
+    def _ld_a_hl_d(self):
+        """Load mem @ hl into reg a and decrement."""
+        address = (self.registers['h'] << 8) + self.registers['l']
+        self.registers['a'] = self.read8(address)
+        self._dec_r_r('h', 'l', m=2)
+
+    def _ld_a_i_o_n(self):
+        """."""
+        pass
+
+    # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):
         """Increment registers.
 
@@ -616,6 +633,10 @@ class GbZ80Cpu(object):
         self.registers['sp'] = (self.registers['sp'] + 1) & 65535
         self.registers['m'] = 1
 
+    def _dec_sp(self):
+        """Decrement stack pointer."""
+        self.registers['sp'] = (self.registers['sp'] - 1) & 65535
+        self.registers['m'] = 1
 
 
 
