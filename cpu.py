@@ -153,7 +153,7 @@ FLAG_BITS = {
 }
 
 
-class Z80Cpu(object):
+class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
     def __init__(self, memory):
@@ -171,75 +171,75 @@ class Z80Cpu(object):
             # 16-bit registers (program counter, stack pointer)
             'pc': 0, 'sp': 0,
             # Clock for last instr
-            'm': 0, 't': 0
+            'm': 0      # cpu cycles/4
         }
 
         self.opcode_map = {
             # opcode number: func to call, args
             0: (self._nop, []),  # NOP
-            1: ('', []),  # LDBCnn
+            1: (self._ld_r1r2_nn, ['b', 'c']),  # LDBCnn
             2: (self._ld_r1r2m_a, ['b', 'c']),  # LDBCmA
-            3: ('', []),  # INCBC
-            4: ('', []),  # INCr_b
-            5: ('', []),  # DECr_b
+            3: (self._inc_r_r, ['b', 'c']),  # INCBC
+            4: (self._raise_opcode_unimplemented, []),  # INCr_b
+            5: (self._raise_opcode_unimplemented, []),  # DECr_b
             6: (self._ld_rn, ['b']),  # LDrn_b
-            7: ('', []),  # RLCA
-            8: ('', []),  # LDmmSP
-            9: ('', []),  # ADDHLBC
+            7: (self._raise_opcode_unimplemented, []),  # RLCA
+            8: (self._ld_nn_sp, []),  # LDnnSP -- double check this one...
+            9: (self._raise_opcode_unimplemented, []),  # ADDHLBC
             10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
-            11: ('', []),  # DECBC
-            12: ('', []),  # INCr_c
-            13: ('', []),  # DECr_c
+            11: (self._raise_opcode_unimplemented, []),  # DECBC
+            12: (self._raise_opcode_unimplemented, []),  # INCr_c
+            13: (self._raise_opcode_unimplemented, []),  # DECr_c
             14: (self._ld_rn, ['c']),  # LDrn_c
-            15: ('', []),  # RRCA
-            16: ('', []),  # DJNZn
-            17: ('', []),  # LDDEnn
+            15: (self._raise_opcode_unimplemented, []),  # RRCA
+            16: (self._raise_opcode_unimplemented, []),  # DJNZn
+            17: (self._ld_r1r2_nn, ['d', 'e']),  # LDDEnn
             18: (self._ld_r1r2m_a, ['d', 'e']),  # LDDEmA
-            19: ('', []),  # INCDE
-            20: ('', []),  # INCr_d
-            21: ('', []),  # DECr_d
+            19: (self._inc_r_r, ['d', 'e']),  # INCDE
+            20: (self._raise_opcode_unimplemented, []),  # INCr_d
+            21: (self._raise_opcode_unimplemented, []),  # DECr_d
             22: (self._ld_rn, ['d']),  # LDrn_d
-            23: ('', []),  # RLA
-            24: ('', []),  # JRn
-            25: ('', []),  # ADDHLDE
+            23: (self._raise_opcode_unimplemented, []),  # RLA
+            24: (self._raise_opcode_unimplemented, []),  # JRn
+            25: (self._raise_opcode_unimplemented, []),  # ADDHLDE
             26: (self._ld_a_r1r2m, ['d', 'e']),  # LDADEm
-            27: ('', []),  # DECDE
-            28: ('', []),  # INCr_e
-            29: ('', []),  # DECr_e
+            27: (self._raise_opcode_unimplemented, []),  # DECDE
+            28: (self._raise_opcode_unimplemented, []),  # INCr_e
+            29: (self._raise_opcode_unimplemented, []),  # DECr_e
             30: (self._ld_rn, ['e']),  # LDrn_e
-            31: ('', []),  # RRA
-            32: ('', []),  # JRNZn
-            33: ('', []),  # LDHLnn
-            34: ('', []),  # LDHLIA
-            35: ('', []),  # INCHL
-            36: ('', []),  # INCr_h
-            37: ('', []),  # DECr_h
+            31: (self._raise_opcode_unimplemented, []),  # RRA
+            32: (self._raise_opcode_unimplemented, []),  # JRNZn
+            33: (self._ld_r1r2_nn, ['h', 'l']),  # LDHLnn
+            34: (self._ld_hlmi_a, []),  # LDHLIA
+            35: (self._inc_r_, ['h', 'l']),  # INCHL
+            36: (self._raise_opcode_unimplemented, []),  # INCr_h
+            37: (self._raise_opcode_unimplemented, []),  # DECr_h
             38: (self._ld_rn, ['h']),  # LDrn_h
-            39: ('', []),  # XX
-            40: ('', []),  # JRZn
-            41: ('', []),  # ADDHLHL
-            42: ('', []),  # LDAHLI
-            43: ('', []),  # DECHL
-            44: ('', []),  # INCr_l
-            45: ('', []),  # DECr_l
+            39: (self._raise_opcode_unimplemented, []),  # XX
+            40: (self._raise_opcode_unimplemented, []),  # JRZn
+            41: (self._raise_opcode_unimplemented, []),  # ADDHLHL
+            42: (self._raise_opcode_unimplemented, []),  # LDAHLI
+            43: (self._raise_opcode_unimplemented, []),  # DECHL
+            44: (self._raise_opcode_unimplemented, []),  # INCr_l
+            45: (self._raise_opcode_unimplemented, []),  # DECr_l
             46: (self._ld_rn, ['l']),  # LDrn_l
-            47: ('', []),  # CPL
-            48: ('', []),  # JRNCn
-            49: ('', []),  # LDSPnn
-            50: ('', []),  # LDHLDA
-            51: ('', []),  # INCSP
-            52: ('', []),  # INCHLm
-            53: ('', []),  # DECHLm
+            47: (self._raise_opcode_unimplemented, []),  # CPL
+            48: (self._raise_opcode_unimplemented, []),  # JRNCn
+            49: (self._ld_sp_nn, []),  # LDSPnn
+            50: (self._raise_opcode_unimplemented, []),  # LDHLDA
+            51: (self._inc_sp, []),  # INCSP
+            52: (self._raise_opcode_unimplemented, []),  # INCHLm
+            53: (self._raise_opcode_unimplemented, []),  # DECHLm
             54: (self._ld_hlm_n, []),  # LDHLmn
-            55: ('', []),  # SCF
-            56: ('', []),  # JRCn
-            57: ('', []),  # ADDHLSP
-            58: ('', []),  # LDAHLD
-            59: ('', []),  # DECSP
-            60: ('', []),  # INCr_a
-            61: ('', []),  # DECr_a
+            55: (self._raise_opcode_unimplemented, []),  # SCF
+            56: (self._raise_opcode_unimplemented, []),  # JRCn
+            57: (self._raise_opcode_unimplemented, []),  # ADDHLSP
+            58: (self._raise_opcode_unimplemented, []),  # LDAHLD
+            59: (self._raise_opcode_unimplemented, []),  # DECSP
+            60: (self._raise_opcode_unimplemented, []),  # INCr_a
+            61: (self._raise_opcode_unimplemented, []),  # DECr_a
             62: (self._ld_rn, ['a']),  # LDrn_a
-            63: ('', []),  # CCF
+            63: (self._raise_opcode_unimplemented, []),  # CCF
             64: (self._ld_rr, ['b', 'b']),  # LDrr_bb (nop?)
             65: (self._ld_rr, ['b', 'c']),  # LDrr_bc
             66: (self._ld_rr, ['b', 'd']),  # LDrr_bd
@@ -294,7 +294,7 @@ class Z80Cpu(object):
             115: (self._ld_hlm_r, ['e']),  # LDHLmr_e
             116: (self._ld_hlm_r, ['h']),  # LDHLmr_h
             117: (self._ld_hlm_r, ['l']),  # LDHLmr_l
-            118: ('', []),  # HALT
+            118: (self._raise_opcode_unimplemented, []),  # HALT
             119: (self._ld_hlm_r, ['a']),  # LDHLmr_a
             120: (self._ld_rr, ['a', 'b']),  # LDrr_ab
             121: (self._ld_rr, ['a', 'c']),  # LDrr_ac
@@ -304,134 +304,134 @@ class Z80Cpu(object):
             125: (self._ld_rr, ['a', 'l']),  # LDrr_al
             126: (self._ld_r_hlm, ['a']),  # LDrHLm_a
             127: (self._ld_rr, ['a', 'a']),  # LDrr_aa (nop?)
-            128: ('', []),  # ADDr_b
-            129: ('', []),  # ADDr_c
-            130: ('', []),  # ADDr_d
-            131: ('', []),  # ADDr_e
-            132: ('', []),  # ADDr_h
-            133: ('', []),  # ADDr_l
-            134: ('', []),  # ADDHL
-            135: ('', []),  # ADDr_a
-            136: ('', []),  # ADCr_b
-            137: ('', []),  # ADCr_c
-            138: ('', []),  # ADCr_d
-            139: ('', []),  # ADCr_e
-            140: ('', []),  # ADCr_h
-            141: ('', []),  # ADCr_l
-            142: ('', []),  # ADCHL
-            143: ('', []),  # ADCr_a
-            144: ('', []),  # SUBr_b
-            145: ('', []),  # SUBr_c
-            146: ('', []),  # SUBr_d
-            147: ('', []),  # SUBr_e
-            148: ('', []),  # SUBr_h
-            149: ('', []),  # SUBr_l
-            150: ('', []),  # SUBHL
-            151: ('', []),  # SUBr_a
-            152: ('', []),  # SBCr_b
-            153: ('', []),  # SBCr_c
-            154: ('', []),  # SBCr_d
-            155: ('', []),  # SBCr_e
-            156: ('', []),  # SBCr_h
-            157: ('', []),  # SBCr_l
-            158: ('', []),  # SBCHL
-            159: ('', []),  # SBCr_a
-            160: ('', []),  # ANDr_b
-            161: ('', []),  # ANDr_c
-            162: ('', []),  # ANDr_d
-            163: ('', []),  # ANDr_e
-            164: ('', []),  # ANDr_h
-            165: ('', []),  # ANDr_l
-            166: ('', []),  # ANDHL
-            167: ('', []),  # ANDr_a
-            168: ('', []),  # XORr_b
-            169: ('', []),  # XORr_c
-            170: ('', []),  # XORr_d
-            171: ('', []),  # XORr_e
-            172: ('', []),  # XORr_h
-            173: ('', []),  # XORr_l
-            174: ('', []),  # XORHL
-            175: ('', []),  # XORr_a
-            176: ('', []),  # ORr_b
-            177: ('', []),  # ORr_c
-            178: ('', []),  # ORr_d
-            179: ('', []),  # ORr_e
-            180: ('', []),  # ORr_h
-            181: ('', []),  # ORr_l
-            182: ('', []),  # ORHL
-            183: ('', []),  # ORr_a
-            184: ('', []),  # CPr_b
-            185: ('', []),  # CPr_c
-            186: ('', []),  # CPr_d
-            187: ('', []),  # CPr_e
-            188: ('', []),  # CPr_h
-            189: ('', []),  # CPr_l
-            190: ('', []),  # CPHL
-            191: ('', []),  # CPr_a
-            192: ('', []),  # RETNZ
-            193: ('', []),  # POPBC
-            194: ('', []),  # JPNZnn
-            195: ('', []),  # JPnn
-            196: ('', []),  # CALLNZnn
-            197: ('', []),  # PUSHBC
-            198: ('', []),  # ADDn
-            199: ('', []),  # RST00
-            200: ('', []),  # RETZ
-            201: ('', []),  # RET
-            202: ('', []),  # JPZnn
-            203: ('', []),  # MAPcb
-            204: ('', []),  # CALLZnn
-            205: ('', []),  # CALLnn
-            206: ('', []),  # ADCn
-            207: ('', []),  # RST08
-            208: ('', []),  # RETNC
-            209: ('', []),  # POPDE
-            210: ('', []),  # JPNCnn
-            211: ('', []),  # XX
-            212: ('', []),  # CALLNCnn
-            213: ('', []),  # PUSHDE
-            214: ('', []),  # SUBn
-            215: ('', []),  # RST10
-            216: ('', []),  # RETC
-            217: ('', []),  # RETI
-            218: ('', []),  # JPCnn
-            219: ('', []),  # XX
-            220: ('', []),  # CALLCnn
-            221: ('', []),  # XX
-            222: ('', []),  # SBCn
-            223: ('', []),  # RST18
-            224: ('', []),  # LDIOnA
-            225: ('', []),  # POPHL
-            226: ('', []),  # LDIOCA
-            227: ('', []),  # XX
-            228: ('', []),  # XX
-            229: ('', []),  # PUSHHL
-            230: ('', []),  # ANDn
-            231: ('', []),  # RST20
-            232: ('', []),  # ADDSPn
-            233: ('', []),  # JPHL
-            234: (self._ld_mm_a, []),  # LDmmA
-            235: ('', []),  # XX
-            236: ('', []),  # XX
-            237: ('', []),  # XX
-            238: ('', []),  # ORn
-            239: ('', []),  # RST28
-            240: ('', []),  # LDAIOn
-            241: ('', []),  # POPAF
-            242: ('', []),  # LDAIOC
-            243: ('', []),  # DI
-            244: ('', []),  # XX
-            245: ('', []),  # PUSHAF
-            246: ('', []),  # XORn
-            247: ('', []),  # RST30
-            248: ('', []),  # LDHLSPn
-            249: ('', []),  # XX
-            250: (self._ld_a_mm, []),  # LDAmm
-            251: ('', []),  # EI
-            252: ('', []),  # XX
-            253: ('', []),  # XX
-            254: ('', []),  # CPn
-            255: ('', []),  # RST38
+            128: (self._raise_opcode_unimplemented, []),  # ADDr_b
+            129: (self._raise_opcode_unimplemented, []),  # ADDr_c
+            130: (self._raise_opcode_unimplemented, []),  # ADDr_d
+            131: (self._raise_opcode_unimplemented, []),  # ADDr_e
+            132: (self._raise_opcode_unimplemented, []),  # ADDr_h
+            133: (self._raise_opcode_unimplemented, []),  # ADDr_l
+            134: (self._raise_opcode_unimplemented, []),  # ADDHL
+            135: (self._raise_opcode_unimplemented, []),  # ADDr_a
+            136: (self._raise_opcode_unimplemented, []),  # ADCr_b
+            137: (self._raise_opcode_unimplemented, []),  # ADCr_c
+            138: (self._raise_opcode_unimplemented, []),  # ADCr_d
+            139: (self._raise_opcode_unimplemented, []),  # ADCr_e
+            140: (self._raise_opcode_unimplemented, []),  # ADCr_h
+            141: (self._raise_opcode_unimplemented, []),  # ADCr_l
+            142: (self._raise_opcode_unimplemented, []),  # ADCHL
+            143: (self._raise_opcode_unimplemented, []),  # ADCr_a
+            144: (self._raise_opcode_unimplemented, []),  # SUBr_b
+            145: (self._raise_opcode_unimplemented, []),  # SUBr_c
+            146: (self._raise_opcode_unimplemented, []),  # SUBr_d
+            147: (self._raise_opcode_unimplemented, []),  # SUBr_e
+            148: (self._raise_opcode_unimplemented, []),  # SUBr_h
+            149: (self._raise_opcode_unimplemented, []),  # SUBr_l
+            150: (self._raise_opcode_unimplemented, []),  # SUBHL
+            151: (self._raise_opcode_unimplemented, []),  # SUBr_a
+            152: (self._raise_opcode_unimplemented, []),  # SBCr_b
+            153: (self._raise_opcode_unimplemented, []),  # SBCr_c
+            154: (self._raise_opcode_unimplemented, []),  # SBCr_d
+            155: (self._raise_opcode_unimplemented, []),  # SBCr_e
+            156: (self._raise_opcode_unimplemented, []),  # SBCr_h
+            157: (self._raise_opcode_unimplemented, []),  # SBCr_l
+            158: (self._raise_opcode_unimplemented, []),  # SBCHL
+            159: (self._raise_opcode_unimplemented, []),  # SBCr_a
+            160: (self._raise_opcode_unimplemented, []),  # ANDr_b
+            161: (self._raise_opcode_unimplemented, []),  # ANDr_c
+            162: (self._raise_opcode_unimplemented, []),  # ANDr_d
+            163: (self._raise_opcode_unimplemented, []),  # ANDr_e
+            164: (self._raise_opcode_unimplemented, []),  # ANDr_h
+            165: (self._raise_opcode_unimplemented, []),  # ANDr_l
+            166: (self._raise_opcode_unimplemented, []),  # ANDHL
+            167: (self._raise_opcode_unimplemented, []),  # ANDr_a
+            168: (self._raise_opcode_unimplemented, []),  # XORr_b
+            169: (self._raise_opcode_unimplemented, []),  # XORr_c
+            170: (self._raise_opcode_unimplemented, []),  # XORr_d
+            171: (self._raise_opcode_unimplemented, []),  # XORr_e
+            172: (self._raise_opcode_unimplemented, []),  # XORr_h
+            173: (self._raise_opcode_unimplemented, []),  # XORr_l
+            174: (self._raise_opcode_unimplemented, []),  # XORHL
+            175: (self._raise_opcode_unimplemented, []),  # XORr_a
+            176: (self._raise_opcode_unimplemented, []),  # ORr_b
+            177: (self._raise_opcode_unimplemented, []),  # ORr_c
+            178: (self._raise_opcode_unimplemented, []),  # ORr_d
+            179: (self._raise_opcode_unimplemented, []),  # ORr_e
+            180: (self._raise_opcode_unimplemented, []),  # ORr_h
+            181: (self._raise_opcode_unimplemented, []),  # ORr_l
+            182: (self._raise_opcode_unimplemented, []),  # ORHL
+            183: (self._raise_opcode_unimplemented, []),  # ORr_a
+            184: (self._raise_opcode_unimplemented, []),  # CPr_b
+            185: (self._raise_opcode_unimplemented, []),  # CPr_c
+            186: (self._raise_opcode_unimplemented, []),  # CPr_d
+            187: (self._raise_opcode_unimplemented, []),  # CPr_e
+            188: (self._raise_opcode_unimplemented, []),  # CPr_h
+            189: (self._raise_opcode_unimplemented, []),  # CPr_l
+            190: (self._raise_opcode_unimplemented, []),  # CPHL
+            191: (self._raise_opcode_unimplemented, []),  # CPr_a
+            192: (self._raise_opcode_unimplemented, []),  # RETNZ
+            193: (self._raise_opcode_unimplemented, []),  # POPBC
+            194: (self._raise_opcode_unimplemented, []),  # JPNZnn
+            195: (self._raise_opcode_unimplemented, []),  # JPnn
+            196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
+            197: (self._raise_opcode_unimplemented, []),  # PUSHBC
+            198: (self._raise_opcode_unimplemented, []),  # ADDn
+            199: (self._raise_opcode_unimplemented, []),  # RST00
+            200: (self._raise_opcode_unimplemented, []),  # RETZ
+            201: (self._raise_opcode_unimplemented, []),  # RET
+            202: (self._raise_opcode_unimplemented, []),  # JPZnn
+            203: (self._raise_opcode_unimplemented, []),  # MAPcb
+            204: (self._raise_opcode_unimplemented, []),  # CALLZnn
+            205: (self._raise_opcode_unimplemented, []),  # CALLnn
+            206: (self._raise_opcode_unimplemented, []),  # ADCn
+            207: (self._raise_opcode_unimplemented, []),  # RST08
+            208: (self._raise_opcode_unimplemented, []),  # RETNC
+            209: (self._raise_opcode_unimplemented, []),  # POPDE
+            210: (self._raise_opcode_unimplemented, []),  # JPNCnn
+            211: (self._raise_opcode_unimplemented, []),  # XX
+            212: (self._raise_opcode_unimplemented, []),  # CALLNCnn
+            213: (self._raise_opcode_unimplemented, []),  # PUSHDE
+            214: (self._raise_opcode_unimplemented, []),  # SUBn
+            215: (self._raise_opcode_unimplemented, []),  # RST10
+            216: (self._raise_opcode_unimplemented, []),  # RETC
+            217: (self._raise_opcode_unimplemented, []),  # RETI
+            218: (self._raise_opcode_unimplemented, []),  # JPCnn
+            219: (self._raise_opcode_unimplemented, []),  # XX
+            220: (self._raise_opcode_unimplemented, []),  # CALLCnn
+            221: (self._raise_opcode_unimplemented, []),  # XX
+            222: (self._raise_opcode_unimplemented, []),  # SBCn
+            223: (self._raise_opcode_unimplemented, []),  # RST18
+            224: (self._raise_opcode_unimplemented, []),  # LDIOnA
+            225: (self._raise_opcode_unimplemented, []),  # POPHL
+            226: (self._raise_opcode_unimplemented, []),  # LDIOCA
+            227: (self._raise_opcode_unimplemented, []),  # XX
+            228: (self._raise_opcode_unimplemented, []),  # XX
+            229: (self._raise_opcode_unimplemented, []),  # PUSHHL
+            230: (self._raise_opcode_unimplemented, []),  # ANDn
+            231: (self._raise_opcode_unimplemented, []),  # RST20
+            232: (self._raise_opcode_unimplemented, []),  # ADDSPn
+            233: (self._raise_opcode_unimplemented, []),  # JPHL
+            234: (self._ld_nn_a, []),  # LDnnA
+            235: (self._raise_opcode_unimplemented, []),  # XX
+            236: (self._raise_opcode_unimplemented, []),  # XX
+            237: (self._raise_opcode_unimplemented, []),  # XX
+            238: (self._raise_opcode_unimplemented, []),  # ORn
+            239: (self._raise_opcode_unimplemented, []),  # RST28
+            240: (self._raise_opcode_unimplemented, []),  # LDAIOn
+            241: (self._raise_opcode_unimplemented, []),  # POPAF
+            242: (self._raise_opcode_unimplemented, []),  # LDAIOC
+            243: (self._raise_opcode_unimplemented, []),  # DI
+            244: (self._raise_opcode_unimplemented, []),  # XX
+            245: (self._raise_opcode_unimplemented, []),  # PUSHAF
+            246: (self._raise_opcode_unimplemented, []),  # XORn
+            247: (self._raise_opcode_unimplemented, []),  # RST30
+            248: (self._raise_opcode_unimplemented, []),  # LDHLSPn
+            249: (self._raise_opcode_unimplemented, []),  # XX
+            250: (self._ld_a_nn, []),  # LDAnn
+            251: (self._raise_opcode_unimplemented, []),  # EI
+            252: (self._raise_opcode_unimplemented, []),  # XX
+            253: (self._raise_opcode_unimplemented, []),  # XX
+            254: (self._raise_opcode_unimplemented, []),  # CPn
+            255: (self._raise_opcode_unimplemented, []),  # RST38
         }
 
     def execute_next_operation(self):
@@ -481,6 +481,9 @@ class Z80Cpu(object):
         self.clock['m'] += self.registers['m']
         self.clock['t'] += self.registers['t']
 
+    def _raise_opcode_unimplemented():
+        raise Exception("Opcode unimplemented!")
+
     # Opcodes
     def _nop(self):
         """NOP opcode."""
@@ -492,29 +495,24 @@ class Z80Cpu(object):
         """Load value r2 into r1."""
         self.registers[r1] = self.registers[r2]
         self.registers['m'] = 1
-        self.registers['t'] = 4
-        print('yo', r1, r2)
 
     def _ld_rn(self, r):
         """Load mem @ pc into register r."""
         self.registers[r] = self.read8(self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['m'] = 2
-        self.registers['t'] = 8
 
     def _ld_r_hlm(self, r):
         """Load mem @ HL into registers[r]."""
         read_byte = self.read8((self.registers['h'] << 8) + self.registers['l'])
         self.registers[r] = read_byte
         self.registers['m'] = 2
-        self.registers['t'] = 8
 
     def _ld_hlm_r(self, r):
         """Load registers[r] into mem @ HL."""
         write_address = (self.registers['h'] << 8) + self.registers['l']
         self.write8(write_address, self.registers[r])
         self.registers['m'] = 2
-        self.registers['t'] = 8
 
     def _ld_hlm_n(self):
         """Load mem @ pc into mem @ HL."""
@@ -522,46 +520,82 @@ class Z80Cpu(object):
         self.write8(write_address, self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['m'] = 3
-        self.registers['t'] = 12
 
     def _ld_r1r2m_a(self, r1, r2):
         """Load registers[a] into mem @ BC."""
         write_address = (self.registers[r1] << 8) + self.registers[r2]
         self.write8(write_address, self.registers['a'])
         self.registers['m'] = 2
-        self.registers['t'] = 8
 
-    def _ld_mm_a(self):
+    def _ld_nn_a(self):
         """Load byte registers['a'] into mem @ 16-bit address.
 
-        address = mem @ registers[pc]
+        address = mem (16-bit) @ registers[pc]
         """
-        self.write8(self.read16(self.registers['pc']), self.registers['a'])
+        address = self.read16(self.registers['pc'])
+        self.write8(address, self.registers['a'])
         self.registers['pc'] += 2
         self.registers['m'] = 4
-        self.registers['t'] = 16
 
     def _ld_a_r1r2m(self, r1, r2):
         """Load mem @ r1r2 into registers[a]."""
         address = (self.registers[r1] << 8) + self.registers[r2]
         self.registers['a'] = self.read8(address)
         self.registers['m'] = 2
-        self.registers['t'] = 8
 
-    def _ld_a_mm(self):
-        """Load byte into registers[a].
+    def _ld_a_nn(self):
+        """Load byte @ address into registers[a].
 
-        byte = mem(byte) @ mem(word) @ registers[pc]
+        address = mem (16-bit) @ registers[pc]
         """
-        self.registers['a'] = self.read8(self.read16(self.registers['pc']))
+        address = self.read16(self.registers['pc'])
+        self.registers['a'] = self.read8(address)
         self.registers['pc'] += 2
         self.registers['m'] = 4
-        self.registers['t'] = 16
 
+    def _ld_r1r2_nn(self, r1, r2):
+        """Load 16-bit immediate value into two 8-bit registers."""
+        self.registers[r1] = self.read8(self.registers['pc'])
+        self.registers[r2] = self.read8(self.registers['pc'] + 1)
+        self.registers['pc'] += 2
+        self.registers['m'] = 3
 
+    def _ld_sp_nn(self):
+        """Load 16-bit immediate value into stack pointer."""
+        self.registers['sp'] = self.read16(self.registers['pc'])
+        self.registers['pc'] += 2
+        self.registers['m'] = 3
 
+    def _ld_nn_sp(self):
+        """Load SP into mem @ address (mm)."""
+        address = self.read16(self.registers['pc'])
+        self.write16(address, self.registers['sp'])
+        self.registers['pc'] += 2
+        self.registers['m'] = 4
 
+    def _ld_hlmi_a(self):
+        """Put A into memory address HL. Increment HL.
 
+        Same as: LD (HL),A - INC HL
+        """
+        address = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(address, self.registers['a'])
+        self._inc_r_r('h', 'l', m=2)
+
+    def _inc_r_r(self, r1, r2, m=1):
+        """Increment registers.
+
+        INC HL, INC DE, INC BC
+        """
+        self.registers[r2] &= 255
+        if not self.registers[r2]:
+            self.registers[r1] &= 255
+        self.registers['m'] = m
+
+    def _inc_sp(self):
+        """Increment stack pointer."""
+        self.registers['sp'] &= 65535
+        self.registers['m'] = 1
 
 
 
