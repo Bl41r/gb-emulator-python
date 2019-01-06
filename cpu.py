@@ -333,14 +333,14 @@ class GbZ80Cpu(object):
             141: (self._raise_opcode_unimplemented, []),  # ADCr_l
             142: (self._raise_opcode_unimplemented, []),  # ADCHL
             143: (self._raise_opcode_unimplemented, []),  # ADCr_a
-            144: (self._raise_opcode_unimplemented, []),  # SUBr_b
-            145: (self._raise_opcode_unimplemented, []),  # SUBr_c
-            146: (self._raise_opcode_unimplemented, []),  # SUBr_d
-            147: (self._raise_opcode_unimplemented, []),  # SUBr_e
-            148: (self._raise_opcode_unimplemented, []),  # SUBr_h
-            149: (self._raise_opcode_unimplemented, []),  # SUBr_l
+            144: (self._sub_n, ['b']),  # SUBr_b
+            145: (self._sub_n, ['c']),  # SUBr_c
+            146: (self._sub_n, ['d']),  # SUBr_d
+            147: (self._sub_n, ['e']),  # SUBr_e
+            148: (self._sub_n, ['h']),  # SUBr_h
+            149: (self._sub_n, ['l']),  # SUBr_l
             150: (self._raise_opcode_unimplemented, []),  # SUBHL
-            151: (self._raise_opcode_unimplemented, []),  # SUBr_a
+            151: (self._sub_n, ['a']),  # SUBr_a
             152: (self._raise_opcode_unimplemented, []),  # SBCr_b
             153: (self._raise_opcode_unimplemented, []),  # SBCr_c
             154: (self._raise_opcode_unimplemented, []),  # SBCr_d
@@ -704,6 +704,23 @@ class GbZ80Cpu(object):
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = self.read16(self.registers['pc'])
         self.registers['m'] = 5
+
+    # SUB
+    def _sub_n(self, r):
+        """Subtract n from A.
+
+        n = A,B,C,D,E,H,L
+        """
+        a = self.registers['a']
+        self.registers['a'] -= self.registers[r]
+        self.registers['f'] = 0x50 if self.registers['a'] < 0 else 0x40
+        self.registers['a'] &= 255
+
+        if not self.registers['a']:
+            self.registers['f'] |= 0x80
+        if ((self.registers['a'] ^ self.registers[r] ^ a) & 0x10):
+            self.registers['f'] |= 0x20
+        self.registers['m'] = 1
 
     # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):
