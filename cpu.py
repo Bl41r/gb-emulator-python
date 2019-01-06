@@ -164,12 +164,16 @@ class GbZ80Cpu(object):
 
         # Register set
         self.registers = {
-            # 8-bit registers
-            'a': 0, 'b': 0, 'c': 0, 'd': 0, 'e': 0, 'h': 0, 'l': 0,
-            # 8-bit 'flag' register
-            'flag': 0,
+            # 16-bit registers stored as two 8-bit registers
+            # 15..8   7..0
+            'a': 0, 'f': 0,
+            'b': 0, 'c': 0,
+            'd': 0, 'e': 0,
+            'h': 0, 'l': 0,
+
             # 16-bit registers (program counter, stack pointer)
             'pc': 0, 'sp': 0,
+
             # Clock for last instr
             'm': 0      # cpu cycles/4
         }
@@ -225,9 +229,9 @@ class GbZ80Cpu(object):
             46: (self._ld_rn, ['l']),  # LDrn_l
             47: (self._raise_opcode_unimplemented, []),  # CPL
             48: (self._raise_opcode_unimplemented, []),  # JRNCn
-            49: (self._ld_sp_nn, []),  # LDSPnn
+            49: (self._ld_sp_nn, []),  # LD SP nn
             50: (self._ld_hlmd_a, []),  # LDHLDA
-            51: (self._inc_sp, []),  # INCSP
+            51: (self._inc_sp, []),  # INC SP
             52: (self._raise_opcode_unimplemented, []),  # INCHLm
             53: (self._raise_opcode_unimplemented, []),  # DECHLm
             54: (self._ld_hlm_n, []),  # LDHLmn
@@ -400,9 +404,9 @@ class GbZ80Cpu(object):
             221: (self._raise_opcode_unimplemented, []),  # XX
             222: (self._raise_opcode_unimplemented, []),  # SBCn
             223: (self._raise_opcode_unimplemented, []),  # RST18
-            224: (self._raise_opcode_unimplemented, []),  # LDIOnA
+            224: (self._ldh_n_a, []),  # LDIOnA
             225: (self._raise_opcode_unimplemented, []),  # POPHL
-            226: (self._raise_opcode_unimplemented, []),  # LDIOCA
+            226: (self._ld_c_a, []),  # LDIOCA
             227: (self._raise_opcode_unimplemented, []),  # XX
             228: (self._raise_opcode_unimplemented, []),  # XX
             229: (self._raise_opcode_unimplemented, []),  # PUSHHL
@@ -410,23 +414,23 @@ class GbZ80Cpu(object):
             231: (self._raise_opcode_unimplemented, []),  # RST20
             232: (self._raise_opcode_unimplemented, []),  # ADDSPn
             233: (self._raise_opcode_unimplemented, []),  # JPHL
-            234: (self._ld_nn_a, []),  # LDnnA
+            234: (self._ld_nn_a, []),  # LD nn A
             235: (self._raise_opcode_unimplemented, []),  # XX
             236: (self._raise_opcode_unimplemented, []),  # XX
             237: (self._raise_opcode_unimplemented, []),  # XX
             238: (self._raise_opcode_unimplemented, []),  # ORn
             239: (self._raise_opcode_unimplemented, []),  # RST28
-            240: (self._raise_opcode_unimplemented, []),  # LDAIOn
+            240: (self._ldh_a_n, []),  # LD AIO n
             241: (self._raise_opcode_unimplemented, []),  # POPAF
-            242: (self._raise_opcode_unimplemented, []),  # LDAIOC
+            242: (self._ld_a_c, []),  # LDAIOC
             243: (self._raise_opcode_unimplemented, []),  # DI
             244: (self._raise_opcode_unimplemented, []),  # XX
             245: (self._raise_opcode_unimplemented, []),  # PUSHAF
             246: (self._raise_opcode_unimplemented, []),  # XORn
             247: (self._raise_opcode_unimplemented, []),  # RST30
-            248: (self._raise_opcode_unimplemented, []),  # LDHLSPn
-            249: (self._raise_opcode_unimplemented, []),  # XX
-            250: (self._ld_a_nn, []),  # LDAnn
+            248: (self._ld_hl_sp_n, []),  # LD HL SP+n
+            249: (self._ld_sp_hl, []),  # LS SP HL
+            250: (self._ld_a_nn, []),  # LD A nn
             251: (self._raise_opcode_unimplemented, []),  # EI
             252: (self._raise_opcode_unimplemented, []),  # XX
             253: (self._raise_opcode_unimplemented, []),  # XX
@@ -481,10 +485,14 @@ class GbZ80Cpu(object):
         self.clock['m'] += self.registers['m']
         self.clock['t'] += self.registers['t']
 
+    def _toggle_flag(self, flag_value):
+        self.registers['f'] |= flag_value
+
     def _raise_opcode_unimplemented():
         raise Exception("Opcode unimplemented!")
 
     # Opcodes
+    # ----------------------------
     def _nop(self):
         """NOP opcode."""
         self.registers['m'] = 1
@@ -504,27 +512,27 @@ class GbZ80Cpu(object):
 
     def _ld_r_hlm(self, r):
         """Load mem @ HL into registers[r]."""
-        read_byte = self.read8((self.registers['h'] << 8) + self.registers['l'])
-        self.registers[r] = read_byte
+        read_val = self.read8((self.registers['h'] << 8) + self.registers['l'])
+        self.registers[r] = read_val
         self.registers['m'] = 2
 
     def _ld_hlm_r(self, r):
         """Load registers[r] into mem @ HL."""
-        write_address = (self.registers['h'] << 8) + self.registers['l']
-        self.write8(write_address, self.registers[r])
+        address = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(address, self.registers[r])
         self.registers['m'] = 2
 
     def _ld_hlm_n(self):
         """Load mem @ pc into mem @ HL."""
-        write_address = (self.registers['h'] << 8) + self.registers['l']
-        self.write8(write_address, self.registers['pc'])
+        address = (self.registers['h'] << 8) + self.registers['l']
+        self.write8(address, self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['m'] = 3
 
     def _ld_r1r2m_a(self, r1, r2):
         """Load registers[a] into mem @ BC."""
-        write_address = (self.registers[r1] << 8) + self.registers[r2]
-        self.write8(write_address, self.registers['a'])
+        address = (self.registers[r1] << 8) + self.registers[r2]
+        self.write8(address, self.registers['a'])
         self.registers['m'] = 2
 
     def _ld_nn_a(self):
@@ -603,9 +611,57 @@ class GbZ80Cpu(object):
         self.registers['a'] = self.read8(address)
         self._dec_r_r('h', 'l', m=2)
 
-    def _ld_a_i_o_n(self):
-        """."""
-        pass
+    def _ldh_a_n(self):
+        """Put mem @ address $FF00+n into register a."""
+        n = self.read8(self.registers['pc'])
+        self.registers['a'] = self.read8(0xFF00 + n)
+        self.registers['pc'] += 1
+        self.registers['m'] = 3
+
+    def _ldh_n_a(self):
+        """Put register A into mem @ address $FF00+n."""
+        n = self.read8(0xFF00 + self.registers['pc'])
+        self.write8(n, self.registers['a'])
+        self.registers['pc'] += 1
+        self.registers['m'] = 3
+
+    def _ld_a_c(self):
+        """Put value @ address $FF00+C into register A."""
+        self.registers['a'] = self.read8(0xFF00 + self.registers['c'])
+        self.registers['m'] = 2
+
+    def _ld_c_a(self):
+        """Put A into mem @ address $FF00 + C."""
+        self.write8(self.read8(0xFF00 + self.registers['c']))
+        self.registers['m'] = 2
+
+    def _ld_hl_sp_n(self):
+        """Put SP+n effective address into HL.
+
+        n = 1 byte signed immediate value
+        """
+        n = self.read8(self.registers['pc'])
+        if n > 127:
+            n = ((~n + 1) & 255)
+        result = n + self.registers['sp']
+
+        # set flags
+        self.registers['f'] = 0
+        xor_result = (self.registers['sp'] ^ n ^ result)
+        if (xor_result & 0x100) == 0x100:
+            self._toggle_flag(FLAG_BITS['carry'])
+        if (xor_result & 0x10) == 0x10:
+            self._toggle_flag(FLAG_BITS['half-carry'])
+
+        self.registers['h'] = (result >> 8) & 255
+        self.registers['l'] = result & 255
+        self.registers['pc'] += 1
+        self.registers['m'] = 3
+
+    def _ld_sp_hl(self):
+        """Put HL into SP."""
+        self.registers['sp'] = (self.registers['h'] << 8) + self.registers['l']
+        self.registers['m'] = 2
 
     # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):
