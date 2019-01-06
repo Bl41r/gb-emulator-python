@@ -4,11 +4,6 @@ github.com/bl41r/gb-emulator-python
 2019
 """
 
-"""Gameboy emulator.
-
-github.com/bl41r/gb-emulator-python
-2019
-"""
 
 import sys
 from memory import GbMemory
@@ -26,7 +21,7 @@ def main(filename):
 
     try:
         while True:
-            cpu.execute_next_instruction()
+            cpu.execute_next_operation()
 
     except ExecutionHalted:     # raised by trap_halt (expected exit)
         print("\nShutting down...")
@@ -45,15 +40,20 @@ def dump_logs(memory, cpu):
     for item in LOG_DUMP:
         print(item)
     print()
-    # print_mem_map(memory)
+    dump_mem_map(memory)
     print("Registers:", cpu.registers)
 
 
-def print_mem_map(memory):
+def dump_mem_map(memory):
     """Print all non-zero values in memory."""
+    dump = ['address : value']
     for i in range(2**16):
         if memory[i] != 0:
-            print("val: {}  index: {}".format(memory[i], i))
+            dump.append("{} : {}".format(str(hex(i)), memory[i]))
+
+    with open('memdump.txt', 'w') as f:
+        for line in dump:
+            f.write(line + '\n')
 
 
 if __name__ == '__main__':

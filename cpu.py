@@ -153,6 +153,12 @@ FLAG_BITS = {
 }
 
 
+class ExecutionHalted(Exception):
+    """Raised when halt trap is issued."""
+
+    pass
+
+
 class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
@@ -166,13 +172,16 @@ class GbZ80Cpu(object):
         self.registers = {
             # 16-bit registers stored as two 8-bit registers
             # 15..8   7..0
-            'a': 0, 'f': 0,
-            'b': 0, 'c': 0,
+            'a': 1, 'f': 0,
+            'b': 0, 'c': 0x13,
             'd': 0, 'e': 0,
             'h': 0, 'l': 0,
 
+            # Interrupts enabled/disabled
+            'ime': 0,
+
             # 16-bit registers (program counter, stack pointer)
-            'pc': 0, 'sp': 0,
+            'pc': 0x100, 'sp': 0xFFFE,
 
             # Clock for last instr
             'm': 0      # cpu cycles/4
@@ -215,7 +224,7 @@ class GbZ80Cpu(object):
             32: (self._raise_opcode_unimplemented, []),  # JRNZn
             33: (self._ld_r1r2_nn, ['h', 'l']),  # LDHLnn
             34: (self._ld_hlmi_a, []),  # LDHLIA
-            35: (self._inc_r_, ['h', 'l']),  # INCHL
+            35: (self._inc_r_r, ['h', 'l']),  # INCHL
             36: (self._raise_opcode_unimplemented, []),  # INCr_h
             37: (self._raise_opcode_unimplemented, []),  # DECr_h
             38: (self._ld_rn, ['h']),  # LDrn_h
@@ -375,7 +384,7 @@ class GbZ80Cpu(object):
             192: (self._raise_opcode_unimplemented, []),  # RETNZ
             193: (self._raise_opcode_unimplemented, []),  # POPBC
             194: (self._raise_opcode_unimplemented, []),  # JPNZnn
-            195: (self._raise_opcode_unimplemented, []),  # JPnn
+            195: (self._jp_nn, []),  # JPnn
             196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
             197: (self._raise_opcode_unimplemented, []),  # PUSHBC
             198: (self._raise_opcode_unimplemented, []),  # ADDn
@@ -385,7 +394,7 @@ class GbZ80Cpu(object):
             202: (self._raise_opcode_unimplemented, []),  # JPZnn
             203: (self._raise_opcode_unimplemented, []),  # MAPcb
             204: (self._raise_opcode_unimplemented, []),  # CALLZnn
-            205: (self._raise_opcode_unimplemented, []),  # CALLnn
+            205: (self._call_nn, []),  # CALLnn
             206: (self._raise_opcode_unimplemented, []),  # ADCn
             207: (self._raise_opcode_unimplemented, []),  # RST08
             208: (self._raise_opcode_unimplemented, []),  # RETNC
@@ -423,7 +432,7 @@ class GbZ80Cpu(object):
             240: (self._ldh_a_n, []),  # LD AIO n
             241: (self._raise_opcode_unimplemented, []),  # POPAF
             242: (self._ld_a_c, []),  # LDAIOC
-            243: (self._raise_opcode_unimplemented, []),  # DI
+            243: (self._di, []),  # DI
             244: (self._raise_opcode_unimplemented, []),  # XX
             245: (self._raise_opcode_unimplemented, []),  # PUSHAF
             246: (self._raise_opcode_unimplemented, []),  # XORn
@@ -431,7 +440,7 @@ class GbZ80Cpu(object):
             248: (self._ld_hl_sp_n, []),  # LD HL SP+n
             249: (self._ld_sp_hl, []),  # LS SP HL
             250: (self._ld_a_nn, []),  # LD A nn
-            251: (self._raise_opcode_unimplemented, []),  # EI
+            251: (self._ei, []),  # EI
             252: (self._raise_opcode_unimplemented, []),  # XX
             253: (self._raise_opcode_unimplemented, []),  # XX
             254: (self._raise_opcode_unimplemented, []),  # CPn
@@ -444,10 +453,14 @@ class GbZ80Cpu(object):
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
-        print(instruction)
+        print('--------------------')
+        print("registers before exec:", self.registers)
+        print("op:", op)
         opcode, args = instruction[0], instruction[1]
         opcode(*args)
         self._inc_clock()
+        print("registers after exec:", self.registers)
+        import pdb; pdb.set_trace()
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -488,7 +501,7 @@ class GbZ80Cpu(object):
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value
 
-    def _raise_opcode_unimplemented():
+    def _raise_opcode_unimplemented(self):
         raise Exception("Opcode unimplemented!")
 
     # Opcodes
@@ -662,6 +675,34 @@ class GbZ80Cpu(object):
         """Put HL into SP."""
         self.registers['sp'] = (self.registers['h'] << 8) + self.registers['l']
         self.registers['m'] = 2
+
+    # Jumps
+    def _jp_nn(self):
+        """."""
+        self.registers['pc'] = self.read16(self.registers['pc'])
+        self.registers['m'] = 3
+
+    # Interrupts
+    def _di(self):
+        """Disable interrupts."""
+        self.registers['ime'] = 0
+        self.registers['m'] = 1
+
+    def _ei(self):
+        """Enable interrupts."""
+        self.registers['ime'] = 1
+        self.registers['m'] = 1
+
+    # CALLs
+    def _call_nn(self):
+        """Push address of next instr onto stack and then jump to address nn.
+
+        Opcode #205
+        """
+        self.registers['sp'] -= 2
+        self.write16(self.registers['sp'], self.registers['pc'] + 2)
+        self.registers['pc'] = self.read16(self.registers['pc'])
+        self.registers['m'] = 5
 
     # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):

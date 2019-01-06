@@ -35,21 +35,32 @@ class GbMemory(object):
 
     def load_rom_image(self, filename):
         """Load a ROM image into memory."""
-        self._clear_memory()
+        self._reset_memory()
         rom_array = self._read_rom_file(filename)
 
         for i in range(0, len(rom_array)):
             self.memory[i] = rom_array[i]
 
         self.cartridge_type = self.memory[GbMemory.CARTRIDGE_TYPE_CHECK_BYTE]
+        print("Cartridge type:", self.cartridge_type)
 
     def write_byte(self, address, value):
-        """Write a value to an address."""
+        """Write a byte to an address."""
         self.memory[address] = value
 
     def read_byte(self, address):
-        """Return a value from memory at an address."""
+        """Return a byte from memory at an address."""
         return self.memory[address]
+
+    def read_word(self, address):
+        """Read a word from memoery @ address."""
+        return self.read_byte(address) + (self.read_byte(address + 1) << 8)
+
+    def write_word(self, address, value):
+        """Write a word in mem @ address."""
+        self.write_byte(address, value & 255)
+        self.write_byte(address + 1, value >> 8)
+        self._show_mem_around_addr(address)
 
     def _read_rom_file(self, filename):
         """Return an array containing ROM file."""
@@ -62,8 +73,21 @@ class GbMemory(object):
 
         return rom_array
 
-    def _clear_memory(self):
+    def _reset_memory(self):
         """Reset all memory slots to 0."""
         for i in range(self.mem_size):
             self.memory[i] = 0
         self.cartridge_type = 0
+
+    def _show_mem_around_addr(self, address):
+        """Print mem around address for dubugging."""
+        print('\n--mem view-- address:val------------------------------------')
+        print('{}:{}  {}:{}  >>{}:{}  {}:{}  {}:{}  {}:{}'.format(
+            address - 2, self.read_byte(address - 2),
+            address - 1, self.read_byte(address - 1),
+            address, self.read_byte(address),
+            address + 1, self.read_byte(address + 1),
+            address + 2, self.read_byte(address + 2),
+            address + 3, self.read_byte(address + 2)
+        ))
+        print("------------------------------------------------------------\n")
