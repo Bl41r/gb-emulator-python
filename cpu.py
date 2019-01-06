@@ -429,7 +429,7 @@ class GbZ80Cpu(object):
             246: (self._raise_opcode_unimplemented, []),  # XORn
             247: (self._raise_opcode_unimplemented, []),  # RST30
             248: (self._ld_hl_sp_n, []),  # LD HL SP+n
-            249: (self._ld_sp_hl, []),  # XX -- not sure if actual opcode...
+            249: (self._ld_sp_hl, []),  # LS SP HL
             250: (self._ld_a_nn, []),  # LD A nn
             251: (self._raise_opcode_unimplemented, []),  # EI
             252: (self._raise_opcode_unimplemented, []),  # XX
