@@ -174,7 +174,7 @@ class GbZ80Cpu(object):
             # 15..8   7..0
             'a': 1, 'f': 0,
             'b': 0, 'c': 0x13,
-            'd': 0, 'e': 0,
+            'd': 0, 'e': 216,
             'h': 0, 'l': 0,
 
             # Interrupts enabled/disabled
@@ -450,11 +450,11 @@ class GbZ80Cpu(object):
     def execute_next_operation(self):
         """Execute the next operation."""
         op = self.read8(self.registers['pc'])
+        print('--------------------')
+        print("registers before exec:", self.registers)
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
-        print('--------------------')
-        print("registers before exec:", self.registers)
         print("op:", op)
         opcode, args = instruction[0], instruction[1]
         opcode(*args)
@@ -633,7 +633,8 @@ class GbZ80Cpu(object):
 
     def _ldh_n_a(self):
         """Put register A into mem @ address $FF00+n."""
-        n = self.read8(0xFF00 + self.registers['pc'])
+        print("sum", 0xFF00 + self.read8(self.registers['pc']))
+        n = self.read8(0xFF00 + self.read8(self.registers['pc']))
         self.write8(n, self.registers['a'])
         self.registers['pc'] += 1
         self.registers['m'] = 3
