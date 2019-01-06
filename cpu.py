@@ -485,6 +485,9 @@ class GbZ80Cpu(object):
         self.clock['m'] += self.registers['m']
         self.clock['t'] += self.registers['t']
 
+    def _toggle_flag(self, flag_value):
+        self.registers['f'] |= flag_value
+
     def _raise_opcode_unimplemented():
         raise Exception("Opcode unimplemented!")
 
@@ -633,23 +636,32 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
 
     def _ld_hl_sp_n(self):
-        """Put SP+n effective address into HL."""
+        """Put SP+n effective address into HL.
+
+        n = 1 byte signed immediate value
+        """
         n = self.read8(self.registers['pc'])
         if n > 127:
             n = ((~n + 1) & 255)
-        n += self.registers['sp']
+        result = n + self.registers['sp']
 
-        self.registers['h'] = (n >> 8) & 255
-        self.registers['l'] = n & 255
+        # set flags
+        self.registers['f'] = 0
+        xor_result = (self.registers['sp'] ^ n ^ result)
+        if (xor_result & 0x100) == 0x100:
+            self._toggle_flag(FLAG_BITS['carry'])
+        if (xor_result & 0x10) == 0x10:
+            self._toggle_flag(FLAG_BITS['half-carry'])
+
+        self.registers['h'] = (result >> 8) & 255
+        self.registers['l'] = result & 255
         self.registers['pc'] += 1
         self.registers['m'] = 3
 
     def _ld_sp_hl(self):
-        """Put HL into SP.
-
-        Is this an actual opcode? op 0xF9
-        """
-        raise Exception("Unimplemented opcode!")
+        """Put HL into SP."""
+        self.registers['sp'] = (self.registers['h'] << 8) + self.registers['l']
+        self.registers['m'] = 2
 
     # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):
