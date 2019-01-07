@@ -155,6 +155,8 @@ FLAG_BITS = {
     'carry': 0x10           # C flag
 }
 
+my_counter = 0
+
 
 class ExecutionHalted(Exception):
     """Raised when halt trap is issued."""
@@ -385,7 +387,7 @@ class GbZ80Cpu(object):
             190: (self._raise_opcode_unimplemented, []),  # CPHL
             191: (self._raise_opcode_unimplemented, []),  # CPr_a
             192: (self._raise_opcode_unimplemented, []),  # RETNZ
-            193: (self._raise_opcode_unimplemented, []),  # POPBC
+            193: (self._pop_nn, ['b', 'c']),  # POPBC
             194: (self._raise_opcode_unimplemented, []),  # JPNZnn
             195: (self._jp_nn, []),  # JPnn
             196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
@@ -401,7 +403,7 @@ class GbZ80Cpu(object):
             206: (self._raise_opcode_unimplemented, []),  # ADCn
             207: (self._raise_opcode_unimplemented, []),  # RST08
             208: (self._raise_opcode_unimplemented, []),  # RETNC
-            209: (self._raise_opcode_unimplemented, []),  # POPDE
+            209: (self._pop_nn, ['d', 'e']),  # POPDE
             210: (self._raise_opcode_unimplemented, []),  # JPNCnn
             211: (self._raise_opcode_unimplemented, []),  # XX
             212: (self._raise_opcode_unimplemented, []),  # CALLNCnn
@@ -417,7 +419,7 @@ class GbZ80Cpu(object):
             222: (self._raise_opcode_unimplemented, []),  # SBCn
             223: (self._raise_opcode_unimplemented, []),  # RST18
             224: (self._ldh_n_a, []),  # LDIOnA
-            225: (self._raise_opcode_unimplemented, []),  # POPHL
+            225: (self._pop_nn, ['h', 'l']),  # POPHL
             226: (self._ld_c_a, []),  # LDIOCA
             227: (self._raise_opcode_unimplemented, []),  # XX
             228: (self._raise_opcode_unimplemented, []),  # XX
@@ -433,7 +435,7 @@ class GbZ80Cpu(object):
             238: (self._raise_opcode_unimplemented, []),  # ORn
             239: (self._raise_opcode_unimplemented, []),  # RST28
             240: (self._ldh_a_n, []),  # LD AIO n
-            241: (self._raise_opcode_unimplemented, []),  # POPAF
+            241: (self._pop_nn, ['a', 'f']),  # POPAF
             242: (self._ld_a_c, []),  # LDAIOC
             243: (self._di, []),  # DI
             244: (self._raise_opcode_unimplemented, []),  # XX
@@ -452,6 +454,8 @@ class GbZ80Cpu(object):
 
     def execute_next_operation(self):
         """Execute the next operation."""
+        global my_counter
+        my_counter += 1
         op = self.read8(self.registers['pc'])
         print('--------------------')
         print("registers before exec:", self.registers)
@@ -460,10 +464,12 @@ class GbZ80Cpu(object):
         instruction = self.opcode_map[op]
         print("op:", op)
         opcode, args = instruction[0], instruction[1]
+        if op == 62:
+            print("my counter:", my_counter)
+            pdb.set_trace()
         opcode(*args)
         self._inc_clock()
         print("registers after exec:", self.registers)
-        pdb.set_trace()
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -630,15 +636,23 @@ class GbZ80Cpu(object):
     def _ldh_a_n(self):
         """Put mem @ address $FF00+n into register a."""
         n = self.read8(self.registers['pc'])
-        self.registers['a'] = self.read8(0xFF00 + n)
+        print("n is", n)
+        addr = 0xFF00 + n
+        print("addr is", addr)
+        self.memory._show_mem_around_addr(addr)
+        val = self.read8(0xFF00 + n)
+        print("val is", val)
+        self.registers['a'] = val
         self.registers['pc'] += 1
         self.registers['m'] = 3
 
     def _ldh_n_a(self):
         """Put register A into mem @ address $FF00+n."""
-        print("sum", 0xFF00 + self.read8(self.registers['pc']))
-        n = self.read8(0xFF00 + self.read8(self.registers['pc']))
-        self.write8(n, self.registers['a'])
+        n = self.read8(self.registers['pc'])
+        print('n is', n)
+        addr = 0xFF00 + n
+        print('addr is', addr)
+        self.write8(addr, self.registers['a'])
         self.registers['pc'] += 1
         self.registers['m'] = 3
 
@@ -707,6 +721,17 @@ class GbZ80Cpu(object):
         self.write8(self.registers['sp'], self.registers[r1])
         self.registers['sp'] -= 1
         self.write8(self.registers['sp'], self.registers[r2])
+        self.registers['m'] = 3
+
+    def _pop_nn(self, r1, r2):
+        """Pop register pair nn onto stack.
+
+        Increment Stack Pointer (SP) twice.
+        """
+        self.registers[r2] = self.read8(self.registers['sp'])
+        self.registers['sp'] += 1
+        self.registers[r1] = self.read8(self.registers['sp'])
+        self.registers['sp'] += 1
         self.registers['m'] = 3
 
     # CALLs

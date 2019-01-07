@@ -82,13 +82,14 @@ class GbMemory(object):
 
     def _show_mem_around_addr(self, address):
         """Print mem around address for dubugging."""
-        print('\n--mem view-- address:val------------------------------------')
-        print('{}:{}  {}:{}  >>{}:{}  {}:{}  {}:{}  {}:{}'.format(
-            address - 2, self.read_byte(address - 2),
-            address - 1, self.read_byte(address - 1),
-            address, self.read_byte(address),
-            address + 1, self.read_byte(address + 1),
-            address + 2, self.read_byte(address + 2),
-            address + 3, self.read_byte(address + 2)
-        ))
-        print("------------------------------------------------------------\n")
+        if address < 65533:
+            print('\n--mem view-- address:val------------------------------------')
+            print('{}:{}  {}:{}  >>{}:{}  {}:{}  {}:{}  {}:{}'.format(
+                address - 2, self.read_byte(address - 2),
+                address - 1, self.read_byte(address - 1),
+                address, self.read_byte(address),
+                address + 1, self.read_byte(address + 1),
+                address + 2, self.read_byte(address + 2),
+                address + 3, self.read_byte(address + 2)
+            ))
+            print("------------------------------------------------------------\n")
