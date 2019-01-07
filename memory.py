@@ -47,6 +47,8 @@ class GbMemory(object):
     def write_byte(self, address, value):
         """Write a byte to an address."""
         self.memory[address] = value
+        self._show_mem_around_addr(address)
+
 
     def read_byte(self, address):
         """Return a byte from memory at an address."""
@@ -60,7 +62,6 @@ class GbMemory(object):
         """Write a word in mem @ address."""
         self.write_byte(address, value & 255)
         self.write_byte(address + 1, value >> 8)
-        self._show_mem_around_addr(address)
 
     def _read_rom_file(self, filename):
         """Return an array containing ROM file."""

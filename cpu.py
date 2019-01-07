@@ -145,6 +145,9 @@ ss  Any 16-bit source register or memory location.
 Z   Zero Flag.
 """
 
+import pdb
+
+
 FLAG_BITS = {
     'zero': 0x80,           # Z flag
     'subtraction': 0x40,    # N flag
@@ -198,7 +201,7 @@ class GbZ80Cpu(object):
             6: (self._ld_rn, ['b']),  # LDrn_b
             7: (self._raise_opcode_unimplemented, []),  # RLCA
             8: (self._ld_nn_sp, []),  # LDnnSP -- double check this one...
-            9: (self._raise_opcode_unimplemented, []),  # ADDHLBC
+            9: (self._add_hl_n, ['b', 'c']),  # ADDHLBC
             10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
             11: (self._dec_r_r, ['b', 'c']),  # DECBC
             12: (self._raise_opcode_unimplemented, []),  # INCr_c
@@ -214,7 +217,7 @@ class GbZ80Cpu(object):
             22: (self._ld_rn, ['d']),  # LDrn_d
             23: (self._raise_opcode_unimplemented, []),  # RLA
             24: (self._raise_opcode_unimplemented, []),  # JRn
-            25: (self._raise_opcode_unimplemented, []),  # ADDHLDE
+            25: (self._add_hl_n, ['d', 'e']),  # ADDHLDE
             26: (self._ld_a_r1r2m, ['d', 'e']),  # LDADEm
             27: (self._dec_r_r, ['d', 'e']),  # DECDE
             28: (self._raise_opcode_unimplemented, []),  # INCr_e
@@ -230,7 +233,7 @@ class GbZ80Cpu(object):
             38: (self._ld_rn, ['h']),  # LDrn_h
             39: (self._raise_opcode_unimplemented, []),  # XX
             40: (self._raise_opcode_unimplemented, []),  # JRZn
-            41: (self._raise_opcode_unimplemented, []),  # ADDHLHL
+            41: (self._add_hl_n, ['h', 'l']),  # ADDHLHL
             42: (self._ld_a_hl_i, []),  # LDAHLI
             43: (self._dec_r_r, ['h', 'l']),  # DECHL
             44: (self._raise_opcode_unimplemented, []),  # INCr_l
@@ -246,7 +249,7 @@ class GbZ80Cpu(object):
             54: (self._ld_hlm_n, []),  # LDHLmn
             55: (self._raise_opcode_unimplemented, []),  # SCF
             56: (self._raise_opcode_unimplemented, []),  # JRCn
-            57: (self._raise_opcode_unimplemented, []),  # ADDHLSP
+            57: (self._add_hl_sp, []),  # ADDHLSP
             58: (self._ld_a_hl_d, []),  # LDAHLD
             59: (self._dec_sp, []),  # DECSP
             60: (self._raise_opcode_unimplemented, []),  # INCr_a
@@ -386,11 +389,11 @@ class GbZ80Cpu(object):
             194: (self._raise_opcode_unimplemented, []),  # JPNZnn
             195: (self._jp_nn, []),  # JPnn
             196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
-            197: (self._raise_opcode_unimplemented, []),  # PUSHBC
+            197: (self._push_nn, ['b', 'c']),  # PUSHBC
             198: (self._raise_opcode_unimplemented, []),  # ADDn
             199: (self._raise_opcode_unimplemented, []),  # RST00
             200: (self._raise_opcode_unimplemented, []),  # RETZ
-            201: (self._raise_opcode_unimplemented, []),  # RET
+            201: (self._ret, []),  # RET
             202: (self._raise_opcode_unimplemented, []),  # JPZnn
             203: (self._raise_opcode_unimplemented, []),  # MAPcb
             204: (self._raise_opcode_unimplemented, []),  # CALLZnn
@@ -402,7 +405,7 @@ class GbZ80Cpu(object):
             210: (self._raise_opcode_unimplemented, []),  # JPNCnn
             211: (self._raise_opcode_unimplemented, []),  # XX
             212: (self._raise_opcode_unimplemented, []),  # CALLNCnn
-            213: (self._raise_opcode_unimplemented, []),  # PUSHDE
+            213: (self._push_nn, ['d', 'e']),  # PUSHDE
             214: (self._raise_opcode_unimplemented, []),  # SUBn
             215: (self._raise_opcode_unimplemented, []),  # RST10
             216: (self._raise_opcode_unimplemented, []),  # RETC
@@ -418,10 +421,10 @@ class GbZ80Cpu(object):
             226: (self._ld_c_a, []),  # LDIOCA
             227: (self._raise_opcode_unimplemented, []),  # XX
             228: (self._raise_opcode_unimplemented, []),  # XX
-            229: (self._raise_opcode_unimplemented, []),  # PUSHHL
+            229: (self._push_nn, ['h', 'l']),  # PUSHHL
             230: (self._raise_opcode_unimplemented, []),  # ANDn
             231: (self._raise_opcode_unimplemented, []),  # RST20
-            232: (self._raise_opcode_unimplemented, []),  # ADDSPn
+            232: (self._add_sp_n, []),  # ADDSPn
             233: (self._raise_opcode_unimplemented, []),  # JPHL
             234: (self._ld_nn_a, []),  # LD nn A
             235: (self._raise_opcode_unimplemented, []),  # XX
@@ -434,7 +437,7 @@ class GbZ80Cpu(object):
             242: (self._ld_a_c, []),  # LDAIOC
             243: (self._di, []),  # DI
             244: (self._raise_opcode_unimplemented, []),  # XX
-            245: (self._raise_opcode_unimplemented, []),  # PUSHAF
+            245: (self._push_nn, ['a', 'f']),  # PUSHAF
             246: (self._raise_opcode_unimplemented, []),  # XORn
             247: (self._raise_opcode_unimplemented, []),  # RST30
             248: (self._ld_hl_sp_n, []),  # LD HL SP+n
@@ -460,7 +463,7 @@ class GbZ80Cpu(object):
         opcode(*args)
         self._inc_clock()
         print("registers after exec:", self.registers)
-        import pdb; pdb.set_trace()
+        pdb.set_trace()
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -576,8 +579,8 @@ class GbZ80Cpu(object):
 
     def _ld_r1r2_nn(self, r1, r2):
         """Load 16-bit immediate value into two 8-bit registers."""
-        self.registers[r1] = self.read8(self.registers['pc'])
-        self.registers[r2] = self.read8(self.registers['pc'] + 1)
+        self.registers[r2] = self.read8(self.registers['pc'])
+        self.registers[r1] = self.read8(self.registers['pc'] + 1)
         self.registers['pc'] += 2
         self.registers['m'] = 3
 
@@ -694,6 +697,18 @@ class GbZ80Cpu(object):
         self.registers['ime'] = 1
         self.registers['m'] = 1
 
+    # PUSH / POP
+    def _push_nn(self, r1, r2):
+        """Push register pair nn onto stack.
+
+        Decrement Stack Pointer (SP) twice.
+        """
+        self.registers['sp'] -= 1
+        self.write8(self.registers['sp'], self.registers[r1])
+        self.registers['sp'] -= 1
+        self.write8(self.registers['sp'], self.registers[r2])
+        self.registers['m'] = 3
+
     # CALLs
     def _call_nn(self):
         """Push address of next instr onto stack and then jump to address nn.
@@ -705,7 +720,13 @@ class GbZ80Cpu(object):
         self.registers['pc'] = self.read16(self.registers['pc'])
         self.registers['m'] = 5
 
-    # SUB
+    def _ret(self):
+        """Pop two bytes from stack & jump to that address."""
+        self.registers['pc'] = self.read16(self.registers['sp'])
+        self.registers['sp'] += 2
+        self.registers['m'] = 3
+
+    # SUB / ADD
     def _sub_n(self, r):
         """Subtract n from A.
 
@@ -721,6 +742,51 @@ class GbZ80Cpu(object):
         if ((self.registers['a'] ^ self.registers[r] ^ a) & 0x10):
             self.registers['f'] |= 0x20
         self.registers['m'] = 1
+
+    def _add_sp_n(self):
+        """Add n to Stack Pointer (SP).
+
+        n = one byte signed immediate value
+        """
+        n = self.read8(self.registers['pc'])
+        if n > 127:
+            n = -((~n + 1) & 255)
+        self.registers['pc'] += 1
+        self.registers['sp'] += n
+        self.registers['m'] = 4
+
+    def _add_hl_n(self, r1, r2):
+        """Add n to HL.
+
+        n = BC,DE,HL
+        """
+        hl = (self.registers['h'] << 8) + self.registers['l']
+        hl += (self.registers[r1] << 8) + self.registers[r2]
+        if hl > 65535:
+            self.registers['f'] |= 0x10
+        else:
+            self.registers['f'] &= 0xEF
+
+        self.registers['h'] = (hl >> 8) & 255
+        self.registers['l'] = hl & 255
+        self.registers['m'] = 3
+
+    def _add_hl_sp(self):
+        """Add n to HL.
+
+        n = SP
+        """
+        hl = (self.registers['h'] << 8) + self.registers['l']
+        hl += self.registers['sp']
+
+        if hl > 65535:
+            self.registers['f'] |= 0x10
+        else:
+            self.registers['f'] &= 0xEF
+
+        self.registers['h'] = (hl >> 8) & 255
+        self.registers['l'] = hl & 255
+        self.registers['m'] = 3
 
     # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):
@@ -752,6 +818,3 @@ class GbZ80Cpu(object):
         """Decrement stack pointer."""
         self.registers['sp'] = (self.registers['sp'] - 1) & 65535
         self.registers['m'] = 1
-
-
-
