@@ -13,7 +13,11 @@ System Mem
 [A000-BFFF] Cartridge (External) RAM: There is a small amount of writeable memory available in the GameBoy; if a game is produced that requires more RAM than is available in the hardware, additional 8k chunks of RAM can be made addressable here.
 [C000-DFFF] Working RAM: The GameBoy's internal 8k of RAM, which can be read from or written to by the CPU.
 [E000-FDFF] Working RAM (shadow): Due to the wiring of the GameBoy hardware, an exact copy of the working RAM is available 8k higher in the memory map. This copy is available up until the last 512 bytes of the map, where other areas are brought into access.
-[FE00-FE9F] Graphics: sprite information: Data about the sprites rendered by the graphics chip are held here, including the sprites' positions and attributes.
+
+[FE00-FE9F] Graphics: sprite information: Data about the sprites rendered
+by the graphics chip are held here, including the sprites' positions and
+attributes.
+
 [FF00-FF7F] Memory-mapped I/O: Each of the GameBoy's subsystems (graphics, sound, etc.) has control values, to allow programs to create effects and use the hardware. These values are available to the CPU directly on the address bus, in this area.
 [FF80-FFFF] Zero-page RAM: A high-speed area of 128 bytes of RAM is available at the top of memory. Oddly, though this is "page" 255 of the memory, it is referred to as page zero, since most of the interaction between the program and the GameBoy hardware occurs through use of this page of memory.
 """
@@ -49,7 +53,6 @@ class GbMemory(object):
         self.memory[address] = value
         self._show_mem_around_addr(address)
 
-
     def read_byte(self, address):
         """Return a byte from memory at an address."""
         return self.memory[address]
@@ -82,8 +85,8 @@ class GbMemory(object):
 
     def _show_mem_around_addr(self, address):
         """Print mem around address for dubugging."""
-        if address < 65533:
-            print('\n--mem view-- address:val------------------------------------')
+        if address <= 65533 and address >= 3:
+            print('\n--mem view-- address:val--------------------------------')
             print('{}:{}  {}:{}  >>{}:{}  {}:{}  {}:{}  {}:{}'.format(
                 address - 2, self.read_byte(address - 2),
                 address - 1, self.read_byte(address - 1),
@@ -92,4 +95,6 @@ class GbMemory(object):
                 address + 2, self.read_byte(address + 2),
                 address + 3, self.read_byte(address + 2)
             ))
-            print("------------------------------------------------------------\n")
+            print('--------------------------------------------------------\n')
+        else:
+            print('{}:{}'.format(address, self.read_byte(address)))

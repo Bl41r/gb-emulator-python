@@ -322,14 +322,14 @@ class GbZ80Cpu(object):
             125: (self._ld_rr, ['a', 'l']),  # LDrr_al
             126: (self._ld_r_hlm, ['a']),  # LDrHLm_a
             127: (self._ld_rr, ['a', 'a']),  # LDrr_aa (nop?)
-            128: (self._raise_opcode_unimplemented, []),  # ADDr_b
-            129: (self._raise_opcode_unimplemented, []),  # ADDr_c
-            130: (self._raise_opcode_unimplemented, []),  # ADDr_d
-            131: (self._raise_opcode_unimplemented, []),  # ADDr_e
-            132: (self._raise_opcode_unimplemented, []),  # ADDr_h
-            133: (self._raise_opcode_unimplemented, []),  # ADDr_l
+            128: (self._add_a_n, ['b']),  # ADDr_b
+            129: (self._add_a_n, ['c']),  # ADDr_c
+            130: (self._add_a_n, ['d']),  # ADDr_d
+            131: (self._add_a_n, ['e']),  # ADDr_e
+            132: (self._add_a_n, ['h']),  # ADDr_h
+            133: (self._add_a_n, ['l']),  # ADDr_l
             134: (self._raise_opcode_unimplemented, []),  # ADDHL
-            135: (self._raise_opcode_unimplemented, []),  # ADDr_a
+            135: (self._add_a_n, ['a']),  # ADDr_a
             136: (self._raise_opcode_unimplemented, []),  # ADCr_b
             137: (self._raise_opcode_unimplemented, []),  # ADCr_c
             138: (self._raise_opcode_unimplemented, []),  # ADCr_d
@@ -402,7 +402,7 @@ class GbZ80Cpu(object):
             205: (self._call_nn, []),  # CALLnn
             206: (self._raise_opcode_unimplemented, []),  # ADCn
             207: (self._raise_opcode_unimplemented, []),  # RST08
-            208: (self._raise_opcode_unimplemented, []),  # RETNC
+            208: (self._ret_nc, []),  # RETNC
             209: (self._pop_nn, ['d', 'e']),  # POPDE
             210: (self._raise_opcode_unimplemented, []),  # JPNCnn
             211: (self._raise_opcode_unimplemented, []),  # XX
@@ -464,9 +464,11 @@ class GbZ80Cpu(object):
         instruction = self.opcode_map[op]
         print("op:", op)
         opcode, args = instruction[0], instruction[1]
-        if op == 62:
+
+        if op == 254:
             print("my counter:", my_counter)
             pdb.set_trace()
+
         opcode(*args)
         self._inc_clock()
         print("registers after exec:", self.registers)
@@ -636,12 +638,12 @@ class GbZ80Cpu(object):
     def _ldh_a_n(self):
         """Put mem @ address $FF00+n into register a."""
         n = self.read8(self.registers['pc'])
-        print("n is", n)
+        print('n is', n)
         addr = 0xFF00 + n
-        print("addr is", addr)
-        self.memory._show_mem_around_addr(addr)
-        val = self.read8(0xFF00 + n)
-        print("val is", val)
+        print('addr is', addr)
+        val = self.read8(addr)
+        print('val is', val)
+        print(self.memory._show_mem_around_addr(addr))
         self.registers['a'] = val
         self.registers['pc'] += 1
         self.registers['m'] = 3
@@ -649,10 +651,7 @@ class GbZ80Cpu(object):
     def _ldh_n_a(self):
         """Put register A into mem @ address $FF00+n."""
         n = self.read8(self.registers['pc'])
-        print('n is', n)
-        addr = 0xFF00 + n
-        print('addr is', addr)
-        self.write8(addr, self.registers['a'])
+        self.write8(0xFF00 + n, self.registers['a'])
         self.registers['pc'] += 1
         self.registers['m'] = 3
 
@@ -751,6 +750,14 @@ class GbZ80Cpu(object):
         self.registers['sp'] += 2
         self.registers['m'] = 3
 
+    def _ret_nc(self):
+        """Return if C flag is reset."""
+        self.registers['m'] = 1
+        if (self.registers['f'] & 0x10) == 0x00:
+            self.registers['pc'] = self.read16(self.registers['sp'])
+            self.registers['sp'] += 2
+            self.registers['m'] += 2
+
     # SUB / ADD
     def _sub_n(self, r):
         """Subtract n from A.
@@ -766,6 +773,25 @@ class GbZ80Cpu(object):
             self.registers['f'] |= 0x80
         if ((self.registers['a'] ^ self.registers[r] ^ a) & 0x10):
             self.registers['f'] |= 0x20
+        self.registers['m'] = 1
+
+    def _add_a_n(self, n):  # bug!
+        """Add n to A."""
+# { Z80._r.f = (Z80._r.a>255)?0x10:0; Z80._r.a&=255; if(!Z80._r.a) Z80._r.f|=0x80; if((Z80._r.a^Z80._r.b^a)&0x10) Z80._r.f|=0x20; Z80._r.m=1; },
+
+        a = self.registers['a']
+        self.registers['a'] += self.registers[n]
+        # set flags...
+        self.registers['f'] = 0x10 if self.registers['a'] > 255 else 0
+        print("f", self.registers['f'])
+        self.registers['a'] &= 255
+        print('a', self.registers['a'])
+        if not self.registers['a']:
+            self.registers['f'] |= 0x80
+        print("f", self.registers['f'])
+        if (self.registers['a'] ^ self.registers['b'] ^ a) & 0x10:
+            self.registers['f'] |= 0x20
+        print("f", self.registers['f'])
         self.registers['m'] = 1
 
     def _add_sp_n(self):
