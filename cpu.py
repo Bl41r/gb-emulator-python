@@ -167,11 +167,11 @@ class ExecutionHalted(Exception):
 class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
-    def __init__(self, memory):
+    def __init__(self):
         """Initialize an instance."""
         self.clock = {'m': 0, 't': 0}  # Time clocks: 2 types of clock
 
-        self.memory = memory
+        self.memory_interface = None    # Set after interface instantiated.
 
         # Register set
         self.registers = {
@@ -490,19 +490,19 @@ class GbZ80Cpu(object):
 
     def read8(self, address):
         """Return a byte from memory at address."""
-        return self.memory.read_byte(address)
+        return self.memory_interface.read_byte(address)
 
     def write8(self, address, val):
         """Write a byte to memory at address."""
-        self.memory.write_byte(address, val)
+        self.memory_interface.write_byte(address, val)
 
     def read16(self, address):
         """Return a word(16-bits) from memory."""
-        return self.memory.read_word(address)
+        return self.memory_interface.read_word(address)
 
     def write16(self, address, val):
         """Write a word to memory at address."""
-        self.memory.write_word(address, val)
+        self.memory_interface.write_word(address, val)
 
     def _inc_clock(self):
         """Increment clock registers."""
@@ -638,12 +638,8 @@ class GbZ80Cpu(object):
     def _ldh_a_n(self):
         """Put mem @ address $FF00+n into register a."""
         n = self.read8(self.registers['pc'])
-        print('n is', n)
         addr = 0xFF00 + n
-        print('addr is', addr)
         val = self.read8(addr)
-        print('val is', val)
-        print(self.memory._show_mem_around_addr(addr))
         self.registers['a'] = val
         self.registers['pc'] += 1
         self.registers['m'] = 3

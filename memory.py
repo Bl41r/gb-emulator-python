@@ -23,13 +23,10 @@ attributes.
 """
 
 import array
-import sys
 
 
 class GbMemory(object):
     """Memory of the LC-3 VM."""
-
-    CARTRIDGE_TYPE_CHECK_BYTE = 0x0147
 
     def __init__(self):
         """Init."""
@@ -37,21 +34,10 @@ class GbMemory(object):
         self.memory = array.array('B', [0 for i in range(self.mem_size)])
         self.cartridge_type = 0
 
-    def load_rom_image(self, filename):
-        """Load a ROM image into memory."""
-        self._reset_memory()
-        rom_array = self._read_rom_file(filename)
-
-        for i in range(0, len(rom_array)):
-            self.memory[i] = rom_array[i]
-
-        self.cartridge_type = self.memory[GbMemory.CARTRIDGE_TYPE_CHECK_BYTE]
-        print("Cartridge type:", self.cartridge_type)
-
     def write_byte(self, address, value):
         """Write a byte to an address."""
         self.memory[address] = value
-        self._show_mem_around_addr(address)
+        # self._show_mem_around_addr(address)
 
     def read_byte(self, address):
         """Return a byte from memory at an address."""
@@ -66,35 +52,8 @@ class GbMemory(object):
         self.write_byte(address, value & 255)
         self.write_byte(address + 1, value >> 8)
 
-    def _read_rom_file(self, filename):
-        """Return an array containing ROM file."""
-        rom_array = array.array('B', range(0))
-        with open(filename, 'rb') as f:
-            rom_array.frombytes(f.read())
-
-        if sys.byteorder != 'little':
-            rom_array.byteswap()
-
-        return rom_array
-
-    def _reset_memory(self):
+    def reset_memory(self):
         """Reset all memory slots to 0."""
         for i in range(self.mem_size):
             self.memory[i] = 0
         self.cartridge_type = 0
-
-    def _show_mem_around_addr(self, address):
-        """Print mem around address for dubugging."""
-        if address <= 65533 and address >= 3:
-            print('\n--mem view-- address:val--------------------------------')
-            print('{}:{}  {}:{}  >>{}:{}  {}:{}  {}:{}  {}:{}'.format(
-                address - 2, self.read_byte(address - 2),
-                address - 1, self.read_byte(address - 1),
-                address, self.read_byte(address),
-                address + 1, self.read_byte(address + 1),
-                address + 2, self.read_byte(address + 2),
-                address + 3, self.read_byte(address + 2)
-            ))
-            print('--------------------------------------------------------\n')
-        else:
-            print('{}:{}'.format(address, self.read_byte(address)))

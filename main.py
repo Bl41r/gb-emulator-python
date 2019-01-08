@@ -8,6 +8,8 @@ github.com/bl41r/gb-emulator-python
 import sys
 from memory import GbMemory
 from cpu import GbZ80Cpu, ExecutionHalted
+from gpu import GbGpu
+from memory_interface import GbMemInterface
 
 
 LOG_DUMP = []   # append debug messages here
@@ -15,9 +17,16 @@ LOG_DUMP = []   # append debug messages here
 
 def main(filename):
     """Main."""
+    # gb_memory.load_rom_image(filename)
     gb_memory = GbMemory()
-    gb_memory.load_rom_image(filename)
-    cpu = GbZ80Cpu(gb_memory)
+    cpu = GbZ80Cpu()
+    gpu = GbGpu()
+
+    mem_interface = GbMemInterface(gb_memory, cpu, gpu)     # comm. layer
+    for component in [cpu, gpu]:
+        component.memory_interface = mem_interface
+
+    mem_interface.load_rom_image(filename)
 
     try:
         while True:
