@@ -9,7 +9,7 @@ import sys
 from memory import GbMemory
 from cpu import GbZ80Cpu, ExecutionHalted
 from gpu import GbGpu
-from memory_interface import GbMemInterface
+from system_interface import GbSystemInterface
 
 
 LOG_DUMP = []   # append debug messages here
@@ -22,15 +22,15 @@ def main(filename):
     cpu = GbZ80Cpu()
     gpu = GbGpu()
 
-    mem_interface = GbMemInterface(gb_memory, cpu, gpu)     # comm. layer
+    sys_interface = GbSystemInterface(gb_memory, cpu, gpu)
     for component in [cpu, gpu]:
-        component.memory_interface = mem_interface
+        component.memory_interface = sys_interface
 
-    mem_interface.load_rom_image(filename)
+    sys_interface.load_rom_image(filename)
 
+    # import pdb; pdb.set_trace()
     try:
-        while True:
-            cpu.execute_next_operation()
+        sys_interface.start_game()
 
     except ExecutionHalted:     # raised by trap_halt (expected exit)
         print("\nShutting down...")

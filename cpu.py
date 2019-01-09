@@ -169,7 +169,7 @@ class GbZ80Cpu(object):
 
     def __init__(self):
         """Initialize an instance."""
-        self.clock = {'m': 0, 't': 0}  # Time clocks: 2 types of clock
+        self.clock = {'m': 0}  # Time clock
 
         self.memory_interface = None    # Set after interface instantiated.
 
@@ -226,7 +226,7 @@ class GbZ80Cpu(object):
             29: (self._raise_opcode_unimplemented, []),  # DECr_e
             30: (self._ld_rn, ['e']),  # LDrn_e
             31: (self._raise_opcode_unimplemented, []),  # RRA
-            32: (self._raise_opcode_unimplemented, []),  # JRNZn
+            32: (self.jr_nz_n, []),  # JRNZn
             33: (self._ld_r1r2_nn, ['h', 'l']),  # LDHLnn
             34: (self._ld_hlmi_a, []),  # LDHLIA
             35: (self._inc_r_r, ['h', 'l']),  # INCHL
@@ -354,14 +354,14 @@ class GbZ80Cpu(object):
             157: (self._raise_opcode_unimplemented, []),  # SBCr_l
             158: (self._raise_opcode_unimplemented, []),  # SBCHL
             159: (self._raise_opcode_unimplemented, []),  # SBCr_a
-            160: (self._raise_opcode_unimplemented, []),  # ANDr_b
-            161: (self._raise_opcode_unimplemented, []),  # ANDr_c
-            162: (self._raise_opcode_unimplemented, []),  # ANDr_d
-            163: (self._raise_opcode_unimplemented, []),  # ANDr_e
-            164: (self._raise_opcode_unimplemented, []),  # ANDr_h
-            165: (self._raise_opcode_unimplemented, []),  # ANDr_l
-            166: (self._raise_opcode_unimplemented, []),  # ANDHL
-            167: (self._raise_opcode_unimplemented, []),  # ANDr_a
+            160: (self.and_n, ['b']),  # ANDr_b
+            161: (self.and_n, ['c']),  # ANDr_c
+            162: (self.and_n, ['d']),  # ANDr_d
+            163: (self.and_n, ['e']),  # ANDr_e
+            164: (self.and_n, ['h']),  # ANDr_h
+            165: (self.and_n, ['l']),  # ANDr_l
+            166: (self.and_n, ['hl']),  # ANDHL
+            167: (self.and_n, ['a']),  # ANDr_a
             168: (self._raise_opcode_unimplemented, []),  # XORr_b
             169: (self._raise_opcode_unimplemented, []),  # XORr_c
             170: (self._raise_opcode_unimplemented, []),  # XORr_d
@@ -378,14 +378,14 @@ class GbZ80Cpu(object):
             181: (self._raise_opcode_unimplemented, []),  # ORr_l
             182: (self._raise_opcode_unimplemented, []),  # ORHL
             183: (self._raise_opcode_unimplemented, []),  # ORr_a
-            184: (self._raise_opcode_unimplemented, []),  # CPr_b
-            185: (self._raise_opcode_unimplemented, []),  # CPr_c
-            186: (self._raise_opcode_unimplemented, []),  # CPr_d
-            187: (self._raise_opcode_unimplemented, []),  # CPr_e
-            188: (self._raise_opcode_unimplemented, []),  # CPr_h
-            189: (self._raise_opcode_unimplemented, []),  # CPr_l
+            184: (self._cp_n, ['b']),  # CPr_b
+            185: (self._cp_n, ['c']),  # CPr_c
+            186: (self._cp_n, ['d']),  # CPr_d
+            187: (self._cp_n, ['e']),  # CPr_e
+            188: (self._cp_n, ['h']),  # CPr_h
+            189: (self._cp_n, ['l']),  # CPr_l
             190: (self._raise_opcode_unimplemented, []),  # CPHL
-            191: (self._raise_opcode_unimplemented, []),  # CPr_a
+            191: (self._cp_n, ['a']),  # CPr_a
             192: (self._raise_opcode_unimplemented, []),  # RETNZ
             193: (self._pop_nn, ['b', 'c']),  # POPBC
             194: (self._raise_opcode_unimplemented, []),  # JPNZnn
@@ -424,7 +424,7 @@ class GbZ80Cpu(object):
             227: (self._raise_opcode_unimplemented, []),  # XX
             228: (self._raise_opcode_unimplemented, []),  # XX
             229: (self._push_nn, ['h', 'l']),  # PUSHHL
-            230: (self._raise_opcode_unimplemented, []),  # ANDn
+            230: (self.and_n, ['pc']),  # ANDn
             231: (self._raise_opcode_unimplemented, []),  # RST20
             232: (self._add_sp_n, []),  # ADDSPn
             233: (self._raise_opcode_unimplemented, []),  # JPHL
@@ -448,7 +448,7 @@ class GbZ80Cpu(object):
             251: (self._ei, []),  # EI
             252: (self._raise_opcode_unimplemented, []),  # XX
             253: (self._raise_opcode_unimplemented, []),  # XX
-            254: (self._raise_opcode_unimplemented, []),  # CPn
+            254: (self._cp_n, ['pc']),  # CPn
             255: (self._raise_opcode_unimplemented, []),  # RST38
         }
 
@@ -465,9 +465,9 @@ class GbZ80Cpu(object):
         print("op:", op)
         opcode, args = instruction[0], instruction[1]
 
-        if op == 254:
-            print("my counter:", my_counter)
-            pdb.set_trace()
+        # if op == 254:
+        #     print("my counter:", my_counter)
+        #     pdb.set_trace()
 
         opcode(*args)
         self._inc_clock()
@@ -507,12 +507,12 @@ class GbZ80Cpu(object):
     def _inc_clock(self):
         """Increment clock registers."""
         self.clock['m'] += self.registers['m']
-        self.clock['t'] += self.registers['t']
 
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value
 
     def _raise_opcode_unimplemented(self):
+        print("counter:", my_counter)
         raise Exception("Opcode unimplemented!")
 
     # Opcodes
@@ -520,7 +520,6 @@ class GbZ80Cpu(object):
     def _nop(self):
         """NOP opcode."""
         self.registers['m'] = 1
-        self.registers['t'] = 4
 
     # Loads
     def _ld_rr(self, r1, r2):
@@ -771,23 +770,34 @@ class GbZ80Cpu(object):
             self.registers['f'] |= 0x20
         self.registers['m'] = 1
 
+    def _cp_n(self, n):
+        """Compare A with n."""
+        if n == 'pc':
+            m = self.read8(self.registers[n])
+        else:
+            m = self.registers[n]
+
+        i = self.registers['a']
+        i -= m
+        self.registers['pc'] += 1
+        self.registers['f'] = 0x50 if i < 0 else 0x40
+        if not i:
+            self.registers['f'] |= 0x80
+        if (self.registers['a'] ^ i ^ m) & 0x10:
+            self.registers['f'] |= 0x20
+        self.registers['m'] = 2
+
     def _add_a_n(self, n):  # bug!
         """Add n to A."""
-# { Z80._r.f = (Z80._r.a>255)?0x10:0; Z80._r.a&=255; if(!Z80._r.a) Z80._r.f|=0x80; if((Z80._r.a^Z80._r.b^a)&0x10) Z80._r.f|=0x20; Z80._r.m=1; },
-
         a = self.registers['a']
         self.registers['a'] += self.registers[n]
         # set flags...
         self.registers['f'] = 0x10 if self.registers['a'] > 255 else 0
-        print("f", self.registers['f'])
         self.registers['a'] &= 255
-        print('a', self.registers['a'])
         if not self.registers['a']:
             self.registers['f'] |= 0x80
-        print("f", self.registers['f'])
         if (self.registers['a'] ^ self.registers['b'] ^ a) & 0x10:
             self.registers['f'] |= 0x20
-        print("f", self.registers['f'])
         self.registers['m'] = 1
 
     def _add_sp_n(self):
@@ -865,3 +875,44 @@ class GbZ80Cpu(object):
         """Decrement stack pointer."""
         self.registers['sp'] = (self.registers['sp'] - 1) & 65535
         self.registers['m'] = 1
+
+    def jr_nz_n(self):
+        """If Z flag reset, add n to current address and jump to it.
+
+        n = one byte signed immediate value
+        """
+        i = self.read8(self.registers['pc'])
+        if i > 127:
+            i = -((~i + 1)) & 255
+        self.registers['pc'] += 1
+        self.registers['m'] = 2
+        if (self.registers['f'] & 0x80) == 0x00:
+            self.registers['pc'] += i
+            self.registers['m'] += 1
+
+    def and_n(self, n):
+        """Logically AND n with A, result in A."""
+        if n == 'pc':
+            self.registers['a'] &= self.read8(self.registers['pc'])
+            self.registers['pc'] += 1
+            self.registers['m'] += 1
+        elif n == 'hl':
+            self.registers['a'] &= self.read8((self.registers['h'] << 8) +
+                                              self.registers['l'])
+            self.registers['m'] += 1
+        else:
+            self.registers['a'] &= self.registers[n]
+        self.registers['a'] &= 255
+        self.registers['f'] = 0 if self.registers['a'] else 0x80
+
+
+
+
+
+
+
+
+
+
+
+

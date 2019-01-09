@@ -8,10 +8,14 @@ import array
 import sys
 
 
-class GbMemInterface(object):
+class GbSystemInterface(object):
     """Interface between CPU/GPU and memory unit."""
 
+    CART_TITLE = range(0x0134, 0x0143)
     CART_TYPE_CHECK_BYTE = 0x0147
+    MANUFACTURER_CODE_BYTE = 0x14B
+    LANGUAGE_BYTE = 0x14A
+    VERSION_BYTE = 0x14C
 
     def __init__(self, memory, cpu, gpu):
         """Init."""
@@ -27,8 +31,26 @@ class GbMemInterface(object):
         for i in range(0, len(rom_array)):
             self.memory.write_byte(i, rom_array[i])
 
-        self.cartridge_type = self.memory.read_byte(GbMemInterface.CART_TYPE_CHECK_BYTE)
-        print("Cartridge type:", self.cartridge_type)
+        self.cartridge_type = self.read_byte(
+            GbSystemInterface.CART_TYPE_CHECK_BYTE)
+        print(
+            "Cartridge type:",
+            self.read_byte(GbSystemInterface.CART_TYPE_CHECK_BYTE))
+        print(
+            "Manufacturer code:",
+            self.read_byte(GbSystemInterface.MANUFACTURER_CODE_BYTE))
+        print(
+            "Language:",
+            self.read_byte(GbSystemInterface.LANGUAGE_BYTE))
+        title = ""
+        for i in GbSystemInterface.CART_TITLE:
+            title += chr(self.read_byte(i))
+        print("Title:", title)
+
+    def start_game(self):
+        """Start the game."""
+        while True:
+            self.cpu.execute_next_operation()
 
     def write_byte(self, address, value):
         """Write a byte to an address."""

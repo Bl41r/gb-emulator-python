@@ -57,7 +57,7 @@ class GbGpu(object):
             3: self._vram_read_mode,
         }
         self.screen_data = [255 for i in range(160 * 144 * 4)]
-        self.tile_set = [[0, 0, 0, 0, 0, 0, 0, 0] for i in range(384)]
+        self.tile_set = self._create_tile_set()
         self.memory_interface = None    # Set after interface instantiated
 
     def step(self, m):
@@ -79,6 +79,13 @@ class GbGpu(object):
             t1 = 1 if self.memory_interface.read_byte(addr) & sx else 0
             t2 = 2 if self.memory_interface.read_byte(addr + 1) & sx else 0
             self.tile_set[tile][y][i] = t1 + t2
+
+    def _create_tile_set(self):
+        return [
+            [
+                [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8
+            ] for i in range(384)
+        ]
 
     def _h_blank_render_screen(self):
         """Horizontal blank, and render screen data."""
