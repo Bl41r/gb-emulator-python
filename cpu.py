@@ -198,48 +198,48 @@ class GbZ80Cpu(object):
             1: (self._ld_r1r2_nn, ['b', 'c']),  # LDBCnn
             2: (self._ld_r1r2m_a, ['b', 'c']),  # LDBCmA
             3: (self._inc_r_r, ['b', 'c']),  # INCBC
-            4: (self._raise_opcode_unimplemented, []),  # INCr_b
-            5: (self._raise_opcode_unimplemented, []),  # DECr_b
+            4: (self._inc_r, ['b']),  # INCr_b
+            5: (self._dec_r, ['b']),  # DECr_b
             6: (self._ld_rn, ['b']),  # LDrn_b
             7: (self._raise_opcode_unimplemented, []),  # RLCA
             8: (self._ld_nn_sp, []),  # LDnnSP -- double check this one...
             9: (self._add_hl_n, ['b', 'c']),  # ADDHLBC
             10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
             11: (self._dec_r_r, ['b', 'c']),  # DECBC
-            12: (self._raise_opcode_unimplemented, []),  # INCr_c
-            13: (self._raise_opcode_unimplemented, []),  # DECr_c
+            12: (self._inc_r, ['c']),  # INCr_c
+            13: (self._dec_r, ['c']),  # DECr_c
             14: (self._ld_rn, ['c']),  # LDrn_c
             15: (self._raise_opcode_unimplemented, []),  # RRCA
             16: (self._raise_opcode_unimplemented, []),  # DJNZn
             17: (self._ld_r1r2_nn, ['d', 'e']),  # LDDEnn
             18: (self._ld_r1r2m_a, ['d', 'e']),  # LDDEmA
             19: (self._inc_r_r, ['d', 'e']),  # INCDE
-            20: (self._raise_opcode_unimplemented, []),  # INCr_d
-            21: (self._raise_opcode_unimplemented, []),  # DECr_d
+            20: (self._inc_r, ['d']),  # INCr_d
+            21: (self._dec_r, ['d']),  # DECr_d
             22: (self._ld_rn, ['d']),  # LDrn_d
             23: (self._raise_opcode_unimplemented, []),  # RLA
-            24: (self._raise_opcode_unimplemented, []),  # JRn
+            24: (self._jr_n, []),  # JRn
             25: (self._add_hl_n, ['d', 'e']),  # ADDHLDE
             26: (self._ld_a_r1r2m, ['d', 'e']),  # LDADEm
             27: (self._dec_r_r, ['d', 'e']),  # DECDE
-            28: (self._raise_opcode_unimplemented, []),  # INCr_e
-            29: (self._raise_opcode_unimplemented, []),  # DECr_e
+            28: (self._inc_r, ['e']),  # INCr_e
+            29: (self._dec_r, ['e']),  # DECr_e
             30: (self._ld_rn, ['e']),  # LDrn_e
             31: (self._raise_opcode_unimplemented, []),  # RRA
             32: (self.jr_nz_n, []),  # JRNZn
             33: (self._ld_r1r2_nn, ['h', 'l']),  # LDHLnn
             34: (self._ld_hlmi_a, []),  # LDHLIA
             35: (self._inc_r_r, ['h', 'l']),  # INCHL
-            36: (self._raise_opcode_unimplemented, []),  # INCr_h
-            37: (self._raise_opcode_unimplemented, []),  # DECr_h
+            36: (self._inc_r, ['h']),  # INCr_h
+            37: (self._dec_r, ['h']),  # DECr_h
             38: (self._ld_rn, ['h']),  # LDrn_h
             39: (self._raise_opcode_unimplemented, []),  # XX
             40: (self._raise_opcode_unimplemented, []),  # JRZn
             41: (self._add_hl_n, ['h', 'l']),  # ADDHLHL
             42: (self._ld_a_hl_i, []),  # LDAHLI
             43: (self._dec_r_r, ['h', 'l']),  # DECHL
-            44: (self._raise_opcode_unimplemented, []),  # INCr_l
-            45: (self._raise_opcode_unimplemented, []),  # DECr_l
+            44: (self._inc_r, ['l']),  # INCr_l
+            45: (self._dec_r, ['l']),  # DECr_l
             46: (self._ld_rn, ['l']),  # LDrn_l
             47: (self._raise_opcode_unimplemented, []),  # CPL
             48: (self._raise_opcode_unimplemented, []),  # JRNCn
@@ -254,8 +254,8 @@ class GbZ80Cpu(object):
             57: (self._add_hl_sp, []),  # ADDHLSP
             58: (self._ld_a_hl_d, []),  # LDAHLD
             59: (self._dec_sp, []),  # DECSP
-            60: (self._raise_opcode_unimplemented, []),  # INCr_a
-            61: (self._raise_opcode_unimplemented, []),  # DECr_a
+            60: (self._inc_r, ['a']),  # INCr_a
+            61: (self._dec_r, ['a']),  # DECr_a
             62: (self._ld_rn, ['a']),  # LDrn_a
             63: (self._raise_opcode_unimplemented, []),  # CCF
             64: (self._ld_rr, ['b', 'b']),  # LDrr_bb (nop?)
@@ -354,14 +354,14 @@ class GbZ80Cpu(object):
             157: (self._raise_opcode_unimplemented, []),  # SBCr_l
             158: (self._raise_opcode_unimplemented, []),  # SBCHL
             159: (self._raise_opcode_unimplemented, []),  # SBCr_a
-            160: (self.and_n, ['b']),  # ANDr_b
-            161: (self.and_n, ['c']),  # ANDr_c
-            162: (self.and_n, ['d']),  # ANDr_d
-            163: (self.and_n, ['e']),  # ANDr_e
-            164: (self.and_n, ['h']),  # ANDr_h
-            165: (self.and_n, ['l']),  # ANDr_l
-            166: (self.and_n, ['hl']),  # ANDHL
-            167: (self.and_n, ['a']),  # ANDr_a
+            160: (self._and_n, ['b']),  # ANDr_b
+            161: (self._and_n, ['c']),  # ANDr_c
+            162: (self._and_n, ['d']),  # ANDr_d
+            163: (self._and_n, ['e']),  # ANDr_e
+            164: (self._and_n, ['h']),  # ANDr_h
+            165: (self._and_n, ['l']),  # ANDr_l
+            166: (self._and_n, ['hl']),  # ANDHL
+            167: (self._and_n, ['a']),  # ANDr_a
             168: (self._raise_opcode_unimplemented, []),  # XORr_b
             169: (self._raise_opcode_unimplemented, []),  # XORr_c
             170: (self._raise_opcode_unimplemented, []),  # XORr_d
@@ -424,7 +424,7 @@ class GbZ80Cpu(object):
             227: (self._raise_opcode_unimplemented, []),  # XX
             228: (self._raise_opcode_unimplemented, []),  # XX
             229: (self._push_nn, ['h', 'l']),  # PUSHHL
-            230: (self.and_n, ['pc']),  # ANDn
+            230: (self._and_n, ['pc']),  # ANDn
             231: (self._raise_opcode_unimplemented, []),  # RST20
             232: (self._add_sp_n, []),  # ADDSPn
             233: (self._raise_opcode_unimplemented, []),  # JPHL
@@ -694,6 +694,31 @@ class GbZ80Cpu(object):
         self.registers['pc'] = self.read16(self.registers['pc'])
         self.registers['m'] = 3
 
+    def _jr_n(self):
+        """Add signed immediate value to current address and jump to it."""
+        i = self.read8(self.registers['pc'])
+        if i > 127:
+            i = -(~i + 1) & 255
+        self.registers['pc'] += 1
+        self.registers['m'] = 2
+        self.registers['pc'] += i
+        self.registers['m'] += 1
+
+
+    def jr_nz_n(self):
+        """If Z flag reset, add n to current address and jump to it.
+
+        n = one byte signed immediate value
+        """
+        i = self.read8(self.registers['pc'])
+        if i > 127:
+            i = -((~i + 1)) & 255
+        self.registers['pc'] += 1
+        self.registers['m'] = 2
+        if (self.registers['f'] & 0x80) == 0x00:
+            self.registers['pc'] += i
+            self.registers['m'] += 1
+
     # Interrupts
     def _di(self):
         """Disable interrupts."""
@@ -866,6 +891,20 @@ class GbZ80Cpu(object):
             self.registers[r1] = (self.registers[r1] - 1) & 255
         self.registers['m'] = m
 
+    def _dec_r(self, r):
+        """Decrement register."""
+        self.registers[r] -= 1
+        self.registers[r] &= 255
+        self.registers['f'] = 0 if self.registers[r] else 0x80
+        self.registers['m'] = 1
+
+    def _inc_r(self, r):
+        """Increment register."""
+        self.registers[r] += 1
+        self.registers[r] &= 255
+        self.registers['f'] = 0 if self.registers[r] else 0x80
+        self.registers['m'] = 1
+
     def _inc_sp(self):
         """Increment stack pointer."""
         self.registers['sp'] = (self.registers['sp'] + 1) & 65535
@@ -876,32 +915,21 @@ class GbZ80Cpu(object):
         self.registers['sp'] = (self.registers['sp'] - 1) & 65535
         self.registers['m'] = 1
 
-    def jr_nz_n(self):
-        """If Z flag reset, add n to current address and jump to it.
-
-        n = one byte signed immediate value
-        """
-        i = self.read8(self.registers['pc'])
-        if i > 127:
-            i = -((~i + 1)) & 255
-        self.registers['pc'] += 1
-        self.registers['m'] = 2
-        if (self.registers['f'] & 0x80) == 0x00:
-            self.registers['pc'] += i
-            self.registers['m'] += 1
-
-    def and_n(self, n):
+    # Boolean logic
+    def _and_n(self, n):
         """Logically AND n with A, result in A."""
         if n == 'pc':
             self.registers['a'] &= self.read8(self.registers['pc'])
             self.registers['pc'] += 1
-            self.registers['m'] += 1
+            self.registers['m'] = 2
         elif n == 'hl':
             self.registers['a'] &= self.read8((self.registers['h'] << 8) +
                                               self.registers['l'])
-            self.registers['m'] += 1
+            self.registers['m'] = 2
         else:
             self.registers['a'] &= self.registers[n]
+            self.registers['m'] = 1
+
         self.registers['a'] &= 255
         self.registers['f'] = 0 if self.registers['a'] else 0x80
 
