@@ -241,7 +241,7 @@ class GbZ80Cpu(object):
             44: (self._inc_r, ['l']),  # INCr_l
             45: (self._dec_r, ['l']),  # DECr_l
             46: (self._ld_rn, ['l']),  # LDrn_l
-            47: (self._raise_opcode_unimplemented, []),  # CPL
+            47: (self.cpl, []),  # CPL
             48: (self._raise_opcode_unimplemented, []),  # JRNCn
             49: (self._ld_sp_nn, []),  # LD SP nn
             50: (self._ld_hlmd_a, []),  # LDHLDA
@@ -362,22 +362,22 @@ class GbZ80Cpu(object):
             165: (self._and_n, ['l']),  # ANDr_l
             166: (self._and_n, ['hl']),  # ANDHL
             167: (self._and_n, ['a']),  # ANDr_a
-            168: (self._raise_opcode_unimplemented, []),  # XORr_b
-            169: (self._raise_opcode_unimplemented, []),  # XORr_c
-            170: (self._raise_opcode_unimplemented, []),  # XORr_d
-            171: (self._raise_opcode_unimplemented, []),  # XORr_e
-            172: (self._raise_opcode_unimplemented, []),  # XORr_h
-            173: (self._raise_opcode_unimplemented, []),  # XORr_l
+            168: (self._xor_n, ['b']),  # XORr_b
+            169: (self._xor_n, ['c']),  # XORr_c
+            170: (self._xor_n, ['d']),  # XORr_d
+            171: (self._xor_n, ['e']),  # XORr_e
+            172: (self._xor_n, ['h']),  # XORr_h
+            173: (self._xor_n, ['l']),  # XORr_l
             174: (self._raise_opcode_unimplemented, []),  # XORHL
-            175: (self._raise_opcode_unimplemented, []),  # XORr_a
-            176: (self._raise_opcode_unimplemented, []),  # ORr_b
-            177: (self._raise_opcode_unimplemented, []),  # ORr_c
-            178: (self._raise_opcode_unimplemented, []),  # ORr_d
-            179: (self._raise_opcode_unimplemented, []),  # ORr_e
-            180: (self._raise_opcode_unimplemented, []),  # ORr_h
-            181: (self._raise_opcode_unimplemented, []),  # ORr_l
+            175: (self._xor_n, ['a']),  # XORr_a
+            176: (self._or_n, ['b']),  # ORr_b
+            177: (self._or_n, ['c']),  # ORr_c
+            178: (self._or_n, ['d']),  # ORr_d
+            179: (self._or_n, ['e']),  # ORr_e
+            180: (self._or_n, ['h']),  # ORr_h
+            181: (self._or_n, ['l']),  # ORr_l
             182: (self._raise_opcode_unimplemented, []),  # ORHL
-            183: (self._raise_opcode_unimplemented, []),  # ORr_a
+            183: (self._or_n, ['a']),  # ORr_a
             184: (self._cp_n, ['b']),  # CPr_b
             185: (self._cp_n, ['c']),  # CPr_c
             186: (self._cp_n, ['d']),  # CPr_d
@@ -397,7 +397,7 @@ class GbZ80Cpu(object):
             200: (self._raise_opcode_unimplemented, []),  # RETZ
             201: (self._ret, []),  # RET
             202: (self._raise_opcode_unimplemented, []),  # JPZnn
-            203: (self._raise_opcode_unimplemented, []),  # MAPcb
+            203: (self._call_cb_op, []),  # MAPcb
             204: (self._raise_opcode_unimplemented, []),  # CALLZnn
             205: (self._call_nn, []),  # CALLnn
             206: (self._raise_opcode_unimplemented, []),  # ADCn
@@ -452,6 +452,265 @@ class GbZ80Cpu(object):
             255: (self._raise_opcode_unimplemented, []),  # RST38
         }
 
+        self.cb_map = {
+            0: (self._raise_cb_op_unimplemented, ['rlcr_b']),  # RLCr_b
+            1: (self._raise_cb_op_unimplemented, ['rlcr_c']),  # RLCr_c
+            2: (self._raise_cb_op_unimplemented, ['rlcr_d']),  # RLCr_d
+            3: (self._raise_cb_op_unimplemented, ['rlcr_e']),  # RLCr_e
+            4: (self._raise_cb_op_unimplemented, ['rlcr_h']),  # RLCr_h
+            5: (self._raise_cb_op_unimplemented, ['rlcr_l']),  # RLCr_l
+            6: (self._raise_cb_op_unimplemented, ['rlchl']),  # RLCHL
+            7: (self._raise_cb_op_unimplemented, ['rlcr_a']),  # RLCr_a
+            8: (self._raise_cb_op_unimplemented, ['rrcr_b']),  # RRCr_b
+            9: (self._raise_cb_op_unimplemented, ['rrcr_c']),  # RRCr_c
+            10: (self._raise_cb_op_unimplemented, ['rrcr_d']),  # RRCr_d
+            11: (self._raise_cb_op_unimplemented, ['rrcr_e']),  # RRCr_e
+            12: (self._raise_cb_op_unimplemented, ['rrcr_h']),  # RRCr_h
+            13: (self._raise_cb_op_unimplemented, ['rrcr_l']),  # RRCr_l
+            14: (self._raise_cb_op_unimplemented, ['rrchl']),  # RRCHL
+            15: (self._raise_cb_op_unimplemented, ['rrcr_a']),  # RRCr_a
+            16: (self._raise_cb_op_unimplemented, ['rlr_b']),  # RLr_b
+            17: (self._raise_cb_op_unimplemented, ['rlr_c']),  # RLr_c
+            18: (self._raise_cb_op_unimplemented, ['rlr_d']),  # RLr_d
+            19: (self._raise_cb_op_unimplemented, ['rlr_e']),  # RLr_e
+            20: (self._raise_cb_op_unimplemented, ['rlr_h']),  # RLr_h
+            21: (self._raise_cb_op_unimplemented, ['rlr_l']),  # RLr_l
+            22: (self._raise_cb_op_unimplemented, ['rlhl']),  # RLHL
+            23: (self._raise_cb_op_unimplemented, ['rlr_a']),  # RLr_a
+            24: (self._raise_cb_op_unimplemented, ['rrr_b']),  # RRr_b
+            25: (self._raise_cb_op_unimplemented, ['rrr_c']),  # RRr_c
+            26: (self._raise_cb_op_unimplemented, ['rrr_d']),  # RRr_d
+            27: (self._raise_cb_op_unimplemented, ['rrr_e']),  # RRr_e
+            28: (self._raise_cb_op_unimplemented, ['rrr_h']),  # RRr_h
+            29: (self._raise_cb_op_unimplemented, ['rrr_l']),  # RRr_l
+            30: (self._raise_cb_op_unimplemented, ['rrhl']),  # RRHL
+            31: (self._raise_cb_op_unimplemented, ['rrr_a']),  # RRr_a
+            32: (self._raise_cb_op_unimplemented, ['slar_b']),  # SLAr_b
+            33: (self._raise_cb_op_unimplemented, ['slar_c']),  # SLAr_c
+            34: (self._raise_cb_op_unimplemented, ['slar_d']),  # SLAr_d
+            35: (self._raise_cb_op_unimplemented, ['slar_e']),  # SLAr_e
+            36: (self._raise_cb_op_unimplemented, ['slar_h']),  # SLAr_h
+            37: (self._raise_cb_op_unimplemented, ['slar_l']),  # SLAr_l
+            38: (self._raise_cb_op_unimplemented, ['xx']),  # XX
+            39: (self._raise_cb_op_unimplemented, ['slar_a']),  # SLAr_a
+            40: (self._raise_cb_op_unimplemented, ['srar_b']),  # SRAr_b
+            41: (self._raise_cb_op_unimplemented, ['srar_c']),  # SRAr_c
+            42: (self._raise_cb_op_unimplemented, ['srar_d']),  # SRAr_d
+            43: (self._raise_cb_op_unimplemented, ['srar_e']),  # SRAr_e
+            44: (self._raise_cb_op_unimplemented, ['srar_h']),  # SRAr_h
+            45: (self._raise_cb_op_unimplemented, ['srar_l']),  # SRAr_l
+            46: (self._raise_cb_op_unimplemented, ['xx']),  # XX
+            47: (self._raise_cb_op_unimplemented, ['srar_a']),  # SRAr_a
+            48: (self._raise_cb_op_unimplemented, ['swapr_b']),  # SWAPr_b
+            49: (self._raise_cb_op_unimplemented, ['swapr_c']),  # SWAPr_c
+            50: (self._raise_cb_op_unimplemented, ['swapr_d']),  # SWAPr_d
+            51: (self._raise_cb_op_unimplemented, ['swapr_e']),  # SWAPr_e
+            52: (self._raise_cb_op_unimplemented, ['swapr_h']),  # SWAPr_h
+            53: (self._raise_cb_op_unimplemented, ['swapr_l']),  # SWAPr_l
+            54: (self._raise_cb_op_unimplemented, ['xx']),  # XX
+            55: (self._raise_cb_op_unimplemented, ['swapr_a']),  # SWAPr_a
+            56: (self._raise_cb_op_unimplemented, ['srlr_b']),  # SRLr_b
+            57: (self._raise_cb_op_unimplemented, ['srlr_c']),  # SRLr_c
+            58: (self._raise_cb_op_unimplemented, ['srlr_d']),  # SRLr_d
+            59: (self._raise_cb_op_unimplemented, ['srlr_e']),  # SRLr_e
+            60: (self._raise_cb_op_unimplemented, ['srlr_h']),  # SRLr_h
+            61: (self._raise_cb_op_unimplemented, ['srlr_l']),  # SRLr_l
+            62: (self._raise_cb_op_unimplemented, ['xx']),  # XX
+            63: (self._raise_cb_op_unimplemented, ['srlr_a']),  # SRLr_a
+            64: (self._raise_cb_op_unimplemented, ['bit0b']),  # BIT0b
+            65: (self._raise_cb_op_unimplemented, ['bit0c']),  # BIT0c
+            66: (self._raise_cb_op_unimplemented, ['bit0d']),  # BIT0d
+            67: (self._raise_cb_op_unimplemented, ['bit0e']),  # BIT0e
+            68: (self._raise_cb_op_unimplemented, ['bit0h']),  # BIT0h
+            69: (self._raise_cb_op_unimplemented, ['bit0l']),  # BIT0l
+            70: (self._raise_cb_op_unimplemented, ['bit0m']),  # BIT0m
+            71: (self._raise_cb_op_unimplemented, ['bit0a']),  # BIT0a
+            72: (self._raise_cb_op_unimplemented, ['bit1b']),  # BIT1b
+            73: (self._raise_cb_op_unimplemented, ['bit1c']),  # BIT1c
+            74: (self._raise_cb_op_unimplemented, ['bit1d']),  # BIT1d
+            75: (self._raise_cb_op_unimplemented, ['bit1e']),  # BIT1e
+            76: (self._raise_cb_op_unimplemented, ['bit1h']),  # BIT1h
+            77: (self._raise_cb_op_unimplemented, ['bit1l']),  # BIT1l
+            78: (self._raise_cb_op_unimplemented, ['bit1m']),  # BIT1m
+            79: (self._raise_cb_op_unimplemented, ['bit1a']),  # BIT1a
+            80: (self._raise_cb_op_unimplemented, ['bit2b']),  # BIT2b
+            81: (self._raise_cb_op_unimplemented, ['bit2c']),  # BIT2c
+            82: (self._raise_cb_op_unimplemented, ['bit2d']),  # BIT2d
+            83: (self._raise_cb_op_unimplemented, ['bit2e']),  # BIT2e
+            84: (self._raise_cb_op_unimplemented, ['bit2h']),  # BIT2h
+            85: (self._raise_cb_op_unimplemented, ['bit2l']),  # BIT2l
+            86: (self._raise_cb_op_unimplemented, ['bit2m']),  # BIT2m
+            87: (self._raise_cb_op_unimplemented, ['bit2a']),  # BIT2a
+            88: (self._raise_cb_op_unimplemented, ['bit3b']),  # BIT3b
+            89: (self._raise_cb_op_unimplemented, ['bit3c']),  # BIT3c
+            90: (self._raise_cb_op_unimplemented, ['bit3d']),  # BIT3d
+            91: (self._raise_cb_op_unimplemented, ['bit3e']),  # BIT3e
+            92: (self._raise_cb_op_unimplemented, ['bit3h']),  # BIT3h
+            93: (self._raise_cb_op_unimplemented, ['bit3l']),  # BIT3l
+            94: (self._raise_cb_op_unimplemented, ['bit3m']),  # BIT3m
+            95: (self._raise_cb_op_unimplemented, ['bit3a']),  # BIT3a
+            96: (self._raise_cb_op_unimplemented, ['bit4b']),  # BIT4b
+            97: (self._raise_cb_op_unimplemented, ['bit4c']),  # BIT4c
+            98: (self._raise_cb_op_unimplemented, ['bit4d']),  # BIT4d
+            99: (self._raise_cb_op_unimplemented, ['bit4e']),  # BIT4e
+            100: (self._raise_cb_op_unimplemented, ['bit4h']),  # BIT4h
+            101: (self._raise_cb_op_unimplemented, ['bit4l']),  # BIT4l
+            102: (self._raise_cb_op_unimplemented, ['bit4m']),  # BIT4m
+            103: (self._raise_cb_op_unimplemented, ['bit4a']),  # BIT4a
+            104: (self._raise_cb_op_unimplemented, ['bit5b']),  # BIT5b
+            105: (self._raise_cb_op_unimplemented, ['bit5c']),  # BIT5c
+            106: (self._raise_cb_op_unimplemented, ['bit5d']),  # BIT5d
+            107: (self._raise_cb_op_unimplemented, ['bit5e']),  # BIT5e
+            108: (self._raise_cb_op_unimplemented, ['bit5h']),  # BIT5h
+            109: (self._raise_cb_op_unimplemented, ['bit5l']),  # BIT5l
+            110: (self._raise_cb_op_unimplemented, ['bit5m']),  # BIT5m
+            111: (self._raise_cb_op_unimplemented, ['bit5a']),  # BIT5a
+            112: (self._raise_cb_op_unimplemented, ['bit6b']),  # BIT6b
+            113: (self._raise_cb_op_unimplemented, ['bit6c']),  # BIT6c
+            114: (self._raise_cb_op_unimplemented, ['bit6d']),  # BIT6d
+            115: (self._raise_cb_op_unimplemented, ['bit6e']),  # BIT6e
+            116: (self._raise_cb_op_unimplemented, ['bit6h']),  # BIT6h
+            117: (self._raise_cb_op_unimplemented, ['bit6l']),  # BIT6l
+            118: (self._raise_cb_op_unimplemented, ['bit6m']),  # BIT6m
+            119: (self._raise_cb_op_unimplemented, ['bit6a']),  # BIT6a
+            120: (self._raise_cb_op_unimplemented, ['bit7b']),  # BIT7b
+            121: (self._raise_cb_op_unimplemented, ['bit7c']),  # BIT7c
+            122: (self._raise_cb_op_unimplemented, ['bit7d']),  # BIT7d
+            123: (self._raise_cb_op_unimplemented, ['bit7e']),  # BIT7e
+            124: (self._raise_cb_op_unimplemented, ['bit7h']),  # BIT7h
+            125: (self._raise_cb_op_unimplemented, ['bit7l']),  # BIT7l
+            126: (self._raise_cb_op_unimplemented, ['bit7m']),  # BIT7m
+            127: (self._raise_cb_op_unimplemented, ['bit7a']),  # BIT7a
+            128: (self._raise_cb_op_unimplemented, ['res0b']),  # RES0b
+            129: (self._raise_cb_op_unimplemented, ['res0c']),  # RES0c
+            130: (self._raise_cb_op_unimplemented, ['res0d']),  # RES0d
+            131: (self._raise_cb_op_unimplemented, ['res0e']),  # RES0e
+            132: (self._raise_cb_op_unimplemented, ['res0h']),  # RES0h
+            133: (self._raise_cb_op_unimplemented, ['res0l']),  # RES0l
+            134: (self._raise_cb_op_unimplemented, ['res0m']),  # RES0m
+            135: (self._raise_cb_op_unimplemented, ['res0a']),  # RES0a
+            136: (self._raise_cb_op_unimplemented, ['res1b']),  # RES1b
+            137: (self._raise_cb_op_unimplemented, ['res1c']),  # RES1c
+            138: (self._raise_cb_op_unimplemented, ['res1d']),  # RES1d
+            139: (self._raise_cb_op_unimplemented, ['res1e']),  # RES1e
+            140: (self._raise_cb_op_unimplemented, ['res1h']),  # RES1h
+            141: (self._raise_cb_op_unimplemented, ['res1l']),  # RES1l
+            142: (self._raise_cb_op_unimplemented, ['res1m']),  # RES1m
+            143: (self._raise_cb_op_unimplemented, ['res1a']),  # RES1a
+            144: (self._raise_cb_op_unimplemented, ['res2b']),  # RES2b
+            145: (self._raise_cb_op_unimplemented, ['res2c']),  # RES2c
+            146: (self._raise_cb_op_unimplemented, ['res2d']),  # RES2d
+            147: (self._raise_cb_op_unimplemented, ['res2e']),  # RES2e
+            148: (self._raise_cb_op_unimplemented, ['res2h']),  # RES2h
+            149: (self._raise_cb_op_unimplemented, ['res2l']),  # RES2l
+            150: (self._raise_cb_op_unimplemented, ['res2m']),  # RES2m
+            151: (self._raise_cb_op_unimplemented, ['res2a']),  # RES2a
+            152: (self._raise_cb_op_unimplemented, ['res3b']),  # RES3b
+            153: (self._raise_cb_op_unimplemented, ['res3c']),  # RES3c
+            154: (self._raise_cb_op_unimplemented, ['res3d']),  # RES3d
+            155: (self._raise_cb_op_unimplemented, ['res3e']),  # RES3e
+            156: (self._raise_cb_op_unimplemented, ['res3h']),  # RES3h
+            157: (self._raise_cb_op_unimplemented, ['res3l']),  # RES3l
+            158: (self._raise_cb_op_unimplemented, ['res3m']),  # RES3m
+            159: (self._raise_cb_op_unimplemented, ['res3a']),  # RES3a
+            160: (self._raise_cb_op_unimplemented, ['res4b']),  # RES4b
+            161: (self._raise_cb_op_unimplemented, ['res4c']),  # RES4c
+            162: (self._raise_cb_op_unimplemented, ['res4d']),  # RES4d
+            163: (self._raise_cb_op_unimplemented, ['res4e']),  # RES4e
+            164: (self._raise_cb_op_unimplemented, ['res4h']),  # RES4h
+            165: (self._raise_cb_op_unimplemented, ['res4l']),  # RES4l
+            166: (self._raise_cb_op_unimplemented, ['res4m']),  # RES4m
+            167: (self._raise_cb_op_unimplemented, ['res4a']),  # RES4a
+            168: (self._raise_cb_op_unimplemented, ['res5b']),  # RES5b
+            169: (self._raise_cb_op_unimplemented, ['res5c']),  # RES5c
+            170: (self._raise_cb_op_unimplemented, ['res5d']),  # RES5d
+            171: (self._raise_cb_op_unimplemented, ['res5e']),  # RES5e
+            172: (self._raise_cb_op_unimplemented, ['res5h']),  # RES5h
+            173: (self._raise_cb_op_unimplemented, ['res5l']),  # RES5l
+            174: (self._raise_cb_op_unimplemented, ['res5m']),  # RES5m
+            175: (self._raise_cb_op_unimplemented, ['res5a']),  # RES5a
+            176: (self._raise_cb_op_unimplemented, ['res6b']),  # RES6b
+            177: (self._raise_cb_op_unimplemented, ['res6c']),  # RES6c
+            178: (self._raise_cb_op_unimplemented, ['res6d']),  # RES6d
+            179: (self._raise_cb_op_unimplemented, ['res6e']),  # RES6e
+            180: (self._raise_cb_op_unimplemented, ['res6h']),  # RES6h
+            181: (self._raise_cb_op_unimplemented, ['res6l']),  # RES6l
+            182: (self._raise_cb_op_unimplemented, ['res6m']),  # RES6m
+            183: (self._raise_cb_op_unimplemented, ['res6a']),  # RES6a
+            184: (self._raise_cb_op_unimplemented, ['res7b']),  # RES7b
+            185: (self._raise_cb_op_unimplemented, ['res7c']),  # RES7c
+            186: (self._raise_cb_op_unimplemented, ['res7d']),  # RES7d
+            187: (self._raise_cb_op_unimplemented, ['res7e']),  # RES7e
+            188: (self._raise_cb_op_unimplemented, ['res7h']),  # RES7h
+            189: (self._raise_cb_op_unimplemented, ['res7l']),  # RES7l
+            190: (self._raise_cb_op_unimplemented, ['res7m']),  # RES7m
+            191: (self._raise_cb_op_unimplemented, ['res7a']),  # RES7a
+            192: (self._raise_cb_op_unimplemented, ['set0b']),  # SET0b
+            193: (self._raise_cb_op_unimplemented, ['set0c']),  # SET0c
+            194: (self._raise_cb_op_unimplemented, ['set0d']),  # SET0d
+            195: (self._raise_cb_op_unimplemented, ['set0e']),  # SET0e
+            196: (self._raise_cb_op_unimplemented, ['set0h']),  # SET0h
+            197: (self._raise_cb_op_unimplemented, ['set0l']),  # SET0l
+            198: (self._raise_cb_op_unimplemented, ['set0m']),  # SET0m
+            199: (self._raise_cb_op_unimplemented, ['set0a']),  # SET0a
+            200: (self._raise_cb_op_unimplemented, ['set1b']),  # SET1b
+            201: (self._raise_cb_op_unimplemented, ['set1c']),  # SET1c
+            202: (self._raise_cb_op_unimplemented, ['set1d']),  # SET1d
+            203: (self._raise_cb_op_unimplemented, ['set1e']),  # SET1e
+            204: (self._raise_cb_op_unimplemented, ['set1h']),  # SET1h
+            205: (self._raise_cb_op_unimplemented, ['set1l']),  # SET1l
+            206: (self._raise_cb_op_unimplemented, ['set1m']),  # SET1m
+            207: (self._raise_cb_op_unimplemented, ['set1a']),  # SET1a
+            208: (self._raise_cb_op_unimplemented, ['set2b']),  # SET2b
+            209: (self._raise_cb_op_unimplemented, ['set2c']),  # SET2c
+            210: (self._raise_cb_op_unimplemented, ['set2d']),  # SET2d
+            211: (self._raise_cb_op_unimplemented, ['set2e']),  # SET2e
+            212: (self._raise_cb_op_unimplemented, ['set2h']),  # SET2h
+            213: (self._raise_cb_op_unimplemented, ['set2l']),  # SET2l
+            214: (self._raise_cb_op_unimplemented, ['set2m']),  # SET2m
+            215: (self._raise_cb_op_unimplemented, ['set2a']),  # SET2a
+            216: (self._raise_cb_op_unimplemented, ['set3b']),  # SET3b
+            217: (self._raise_cb_op_unimplemented, ['set3c']),  # SET3c
+            218: (self._raise_cb_op_unimplemented, ['set3d']),  # SET3d
+            219: (self._raise_cb_op_unimplemented, ['set3e']),  # SET3e
+            220: (self._raise_cb_op_unimplemented, ['set3h']),  # SET3h
+            221: (self._raise_cb_op_unimplemented, ['set3l']),  # SET3l
+            222: (self._raise_cb_op_unimplemented, ['set3m']),  # SET3m
+            223: (self._raise_cb_op_unimplemented, ['set3a']),  # SET3a
+            224: (self._raise_cb_op_unimplemented, ['set4b']),  # SET4b
+            225: (self._raise_cb_op_unimplemented, ['set4c']),  # SET4c
+            226: (self._raise_cb_op_unimplemented, ['set4d']),  # SET4d
+            227: (self._raise_cb_op_unimplemented, ['set4e']),  # SET4e
+            228: (self._raise_cb_op_unimplemented, ['set4h']),  # SET4h
+            229: (self._raise_cb_op_unimplemented, ['set4l']),  # SET4l
+            230: (self._raise_cb_op_unimplemented, ['set4m']),  # SET4m
+            231: (self._raise_cb_op_unimplemented, ['set4a']),  # SET4a
+            232: (self._raise_cb_op_unimplemented, ['set5b']),  # SET5b
+            233: (self._raise_cb_op_unimplemented, ['set5c']),  # SET5c
+            234: (self._raise_cb_op_unimplemented, ['set5d']),  # SET5d
+            235: (self._raise_cb_op_unimplemented, ['set5e']),  # SET5e
+            236: (self._raise_cb_op_unimplemented, ['set5h']),  # SET5h
+            237: (self._raise_cb_op_unimplemented, ['set5l']),  # SET5l
+            238: (self._raise_cb_op_unimplemented, ['set5m']),  # SET5m
+            239: (self._raise_cb_op_unimplemented, ['set5a']),  # SET5a
+            240: (self._raise_cb_op_unimplemented, ['set6b']),  # SET6b
+            241: (self._raise_cb_op_unimplemented, ['set6c']),  # SET6c
+            242: (self._raise_cb_op_unimplemented, ['set6d']),  # SET6d
+            243: (self._raise_cb_op_unimplemented, ['set6e']),  # SET6e
+            244: (self._raise_cb_op_unimplemented, ['set6h']),  # SET6h
+            245: (self._raise_cb_op_unimplemented, ['set6l']),  # SET6l
+            246: (self._raise_cb_op_unimplemented, ['set6m']),  # SET6m
+            247: (self._raise_cb_op_unimplemented, ['set6a']),  # SET6a
+            248: (self._raise_cb_op_unimplemented, ['set7b']),  # SET7b
+            249: (self._raise_cb_op_unimplemented, ['set7c']),  # SET7c
+            250: (self._raise_cb_op_unimplemented, ['set7d']),  # SET7d
+            251: (self._raise_cb_op_unimplemented, ['set7e']),  # SET7e
+            252: (self._raise_cb_op_unimplemented, ['set7h']),  # SET7h
+            253: (self._raise_cb_op_unimplemented, ['set7l']),  # SET7l
+            254: (self._raise_cb_op_unimplemented, ['set7m']),  # SET7m
+            255: (self._raise_cb_op_unimplemented, ['set7a']),  # SET7a
+        }
+
     def execute_next_operation(self):
         """Execute the next operation."""
         global my_counter
@@ -504,6 +763,14 @@ class GbZ80Cpu(object):
         """Write a word to memory at address."""
         self.memory_interface.write_word(address, val)
 
+    def _call_cb_op(self):
+        """Call an opcode in the cb map."""
+        i = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+        self.registers['pc'] &= 65535
+        op, args = self.cb_map[i]
+        op(*args)
+
     def _inc_clock(self):
         """Increment clock registers."""
         self.clock['m'] += self.registers['m']
@@ -514,6 +781,10 @@ class GbZ80Cpu(object):
     def _raise_opcode_unimplemented(self):
         print("counter:", my_counter)
         raise Exception("Opcode unimplemented!")
+
+    def _raise_cb_op_unimplemented(self, fn_name):
+        print("cb code", fn_name, "unimplemented!")
+        self._raise_opcode_unimplemented()
 
     # Opcodes
     # ----------------------------
@@ -703,7 +974,6 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
         self.registers['pc'] += i
         self.registers['m'] += 1
-
 
     def jr_nz_n(self):
         """If Z flag reset, add n to current address and jump to it.
@@ -933,14 +1203,24 @@ class GbZ80Cpu(object):
         self.registers['a'] &= 255
         self.registers['f'] = 0 if self.registers['a'] else 0x80
 
+    def _or_n(self, n):
+        """Logical OR n with register A, result in A."""
+        self.registers['a'] |= self.registers[n]
+        self.registers['a'] &= 255
+        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['m'] = 1
 
+    def _xor_n(self, n):
+        """Logical XOR n with register A, result in A."""
+        self.registers['a'] ^= self.registers[n]
+        self.registers['a'] &= 255
+        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['m'] = 1
 
-
-
-
-
-
-
-
-
-
+    # Misc
+    def cpl(self):
+        """Compliment A register (bit flip)."""
+        self.registers['a'] = (~self.registers['a']) & 0xFF
+        self.registers['f'] &= 0x80
+        self.registers['f'] |= 0x60
+        self.registers['m'] = 1

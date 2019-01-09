@@ -74,13 +74,10 @@ class GbGpu(object):
         base_addr = addr & 0x1FFE
         tile = (base_addr >> 4) & 511
         y = (base_addr >> 1) & 7
-        print('before loop:', addr, base_addr, tile, y)
         for i in range(8):
-            print('i', i)
             sx = 1 << (7 - i)   # Find bit index for this pixel
             t1 = 1 if self.memory_interface.read_byte(addr) & sx else 0
             t2 = 2 if self.memory_interface.read_byte(addr + 1) & sx else 0
-            print(sx, t1, t2)
             self.tile_set[tile][y][i] = t1 + t2
 
     def _create_tile_set(self):
