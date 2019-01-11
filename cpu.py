@@ -252,7 +252,7 @@ class GbZ80Cpu(object):
             52: (self._raise_opcode_unimplemented, []),  # INCHLm
             53: (self._raise_opcode_unimplemented, []),  # DECHLm
             54: (self._ld_hlm_n, []),  # LDHLmn
-            55: (self._raise_opcode_unimplemented, []),  # SCF
+            55: (self._scf, []),  # SCF
             56: (self._jr_cc_n, [0x10, 0x10]),  # JRCn
             57: (self._add_hl_sp, []),  # ADDHLSP
             58: (self._ld_a_hl_d, []),  # LDAHLD
@@ -349,14 +349,14 @@ class GbZ80Cpu(object):
             149: (self._sub_n, ['l']),  # SUBr_l
             150: (self._raise_opcode_unimplemented, []),  # SUBHL
             151: (self._sub_n, ['a']),  # SUBr_a
-            152: (self._raise_opcode_unimplemented, []),  # SBCr_b
-            153: (self._raise_opcode_unimplemented, []),  # SBCr_c
-            154: (self._raise_opcode_unimplemented, []),  # SBCr_d
-            155: (self._raise_opcode_unimplemented, []),  # SBCr_e
-            156: (self._raise_opcode_unimplemented, []),  # SBCr_h
-            157: (self._raise_opcode_unimplemented, []),  # SBCr_l
+            152: (self._sub_a_n, ['b']),  # SBCr_b
+            153: (self._sub_a_n, ['c']),  # SBCr_c
+            154: (self._sub_a_n, ['d']),  # SBCr_d
+            155: (self._sub_a_n, ['e']),  # SBCr_e
+            156: (self._sub_a_n, ['h']),  # SBCr_h
+            157: (self._sub_a_n, ['l']),  # SBCr_l
             158: (self._raise_opcode_unimplemented, []),  # SBCHL
-            159: (self._raise_opcode_unimplemented, []),  # SBCr_a
+            159: (self._sub_a_n, ['a']),  # SBCr_a
             160: (self._and_n, ['b']),  # ANDr_b
             161: (self._and_n, ['c']),  # ANDr_c
             162: (self._and_n, ['d']),  # ANDr_d
@@ -365,14 +365,14 @@ class GbZ80Cpu(object):
             165: (self._and_n, ['l']),  # ANDr_l
             166: (self._and_n, ['hl']),  # ANDHL
             167: (self._and_n, ['a']),  # ANDr_a
-            168: (self._xor_n, ['b']),  # XORr_b
-            169: (self._xor_n, ['c']),  # XORr_c
-            170: (self._xor_n, ['d']),  # XORr_d
-            171: (self._xor_n, ['e']),  # XORr_e
-            172: (self._xor_n, ['h']),  # XORr_h
-            173: (self._xor_n, ['l']),  # XORr_l
+            168: (self._xor_a_n, ['b']),  # XORr_b
+            169: (self._xor_a_n, ['c']),  # XORr_c
+            170: (self._xor_a_n, ['d']),  # XORr_d
+            171: (self._xor_a_n, ['e']),  # XORr_e
+            172: (self._xor_a_n, ['h']),  # XORr_h
+            173: (self._xor_a_n, ['l']),  # XORr_l
             174: (self._raise_opcode_unimplemented, []),  # XORHL
-            175: (self._xor_n, ['a']),  # XORr_a
+            175: (self._xor_a_n, ['a']),  # XORr_a
             176: (self._or_n, ['b']),  # ORr_b
             177: (self._or_n, ['c']),  # ORr_c
             178: (self._or_n, ['d']),  # ORr_d
@@ -391,7 +391,7 @@ class GbZ80Cpu(object):
             191: (self._cp_n, ['a']),  # CPr_a
             192: (self._ret_f, [0x80, 0x00]),  # RETNZ
             193: (self._pop_nn, ['b', 'c']),  # POPBC
-            194: (self._raise_opcode_unimplemented, []),  # JPNZnn
+            194: (self._jp_cc_nn, [0x80, 0x00]),  # JPNZnn
             195: (self._jp_nn, []),  # JPnn
             196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
             197: (self._push_nn, ['b', 'c']),  # PUSHBC
@@ -399,7 +399,7 @@ class GbZ80Cpu(object):
             199: (self._rst_n, [0x00]),  # RST00
             200: (self._ret_f, [0x80, 0x80]),  # RETZ
             201: (self._ret, []),  # RET
-            202: (self._raise_opcode_unimplemented, []),  # JPZnn
+            202: (self._jp_cc_nn, [0x80, 0x80]),  # JPZnn
             203: (self._call_cb_op, []),  # MAPcb
             204: (self._raise_opcode_unimplemented, []),  # CALLZnn
             205: (self._call_nn, []),  # CALLnn
@@ -407,7 +407,7 @@ class GbZ80Cpu(object):
             207: (self._rst_n, [0x08]),  # RST08
             208: (self._ret_f, [0x10, 0x00]),  # RETNC
             209: (self._pop_nn, ['d', 'e']),  # POPDE
-            210: (self._raise_opcode_unimplemented, []),  # JPNCnn
+            210: (self._raise_opcode_unimplemented, [0x10, 0x00]),  # JPNCnn
             211: (self._raise_opcode_unimplemented, []),  # XX
             212: (self._raise_opcode_unimplemented, []),  # CALLNCnn
             213: (self._push_nn, ['d', 'e']),  # PUSHDE
@@ -415,7 +415,7 @@ class GbZ80Cpu(object):
             215: (self._rst_n, [0x10]),  # RST10
             216: (self._ret_f, [0x10, 0x10]),  # RETC
             217: (self._reti, []),  # RETI
-            218: (self._raise_opcode_unimplemented, []),  # JPCnn
+            218: (self._jp_cc_nn, [0x10, 0x10]),  # JPCnn
             219: (self._raise_opcode_unimplemented, []),  # XX
             220: (self._raise_opcode_unimplemented, []),  # CALLCnn
             221: (self._raise_opcode_unimplemented, []),  # XX
@@ -443,7 +443,7 @@ class GbZ80Cpu(object):
             243: (self._di, []),  # DI
             244: (self._raise_opcode_unimplemented, []),  # XX
             245: (self._push_nn, ['a', 'f']),  # PUSHAF
-            246: (self._raise_opcode_unimplemented, []),  # XORn
+            246: (self._xor_n, []),  # XORn
             247: (self._rst_n, [0x30]),  # RST30
             248: (self._ld_hl_sp_n, []),  # LD HL SP+n
             249: (self._ld_sp_hl, []),  # LS SP HL
@@ -456,14 +456,14 @@ class GbZ80Cpu(object):
         }
 
         self.cb_map = {
-            0: (self._raise_cb_op_unimplemented, ['rlcr_b']),  # RLCr_b
-            1: (self._raise_cb_op_unimplemented, ['rlcr_c']),  # RLCr_c
-            2: (self._raise_cb_op_unimplemented, ['rlcr_d']),  # RLCr_d
-            3: (self._raise_cb_op_unimplemented, ['rlcr_e']),  # RLCr_e
-            4: (self._raise_cb_op_unimplemented, ['rlcr_h']),  # RLCr_h
-            5: (self._raise_cb_op_unimplemented, ['rlcr_l']),  # RLCr_l
+            0: (self._rlc_n, ['b']),  # RLCr_b
+            1: (self._rlc_n, ['c']),  # RLCr_c
+            2: (self._rlc_n, ['d']),  # RLCr_d
+            3: (self._rlc_n, ['e']),  # RLCr_e
+            4: (self._rlc_n, ['h']),  # RLCr_h
+            5: (self._rlc_n, ['l']),  # RLCr_l
             6: (self._raise_cb_op_unimplemented, ['rlchl']),  # RLCHL
-            7: (self._raise_cb_op_unimplemented, ['rlcr_a']),  # RLCr_a
+            7: (self._rlc_n, ['a']),  # RLCr_a
             8: (self._raise_cb_op_unimplemented, ['rrcr_b']),  # RRCr_b
             9: (self._raise_cb_op_unimplemented, ['rrcr_c']),  # RRCr_c
             10: (self._raise_cb_op_unimplemented, ['rrcr_d']),  # RRCr_d
@@ -964,9 +964,25 @@ class GbZ80Cpu(object):
 
     # Jumps
     def _jp_nn(self):
-        """."""
+        """Jump to two byte immediate value."""
         self.registers['pc'] = self.read16(self.registers['pc'])
         self.registers['m'] = 3
+
+    def _jp_cc_nn(self, and_val, flag_check_value):
+        """Jump to address n if condition is true.
+
+        cc = NZ, Jump if Z flag is reset.
+        cc = Z, Jump if Z flag is set.
+        cc = NC, Jump if C flag is reset.
+        cc = C, Jump if C flag is set.
+        nn = two byte immediate value. (LS byte first.)
+        """
+        self.registers['m'] = 3
+        if (self.registers['f'] & and_val) == flag_check_value:
+            self.registers['pc'] = self.read16(self.registers['pc'])
+            self.registers['m'] += 1
+        else:
+            self.registers['pc'] += 2
 
     def _jr_n(self):
         """Add signed immediate value to current address and jump to it."""
@@ -1051,6 +1067,19 @@ class GbZ80Cpu(object):
         if not self.registers['a']:
             self.registers['f'] |= 0x80
         if ((self.registers['a'] ^ self.registers[r] ^ a) & 0x10):
+            self.registers['f'] |= 0x20
+        self.registers['m'] = 1
+
+    def _sub_a_n(self, n):
+        """Subtract n + Carry flag from A."""
+        a = self.registers['a']
+        self.registers['a'] -= self.registers[n]
+        self.registers['a'] -= 1 if (self.registers['f'] & 0x10) else 0
+        self.registers['f'] = 0x50 if self.registers['a'] < 0 else 0x40
+        self.registers['a'] &= 255
+        if not self.registers['a']:
+            self.registers['f'] |= 0x80
+        if (self.registers['a'] ^ self.registers[n] ^ a) & 0x10:
             self.registers['f'] |= 0x20
         self.registers['m'] = 1
 
@@ -1206,12 +1235,20 @@ class GbZ80Cpu(object):
         self.registers['f'] = 0 if self.registers['a'] else 0x80
         self.registers['m'] = 1
 
-    def _xor_n(self, n):
+    def _xor_a_n(self, n):
         """Logical XOR n with register A, result in A."""
         self.registers['a'] ^= self.registers[n]
         self.registers['a'] &= 255
         self.registers['f'] = 0 if self.registers['a'] else 0x80
         self.registers['m'] = 1
+
+    def _xor_n(self):
+        """Logical XOR immediate byte with register A, result in A."""
+        self.registers['a'] ^= self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+        self.registers['a'] &= 255
+        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['m'] = 2
 
     # Returns
     def _ret(self):
@@ -1267,6 +1304,21 @@ class GbZ80Cpu(object):
         self.registers['f'] &= 0x80
         self.registers['f'] |= 0x60
         self.registers['m'] = 1
+
+    def _rlc_n(self, n):
+        """Rotate n left. Old bit 7 to Carry flag."""
+        ci, co = (1, 0x10) if (self.registers[n] & 0x80) else (0, 0)
+        self.registers[n] = (self.registers[n] << 1) + ci
+        self.registers[n] &= 255
+        f = 0 if self.registers[n] else 0x80
+        self.registers['f'] = (f & 0xEF) + co
+        self.registers['m'] = 2
+
+    def _scf(self):
+        """Set carry flag."""
+        self.registers['f'] |= 0x10
+        self.registers['m'] = 1
+
 
 
 
