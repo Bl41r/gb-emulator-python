@@ -204,7 +204,7 @@ class GbZ80Cpu(object):
             4: (self._inc_r, ['b']),  # INCr_b
             5: (self._dec_r, ['b']),  # DECr_b
             6: (self._ld_rn, ['b']),  # LDrn_b
-            7: (self._raise_opcode_unimplemented, []),  # RLCA
+            7: (self._rlc_a, []),  # RLCA
             8: (self._ld_nn_sp, []),  # LDnnSP -- double check this one...
             9: (self._add_hl_n, ['b', 'c']),  # ADDHLBC
             10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
@@ -1313,6 +1313,14 @@ class GbZ80Cpu(object):
         f = 0 if self.registers[n] else 0x80
         self.registers['f'] = (f & 0xEF) + co
         self.registers['m'] = 2
+
+    def _rlc_a(self):
+        """Rotate A left. Old bit 7 to Carry flag."""
+        ci, co = (1, 0x10) if (self.registers['a'] & 0x80) else (0, 0)
+        self.registers['a'] = (self.registers['a'] << 1) + ci
+        self.registers['a'] &= 255
+        self.registers['f'] = (self.registers['f'] & 0xEF) + co
+        self.registers['m'] = 1
 
     def _scf(self):
         """Set carry flag."""
