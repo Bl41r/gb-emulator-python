@@ -229,7 +229,7 @@ class GbZ80Cpu(object):
             29: (self._dec_r, ['e']),  # DECr_e
             30: (self._ld_rn, ['e']),  # LDrn_e
             31: (self._raise_opcode_unimplemented, []),  # RRA
-            32: (self.jr_nz_n, []),  # JRNZn
+            32: (self._jr_cc_n, [0x80, 0x00]),  # JRNZn
             33: (self._ld_r1r2_nn, ['h', 'l']),  # LDHLnn
             34: (self._ld_hlmi_a, []),  # LDHLIA
             35: (self._inc_r_r, ['h', 'l']),  # INCHL
@@ -237,7 +237,7 @@ class GbZ80Cpu(object):
             37: (self._dec_r, ['h']),  # DECr_h
             38: (self._ld_rn, ['h']),  # LDrn_h
             39: (self._raise_opcode_unimplemented, []),  # XX
-            40: (self._raise_opcode_unimplemented, []),  # JRZn
+            40: (self._jr_cc_n, [0x80, 0x80]),  # JRZn
             41: (self._add_hl_n, ['h', 'l']),  # ADDHLHL
             42: (self._ld_a_hl_i, []),  # LDAHLI
             43: (self._dec_r_r, ['h', 'l']),  # DECHL
@@ -245,7 +245,7 @@ class GbZ80Cpu(object):
             45: (self._dec_r, ['l']),  # DECr_l
             46: (self._ld_rn, ['l']),  # LDrn_l
             47: (self.cpl, []),  # CPL
-            48: (self._raise_opcode_unimplemented, []),  # JRNCn
+            48: (self._jr_cc_n, [0x10, 0x00]),  # JRNCn
             49: (self._ld_sp_nn, []),  # LD SP nn
             50: (self._ld_hlmd_a, []),  # LDHLDA
             51: (self._inc_sp, []),  # INC SP
@@ -253,7 +253,7 @@ class GbZ80Cpu(object):
             53: (self._raise_opcode_unimplemented, []),  # DECHLm
             54: (self._ld_hlm_n, []),  # LDHLmn
             55: (self._raise_opcode_unimplemented, []),  # SCF
-            56: (self._raise_opcode_unimplemented, []),  # JRCn
+            56: (self._jr_cc_n, [0x10, 0x10]),  # JRCn
             57: (self._add_hl_sp, []),  # ADDHLSP
             58: (self._ld_a_hl_d, []),  # LDAHLD
             59: (self._dec_sp, []),  # DECSP
@@ -389,7 +389,7 @@ class GbZ80Cpu(object):
             189: (self._cp_n, ['l']),  # CPr_l
             190: (self._raise_opcode_unimplemented, []),  # CPHL
             191: (self._cp_n, ['a']),  # CPr_a
-            192: (self._raise_opcode_unimplemented, []),  # RETNZ
+            192: (self._ret_f, [0x80, 0x00]),  # RETNZ
             193: (self._pop_nn, ['b', 'c']),  # POPBC
             194: (self._raise_opcode_unimplemented, []),  # JPNZnn
             195: (self._jp_nn, []),  # JPnn
@@ -397,7 +397,7 @@ class GbZ80Cpu(object):
             197: (self._push_nn, ['b', 'c']),  # PUSHBC
             198: (self._raise_opcode_unimplemented, []),  # ADDn
             199: (self._rst_n, [0x00]),  # RST00
-            200: (self._raise_opcode_unimplemented, []),  # RETZ
+            200: (self._ret_f, [0x80, 0x80]),  # RETZ
             201: (self._ret, []),  # RET
             202: (self._raise_opcode_unimplemented, []),  # JPZnn
             203: (self._call_cb_op, []),  # MAPcb
@@ -405,7 +405,7 @@ class GbZ80Cpu(object):
             205: (self._call_nn, []),  # CALLnn
             206: (self._raise_opcode_unimplemented, []),  # ADCn
             207: (self._rst_n, [0x08]),  # RST08
-            208: (self._ret_nc, []),  # RETNC
+            208: (self._ret_f, [0x10, 0x00]),  # RETNC
             209: (self._pop_nn, ['d', 'e']),  # POPDE
             210: (self._raise_opcode_unimplemented, []),  # JPNCnn
             211: (self._raise_opcode_unimplemented, []),  # XX
@@ -413,7 +413,7 @@ class GbZ80Cpu(object):
             213: (self._push_nn, ['d', 'e']),  # PUSHDE
             214: (self._raise_opcode_unimplemented, []),  # SUBn
             215: (self._rst_n, [0x10]),  # RST10
-            216: (self._raise_opcode_unimplemented, []),  # RETC
+            216: (self._ret_f, [0x10, 0x10]),  # RETC
             217: (self._reti, []),  # RETI
             218: (self._raise_opcode_unimplemented, []),  # JPCnn
             219: (self._raise_opcode_unimplemented, []),  # XX
@@ -978,7 +978,7 @@ class GbZ80Cpu(object):
         self.registers['pc'] += i
         self.registers['m'] += 1
 
-    def jr_nz_n(self):
+    def _jr_cc_n(self, and_val, flag_check_value):
         """If Z flag reset, add n to current address and jump to it.
 
         n = one byte signed immediate value
@@ -988,7 +988,7 @@ class GbZ80Cpu(object):
             i = -((~i + 1)) & 255
         self.registers['pc'] += 1
         self.registers['m'] = 2
-        if (self.registers['f'] & 0x80) == 0x00:
+        if (self.registers['f'] & and_val) == flag_check_value:
             self.registers['pc'] += i
             self.registers['m'] += 1
 
@@ -1036,20 +1036,6 @@ class GbZ80Cpu(object):
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = self.read16(self.registers['pc'])
         self.registers['m'] = 5
-
-    def _ret(self):
-        """Pop two bytes from stack & jump to that address."""
-        self.registers['pc'] = self.read16(self.registers['sp'])
-        self.registers['sp'] += 2
-        self.registers['m'] = 3
-
-    def _ret_nc(self):
-        """Return if C flag is reset."""
-        self.registers['m'] = 1
-        if (self.registers['f'] & 0x10) == 0x00:
-            self.registers['pc'] = self.read16(self.registers['sp'])
-            self.registers['sp'] += 2
-            self.registers['m'] += 2
 
     # SUB / ADD
     def _sub_n(self, r):
@@ -1227,13 +1213,12 @@ class GbZ80Cpu(object):
         self.registers['f'] = 0 if self.registers['a'] else 0x80
         self.registers['m'] = 1
 
-    # Misc
-    def cpl(self):
-        """Compliment A register (bit flip)."""
-        self.registers['a'] = (~self.registers['a']) & 0xFF
-        self.registers['f'] &= 0x80
-        self.registers['f'] |= 0x60
-        self.registers['m'] = 1
+    # Returns
+    def _ret(self):
+        """Pop two bytes from stack & jump to that address."""
+        self.registers['pc'] = self.read16(self.registers['sp'])
+        self.registers['sp'] += 2
+        self.registers['m'] = 3
 
     def _rst_n(self, n):
         """Push present address onto stack and jump to address $0000 + n.
@@ -1257,6 +1242,14 @@ class GbZ80Cpu(object):
         self.registers['sp'] += 2
         self.registers['m'] = 3
 
+    def _ret_f(self, and_val, flag_check_value):
+        """Return if condition is true."""
+        self.registers['m'] = 1
+        if (self.registers['f'] & and_val) == flag_check_value:
+            self.registers['pc'] = self.read16(self.registers['sp'])
+            self.registers['sp'] += 2
+            self.registers['m'] += 2
+
     def _rsv(self):
         """Copy some values from registers into rsv."""
         for reg in ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'l']:
@@ -1266,6 +1259,14 @@ class GbZ80Cpu(object):
         """Copy values from rsv into registers."""
         for reg in ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'l']:
             self.registers[reg] = self.rsv[reg]
+
+    # Misc
+    def cpl(self):
+        """Compliment A register (bit flip)."""
+        self.registers['a'] = (~self.registers['a']) & 0xFF
+        self.registers['f'] &= 0x80
+        self.registers['f'] |= 0x60
+        self.registers['m'] = 1
 
 
 
