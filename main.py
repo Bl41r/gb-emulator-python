@@ -37,6 +37,7 @@ def main(filename):
         sys.exit(0)
 
     except (Exception, KeyboardInterrupt) as e:
+        print('\ncpu clock:', sys_interface.cpu.clock['m'])
         dump_logs(gb_memory.memory, cpu)
         raise e
 

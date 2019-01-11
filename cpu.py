@@ -120,37 +120,14 @@ Returns
 RET pcl   (SP), pch   (SP+1), SPSP+2    -   16
 RET cc  If cc is true, RET else continue.   If cc is true, 20 else 8.
 RETI    Return then enable interrupts.  16
-
-Terminology
------------
--   Flag is not affected by this operation.
-*   Flag is affected according to result of operation.
-b   A bit number in any 8-bit register or memory location.
-C   Carry flag.
-cc  Flag condition code: C,NC,NZ,Z
-d   Any 8-bit destination register or memory location.
-dd  Any 16-bit destination register or memory location.
-e   8-bit signed 2's complement displacement.
-f   8 special call locations in page zero.
-H   Half-carry flag.
-N   Subtraction flag.
-NC  Not carry flag
-NZ  Not zero flag.
-n   Any 8-bit binary number.
-nn  Any 16-bit binary number.
-r   Any 8-bit register. (A,B,C,D,E,H, or L)
-s   Any 8-bit source register or memory location.
-sb  A bit in a specific 8-bit register or memory location.
-ss  Any 16-bit source register or memory location.
-Z   Zero Flag.
 """
 
 import pdb
 
 
-FLAG_BITS = {
+FLAG = {
     'zero': 0x80,           # Z flag
-    'subtraction': 0x40,    # N flag
+    'sub': 0x40,    # N flag
     'half-carry': 0x20,     # H flag
     'carry': 0x10           # C flag
 }
@@ -197,262 +174,262 @@ class GbZ80Cpu(object):
 
         self.opcode_map = {
             # opcode number: func to call, args
-            0: (self._nop, []),  # NOP
-            1: (self._ld_r1r2_nn, ['b', 'c']),  # LDBCnn
-            2: (self._ld_r1r2m_a, ['b', 'c']),  # LDBCmA
-            3: (self._inc_r_r, ['b', 'c']),  # INCBC
-            4: (self._inc_r, ['b']),  # INCr_b
-            5: (self._dec_r, ['b']),  # DECr_b
-            6: (self._ld_rn, ['b']),  # LDrn_b
-            7: (self._rlc_a, []),  # RLCA
-            8: (self._ld_nn_sp, []),  # LDnnSP -- double check this one...
-            9: (self._add_hl_n, ['b', 'c']),  # ADDHLBC
-            10: (self._ld_a_r1r2m, ['b', 'c']),  # LDABCm
-            11: (self._dec_r_r, ['b', 'c']),  # DECBC
-            12: (self._inc_r, ['c']),  # INCr_c
-            13: (self._dec_r, ['c']),  # DECr_c
-            14: (self._ld_rn, ['c']),  # LDrn_c
-            15: (self._raise_opcode_unimplemented, []),  # RRCA
-            16: (self._raise_opcode_unimplemented, []),  # DJNZn
-            17: (self._ld_r1r2_nn, ['d', 'e']),  # LDDEnn
-            18: (self._ld_r1r2m_a, ['d', 'e']),  # LDDEmA
-            19: (self._inc_r_r, ['d', 'e']),  # INCDE
-            20: (self._inc_r, ['d']),  # INCr_d
-            21: (self._dec_r, ['d']),  # DECr_d
-            22: (self._ld_rn, ['d']),  # LDrn_d
-            23: (self._raise_opcode_unimplemented, []),  # RLA
-            24: (self._jr_n, []),  # JRn
-            25: (self._add_hl_n, ['d', 'e']),  # ADDHLDE
-            26: (self._ld_a_r1r2m, ['d', 'e']),  # LDADEm
-            27: (self._dec_r_r, ['d', 'e']),  # DECDE
-            28: (self._inc_r, ['e']),  # INCr_e
-            29: (self._dec_r, ['e']),  # DECr_e
-            30: (self._ld_rn, ['e']),  # LDrn_e
-            31: (self._raise_opcode_unimplemented, []),  # RRA
-            32: (self._jr_cc_n, [0x80, 0x00]),  # JRNZn
-            33: (self._ld_r1r2_nn, ['h', 'l']),  # LDHLnn
-            34: (self._ld_hlmi_a, []),  # LDHLIA
-            35: (self._inc_r_r, ['h', 'l']),  # INCHL
-            36: (self._inc_r, ['h']),  # INCr_h
-            37: (self._dec_r, ['h']),  # DECr_h
-            38: (self._ld_rn, ['h']),  # LDrn_h
-            39: (self._raise_opcode_unimplemented, []),  # XX
-            40: (self._jr_cc_n, [0x80, 0x80]),  # JRZn
-            41: (self._add_hl_n, ['h', 'l']),  # ADDHLHL
-            42: (self._ld_a_hl_i, []),  # LDAHLI
-            43: (self._dec_r_r, ['h', 'l']),  # DECHL
-            44: (self._inc_r, ['l']),  # INCr_l
-            45: (self._dec_r, ['l']),  # DECr_l
-            46: (self._ld_rn, ['l']),  # LDrn_l
-            47: (self.cpl, []),  # CPL
-            48: (self._jr_cc_n, [0x10, 0x00]),  # JRNCn
-            49: (self._ld_sp_nn, []),  # LD SP nn
-            50: (self._ld_hlmd_a, []),  # LDHLDA
-            51: (self._inc_sp, []),  # INC SP
-            52: (self._raise_opcode_unimplemented, []),  # INCHLm
-            53: (self._raise_opcode_unimplemented, []),  # DECHLm
-            54: (self._ld_hlm_n, []),  # LDHLmn
-            55: (self._scf, []),  # SCF
-            56: (self._jr_cc_n, [0x10, 0x10]),  # JRCn
-            57: (self._add_hl_sp, []),  # ADDHLSP
-            58: (self._ld_a_hl_d, []),  # LDAHLD
-            59: (self._dec_sp, []),  # DECSP
-            60: (self._inc_r, ['a']),  # INCr_a
-            61: (self._dec_r, ['a']),  # DECr_a
-            62: (self._ld_rn, ['a']),  # LDrn_a
-            63: (self._raise_opcode_unimplemented, []),  # CCF
-            64: (self._ld_rr, ['b', 'b']),  # LDrr_bb (nop?)
-            65: (self._ld_rr, ['b', 'c']),  # LDrr_bc
-            66: (self._ld_rr, ['b', 'd']),  # LDrr_bd
-            67: (self._ld_rr, ['b', 'e']),  # LDrr_be
-            68: (self._ld_rr, ['b', 'h']),  # LDrr_bh
-            69: (self._ld_rr, ['b', 'l']),  # LDrr_bl
-            70: (self._ld_r_hlm, ['b']),  # LDrHLm_b
-            71: (self._ld_rr, ['b', 'a']),  # LDrr_ba
-            72: (self._ld_rr, ['c', 'b']),  # LDrr_cb
-            73: (self._ld_rr, ['c', 'c']),  # LDrr_cc (nop?)
-            74: (self._ld_rr, ['c', 'd']),  # LDrr_cd
-            75: (self._ld_rr, ['c', 'e']),  # LDrr_ce
-            76: (self._ld_rr, ['c', 'h']),  # LDrr_ch
-            77: (self._ld_rr, ['c', 'l']),  # LDrr_cl
-            78: (self._ld_r_hlm, ['c']),  # LDrHLm_c
-            79: (self._ld_rr, ['c', 'a']),  # LDrr_ca
-            80: (self._ld_rr, ['d', 'b']),  # LDrr_db
-            81: (self._ld_rr, ['d', 'c']),  # LDrr_dc
-            82: (self._ld_rr, ['d', 'd']),  # LDrr_dd (nop?)
-            83: (self._ld_rr, ['d', 'e']),  # LDrr_de
-            84: (self._ld_rr, ['d', 'h']),  # LDrr_dh
-            85: (self._ld_rr, ['d', 'l']),  # LDrr_dl
-            86: (self._ld_r_hlm, ['d']),  # LDrHLm_d
-            87: (self._ld_rr, ['d', 'a']),  # LDrr_da
-            88: (self._ld_rr, ['e', 'b']),  # LDrr_eb
-            89: (self._ld_rr, ['e', 'c']),  # LDrr_ec
-            90: (self._ld_rr, ['e', 'd']),  # LDrr_ed
-            91: (self._ld_rr, ['e', 'e']),  # LDrr_ee (nop?)
-            92: (self._ld_rr, ['e', 'h']),  # LDrr_eh
-            93: (self._ld_rr, ['e', 'l']),  # LDrr_el
-            94: (self._ld_r_hlm, ['e']),  # LDrHLm_e
-            95: (self._ld_rr, ['e', 'a']),  # LDrr_ea
-            96: (self._ld_rr, ['h', 'b']),  # LDrr_hb
-            97: (self._ld_rr, ['h', 'c']),  # LDrr_hc
-            98: (self._ld_rr, ['h', 'd']),  # LDrr_hd
-            99: (self._ld_rr, ['h', 'e']),  # LDrr_he
-            100: (self._ld_rr, ['h', 'h']),  # LDrr_hh (nop?)
-            101: (self._ld_rr, ['h', 'l']),  # LDrr_hl
-            102: (self._ld_r_hlm, ['h']),  # LDrHLm_h
-            103: (self._ld_rr, ['h', 'a']),  # LDrr_ha
-            104: (self._ld_rr, ['l', 'b']),  # LDrr_lb
-            105: (self._ld_rr, ['l', 'c']),  # LDrr_lc
-            106: (self._ld_rr, ['l', 'd']),  # LDrr_ld
-            107: (self._ld_rr, ['l', 'e']),  # LDrr_le
-            108: (self._ld_rr, ['l', 'h']),  # LDrr_lh
-            109: (self._ld_rr, ['l', 'l']),  # LDrr_ll (nop?)
-            110: (self._ld_r_hlm, ['l']),  # LDrHLm_l
-            111: (self._ld_rr, ['l', 'a']),  # LDrr_la
-            112: (self._ld_hlm_r, ['b']),  # LDHLmr_b
-            113: (self._ld_hlm_r, ['c']),  # LDHLmr_c
-            114: (self._ld_hlm_r, ['d']),  # LDHLmr_d
-            115: (self._ld_hlm_r, ['e']),  # LDHLmr_e
-            116: (self._ld_hlm_r, ['h']),  # LDHLmr_h
-            117: (self._ld_hlm_r, ['l']),  # LDHLmr_l
-            118: (self._raise_opcode_unimplemented, []),  # HALT
-            119: (self._ld_hlm_r, ['a']),  # LDHLmr_a
-            120: (self._ld_rr, ['a', 'b']),  # LDrr_ab
-            121: (self._ld_rr, ['a', 'c']),  # LDrr_ac
-            122: (self._ld_rr, ['a', 'd']),  # LDrr_ad
-            123: (self._ld_rr, ['a', 'e']),  # LDrr_ae
-            124: (self._ld_rr, ['a', 'h']),  # LDrr_ah
-            125: (self._ld_rr, ['a', 'l']),  # LDrr_al
-            126: (self._ld_r_hlm, ['a']),  # LDrHLm_a
-            127: (self._ld_rr, ['a', 'a']),  # LDrr_aa (nop?)
-            128: (self._add_a_n, ['b']),  # ADDr_b
-            129: (self._add_a_n, ['c']),  # ADDr_c
-            130: (self._add_a_n, ['d']),  # ADDr_d
-            131: (self._add_a_n, ['e']),  # ADDr_e
-            132: (self._add_a_n, ['h']),  # ADDr_h
-            133: (self._add_a_n, ['l']),  # ADDr_l
-            134: (self._raise_opcode_unimplemented, []),  # ADDHL
-            135: (self._add_a_n, ['a']),  # ADDr_a
-            136: (self._raise_opcode_unimplemented, []),  # ADCr_b
-            137: (self._raise_opcode_unimplemented, []),  # ADCr_c
-            138: (self._raise_opcode_unimplemented, []),  # ADCr_d
-            139: (self._raise_opcode_unimplemented, []),  # ADCr_e
-            140: (self._raise_opcode_unimplemented, []),  # ADCr_h
-            141: (self._raise_opcode_unimplemented, []),  # ADCr_l
-            142: (self._raise_opcode_unimplemented, []),  # ADCHL
-            143: (self._raise_opcode_unimplemented, []),  # ADCr_a
-            144: (self._sub_n, ['b']),  # SUBr_b
-            145: (self._sub_n, ['c']),  # SUBr_c
-            146: (self._sub_n, ['d']),  # SUBr_d
-            147: (self._sub_n, ['e']),  # SUBr_e
-            148: (self._sub_n, ['h']),  # SUBr_h
-            149: (self._sub_n, ['l']),  # SUBr_l
-            150: (self._raise_opcode_unimplemented, []),  # SUBHL
-            151: (self._sub_n, ['a']),  # SUBr_a
-            152: (self._sub_a_n, ['b']),  # SBCr_b
-            153: (self._sub_a_n, ['c']),  # SBCr_c
-            154: (self._sub_a_n, ['d']),  # SBCr_d
-            155: (self._sub_a_n, ['e']),  # SBCr_e
-            156: (self._sub_a_n, ['h']),  # SBCr_h
-            157: (self._sub_a_n, ['l']),  # SBCr_l
-            158: (self._raise_opcode_unimplemented, []),  # SBCHL
-            159: (self._sub_a_n, ['a']),  # SBCr_a
-            160: (self._and_n, ['b']),  # ANDr_b
-            161: (self._and_n, ['c']),  # ANDr_c
-            162: (self._and_n, ['d']),  # ANDr_d
-            163: (self._and_n, ['e']),  # ANDr_e
-            164: (self._and_n, ['h']),  # ANDr_h
-            165: (self._and_n, ['l']),  # ANDr_l
-            166: (self._and_n, ['hl']),  # ANDHL
-            167: (self._and_n, ['a']),  # ANDr_a
-            168: (self._xor_a_n, ['b']),  # XORr_b
-            169: (self._xor_a_n, ['c']),  # XORr_c
-            170: (self._xor_a_n, ['d']),  # XORr_d
-            171: (self._xor_a_n, ['e']),  # XORr_e
-            172: (self._xor_a_n, ['h']),  # XORr_h
-            173: (self._xor_a_n, ['l']),  # XORr_l
-            174: (self._raise_opcode_unimplemented, []),  # XORHL
-            175: (self._xor_a_n, ['a']),  # XORr_a
-            176: (self._or_n, ['b']),  # ORr_b
-            177: (self._or_n, ['c']),  # ORr_c
-            178: (self._or_n, ['d']),  # ORr_d
-            179: (self._or_n, ['e']),  # ORr_e
-            180: (self._or_n, ['h']),  # ORr_h
-            181: (self._or_n, ['l']),  # ORr_l
-            182: (self._raise_opcode_unimplemented, []),  # ORHL
-            183: (self._or_n, ['a']),  # ORr_a
-            184: (self._cp_n, ['b']),  # CPr_b
-            185: (self._cp_n, ['c']),  # CPr_c
-            186: (self._cp_n, ['d']),  # CPr_d
-            187: (self._cp_n, ['e']),  # CPr_e
-            188: (self._cp_n, ['h']),  # CPr_h
-            189: (self._cp_n, ['l']),  # CPr_l
-            190: (self._raise_opcode_unimplemented, []),  # CPHL
-            191: (self._cp_n, ['a']),  # CPr_a
-            192: (self._ret_f, [0x80, 0x00]),  # RETNZ
-            193: (self._pop_nn, ['b', 'c']),  # POPBC
-            194: (self._jp_cc_nn, [0x80, 0x00]),  # JPNZnn
-            195: (self._jp_nn, []),  # JPnn
-            196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
-            197: (self._push_nn, ['b', 'c']),  # PUSHBC
-            198: (self._raise_opcode_unimplemented, []),  # ADDn
-            199: (self._rst_n, [0x00]),  # RST00
-            200: (self._ret_f, [0x80, 0x80]),  # RETZ
-            201: (self._ret, []),  # RET
-            202: (self._jp_cc_nn, [0x80, 0x80]),  # JPZnn
-            203: (self._call_cb_op, []),  # MAPcb
-            204: (self._raise_opcode_unimplemented, []),  # CALLZnn
-            205: (self._call_nn, []),  # CALLnn
-            206: (self._raise_opcode_unimplemented, []),  # ADCn
-            207: (self._rst_n, [0x08]),  # RST08
-            208: (self._ret_f, [0x10, 0x00]),  # RETNC
-            209: (self._pop_nn, ['d', 'e']),  # POPDE
-            210: (self._raise_opcode_unimplemented, [0x10, 0x00]),  # JPNCnn
-            211: (self._raise_opcode_unimplemented, []),  # XX
-            212: (self._raise_opcode_unimplemented, []),  # CALLNCnn
-            213: (self._push_nn, ['d', 'e']),  # PUSHDE
-            214: (self._raise_opcode_unimplemented, []),  # SUBn
-            215: (self._rst_n, [0x10]),  # RST10
-            216: (self._ret_f, [0x10, 0x10]),  # RETC
-            217: (self._reti, []),  # RETI
-            218: (self._jp_cc_nn, [0x10, 0x10]),  # JPCnn
-            219: (self._raise_opcode_unimplemented, []),  # XX
-            220: (self._raise_opcode_unimplemented, []),  # CALLCnn
-            221: (self._raise_opcode_unimplemented, []),  # XX
-            222: (self._raise_opcode_unimplemented, []),  # SBCn
-            223: (self._rst_n, [0x18]),  # RST18
-            224: (self._ldh_n_a, []),  # LDIOnA
-            225: (self._pop_nn, ['h', 'l']),  # POPHL
-            226: (self._ld_c_a, []),  # LDIOCA
-            227: (self._raise_opcode_unimplemented, []),  # XX
-            228: (self._raise_opcode_unimplemented, []),  # XX
-            229: (self._push_nn, ['h', 'l']),  # PUSHHL
-            230: (self._and_n, ['pc']),  # ANDn
-            231: (self._rst_n, [0x20]),  # RST20
-            232: (self._add_sp_n, []),  # ADDSPn
-            233: (self._raise_opcode_unimplemented, []),  # JPHL
-            234: (self._ld_nn_a, []),  # LD nn A
-            235: (self._raise_opcode_unimplemented, []),  # XX
-            236: (self._raise_opcode_unimplemented, []),  # XX
-            237: (self._raise_opcode_unimplemented, []),  # XX
-            238: (self._raise_opcode_unimplemented, []),  # ORn
-            239: (self._rst_n, [0x28]),  # RST28
-            240: (self._ldh_a_n, []),  # LD AIO n
-            241: (self._pop_nn, ['a', 'f']),  # POPAF
-            242: (self._ld_a_c, []),  # LDAIOC
-            243: (self._di, []),  # DI
-            244: (self._raise_opcode_unimplemented, []),  # XX
-            245: (self._push_nn, ['a', 'f']),  # PUSHAF
-            246: (self._xor_n, []),  # XORn
-            247: (self._rst_n, [0x30]),  # RST30
-            248: (self._ld_hl_sp_n, []),  # LD HL SP+n
-            249: (self._ld_sp_hl, []),  # LS SP HL
-            250: (self._ld_a_nn, []),  # LD A nn
-            251: (self._ei, []),  # EI
-            252: (self._raise_opcode_unimplemented, []),  # XX
-            253: (self._raise_opcode_unimplemented, []),  # XX
-            254: (self._cp_n, ['pc']),  # CPn
-            255: (self._rst_n, [0x38]),  # RST38
+            0: (self._nop, ()),  # NOP
+            1: (self._ld_r1r2_nn, ('b', 'c')),  # LDBCnn
+            2: (self._ld_r1r2m_a, ('b', 'c')),  # LDBCmA
+            3: (self._inc_r_r, ('b', 'c')),  # INCBC
+            4: (self._inc_r, ('b',)),  # INCr_b
+            5: (self._dec_r, ('b',)),  # DECr_b
+            6: (self._ld_rn, ('b',)),  # LDrn_b
+            7: (self._rlc_a, ()),  # RLCA
+            8: (self._ld_nn_sp, ()),  # LDnnSP -- double check this one...
+            9: (self._add_hl_n, ('b', 'c')),  # ADDHLBC
+            10: (self._ld_a_r1r2m, ('b', 'c')),  # LDABCm
+            11: (self._dec_r_r, ('b', 'c')),  # DECBC
+            12: (self._inc_r, ('c',)),  # INCr_c
+            13: (self._dec_r, ('c',)),  # DECr_c
+            14: (self._ld_rn, ('c',)),  # LDrn_c
+            15: (self._raise_opcode_unimplemented, ()),  # RRCA
+            16: (self._raise_opcode_unimplemented, ()),  # DJNZn
+            17: (self._ld_r1r2_nn, ('d', 'e')),  # LDDEnn
+            18: (self._ld_r1r2m_a, ('d', 'e')),  # LDDEmA
+            19: (self._inc_r_r, ('d', 'e')),  # INCDE
+            20: (self._inc_r, ('d',)),  # INCr_d
+            21: (self._dec_r, ('d',)),  # DECr_d
+            22: (self._ld_rn, ('d',)),  # LDrn_d
+            23: (self._raise_opcode_unimplemented, ()),  # RLA
+            24: (self._jr_n, ()),  # JRn
+            25: (self._add_hl_n, ('d', 'e')),  # ADDHLDE
+            26: (self._ld_a_r1r2m, ('d', 'e')),  # LDADEm
+            27: (self._dec_r_r, ('d', 'e')),  # DECDE
+            28: (self._inc_r, ('e',)),  # INCr_e
+            29: (self._dec_r, ('e',)),  # DECr_e
+            30: (self._ld_rn, ('e',)),  # LDrn_e
+            31: (self._raise_opcode_unimplemented, ()),  # RRA
+            32: (self._jr_cc_n, (FLAG['zero'], 0x00)),  # JRNZn
+            33: (self._ld_r1r2_nn, ('h', 'l')),  # LDHLnn
+            34: (self._ld_hlmi_a, ()),  # LDHLIA
+            35: (self._inc_r_r, ('h', 'l')),  # INCHL
+            36: (self._inc_r, ('h',)),  # INCr_h
+            37: (self._dec_r, ('h',)),  # DECr_h
+            38: (self._ld_rn, ('h',)),  # LDrn_h
+            39: (self._raise_opcode_unimplemented, ()),  # XX
+            40: (self._jr_cc_n, (FLAG['zero'], FLAG['zero'])),  # JRZn
+            41: (self._add_hl_n, ('h', 'l')),  # ADDHLHL
+            42: (self._ld_a_hl_i, ()),  # LDAHLI
+            43: (self._dec_r_r, ('h', 'l')),  # DECHL
+            44: (self._inc_r, ('l',)),  # INCr_l
+            45: (self._dec_r, ('l',)),  # DECr_l
+            46: (self._ld_rn, ('l',)),  # LDrn_l
+            47: (self.cpl, ()),  # CPL
+            48: (self._jr_cc_n, (0x10, 0x00)),  # JRNCn
+            49: (self._ld_sp_nn, ()),  # LD SP nn
+            50: (self._ld_hlmd_a, ()),  # LDHLDA
+            51: (self._inc_sp, ()),  # INC SP
+            52: (self._raise_opcode_unimplemented, ()),  # INCHLm
+            53: (self._raise_opcode_unimplemented, ()),  # DECHLm
+            54: (self._ld_hlm_n, ()),  # LDHLmn
+            55: (self._scf, ()),  # SCF
+            56: (self._jr_cc_n, (0x10, 0x10)),  # JRCn
+            57: (self._add_hl_sp, ()),  # ADDHLSP
+            58: (self._ld_a_hl_d, ()),  # LDAHLD
+            59: (self._dec_sp, ()),  # DECSP
+            60: (self._inc_r, ('a',)),  # INCr_a
+            61: (self._dec_r, ('a',)),  # DECr_a
+            62: (self._ld_rn, ('a',)),  # LDrn_a
+            63: (self._raise_opcode_unimplemented, ()),  # CCF
+            64: (self._ld_rr, ('b', 'b')),  # LDrr_bb (nop?)
+            65: (self._ld_rr, ('b', 'c')),  # LDrr_bc
+            66: (self._ld_rr, ('b', 'd')),  # LDrr_bd
+            67: (self._ld_rr, ('b', 'e')),  # LDrr_be
+            68: (self._ld_rr, ('b', 'h')),  # LDrr_bh
+            69: (self._ld_rr, ('b', 'l')),  # LDrr_bl
+            70: (self._ld_r_hlm, ('b',)),  # LDrHLm_b
+            71: (self._ld_rr, ('b', 'a')),  # LDrr_ba
+            72: (self._ld_rr, ('c', 'b')),  # LDrr_cb
+            73: (self._ld_rr, ('c', 'c')),  # LDrr_cc (nop?)
+            74: (self._ld_rr, ('c', 'd')),  # LDrr_cd
+            75: (self._ld_rr, ('c', 'e')),  # LDrr_ce
+            76: (self._ld_rr, ('c', 'h')),  # LDrr_ch
+            77: (self._ld_rr, ('c', 'l')),  # LDrr_cl
+            78: (self._ld_r_hlm, ('c',)),  # LDrHLm_c
+            79: (self._ld_rr, ('c', 'a')),  # LDrr_ca
+            80: (self._ld_rr, ('d', 'b')),  # LDrr_db
+            81: (self._ld_rr, ('d', 'c')),  # LDrr_dc
+            82: (self._ld_rr, ('d', 'd')),  # LDrr_dd (nop?)
+            83: (self._ld_rr, ('d', 'e')),  # LDrr_de
+            84: (self._ld_rr, ('d', 'h')),  # LDrr_dh
+            85: (self._ld_rr, ('d', 'l')),  # LDrr_dl
+            86: (self._ld_r_hlm, ('d',)),  # LDrHLm_d
+            87: (self._ld_rr, ('d', 'a')),  # LDrr_da
+            88: (self._ld_rr, ('e', 'b')),  # LDrr_eb
+            89: (self._ld_rr, ('e', 'c')),  # LDrr_ec
+            90: (self._ld_rr, ('e', 'd')),  # LDrr_ed
+            91: (self._ld_rr, ('e', 'e')),  # LDrr_ee (nop?)
+            92: (self._ld_rr, ('e', 'h')),  # LDrr_eh
+            93: (self._ld_rr, ('e', 'l')),  # LDrr_el
+            94: (self._ld_r_hlm, ('e',)),  # LDrHLm_e
+            95: (self._ld_rr, ('e', 'a')),  # LDrr_ea
+            96: (self._ld_rr, ('h', 'b')),  # LDrr_hb
+            97: (self._ld_rr, ('h', 'c')),  # LDrr_hc
+            98: (self._ld_rr, ('h', 'd')),  # LDrr_hd
+            99: (self._ld_rr, ('h', 'e')),  # LDrr_he
+            100: (self._ld_rr, ('h', 'h')),  # LDrr_hh (nop?)
+            101: (self._ld_rr, ('h', 'l')),  # LDrr_hl
+            102: (self._ld_r_hlm, ('h',)),  # LDrHLm_h
+            103: (self._ld_rr, ('h', 'a')),  # LDrr_ha
+            104: (self._ld_rr, ('l', 'b')),  # LDrr_lb
+            105: (self._ld_rr, ('l', 'c')),  # LDrr_lc
+            106: (self._ld_rr, ('l', 'd')),  # LDrr_ld
+            107: (self._ld_rr, ('l', 'e')),  # LDrr_le
+            108: (self._ld_rr, ('l', 'h')),  # LDrr_lh
+            109: (self._ld_rr, ('l', 'l')),  # LDrr_ll (nop?)
+            110: (self._ld_r_hlm, ('l',)),  # LDrHLm_l
+            111: (self._ld_rr, ('l', 'a')),  # LDrr_la
+            112: (self._ld_hlm_r, ('b',)),  # LDHLmr_b
+            113: (self._ld_hlm_r, ('c',)),  # LDHLmr_c
+            114: (self._ld_hlm_r, ('d',)),  # LDHLmr_d
+            115: (self._ld_hlm_r, ('e',)),  # LDHLmr_e
+            116: (self._ld_hlm_r, ('h',)),  # LDHLmr_h
+            117: (self._ld_hlm_r, ('l',)),  # LDHLmr_l
+            118: (self._raise_opcode_unimplemented, ()),  # HALT
+            119: (self._ld_hlm_r, ('a',)),  # LDHLmr_a
+            120: (self._ld_rr, ('a', 'b')),  # LDrr_ab
+            121: (self._ld_rr, ('a', 'c')),  # LDrr_ac
+            122: (self._ld_rr, ('a', 'd')),  # LDrr_ad
+            123: (self._ld_rr, ('a', 'e')),  # LDrr_ae
+            124: (self._ld_rr, ('a', 'h')),  # LDrr_ah
+            125: (self._ld_rr, ('a', 'l')),  # LDrr_al
+            126: (self._ld_r_hlm, ('a',)),  # LDrHLm_a
+            127: (self._ld_rr, ('a', 'a')),  # LDrr_aa (nop?)
+            128: (self._add_a_n, ('b',)),  # ADDr_b
+            129: (self._add_a_n, ('c',)),  # ADDr_c
+            130: (self._add_a_n, ('d',)),  # ADDr_d
+            131: (self._add_a_n, ('e',)),  # ADDr_e
+            132: (self._add_a_n, ('h',)),  # ADDr_h
+            133: (self._add_a_n, ('l',)),  # ADDr_l
+            134: (self._raise_opcode_unimplemented, ()),  # ADDHL
+            135: (self._add_a_n, ('a',)),  # ADDr_a
+            136: (self._raise_opcode_unimplemented, ()),  # ADCr_b
+            137: (self._raise_opcode_unimplemented, ()),  # ADCr_c
+            138: (self._raise_opcode_unimplemented, ()),  # ADCr_d
+            139: (self._raise_opcode_unimplemented, ()),  # ADCr_e
+            140: (self._raise_opcode_unimplemented, ()),  # ADCr_h
+            141: (self._raise_opcode_unimplemented, ()),  # ADCr_l
+            142: (self._raise_opcode_unimplemented, ()),  # ADCHL
+            143: (self._raise_opcode_unimplemented, ()),  # ADCr_a
+            144: (self._sub_n, ('b',)),  # SUBr_b
+            145: (self._sub_n, ('c',)),  # SUBr_c
+            146: (self._sub_n, ('d',)),  # SUBr_d
+            147: (self._sub_n, ('e',)),  # SUBr_e
+            148: (self._sub_n, ('h',)),  # SUBr_h
+            149: (self._sub_n, ('l',)),  # SUBr_l
+            150: (self._raise_opcode_unimplemented, ()),  # SUBHL
+            151: (self._sub_n, ('a',)),  # SUBr_a
+            152: (self._sub_a_n, ('b',)),  # SBCr_b
+            153: (self._sub_a_n, ('c',)),  # SBCr_c
+            154: (self._sub_a_n, ('d',)),  # SBCr_d
+            155: (self._sub_a_n, ('e',)),  # SBCr_e
+            156: (self._sub_a_n, ('h',)),  # SBCr_h
+            157: (self._sub_a_n, ('l',)),  # SBCr_l
+            158: (self._raise_opcode_unimplemented, ()),  # SBCHL
+            159: (self._sub_a_n, ('a',)),  # SBCr_a
+            160: (self._and_n, ('b',)),  # ANDr_b
+            161: (self._and_n, ('c',)),  # ANDr_c
+            162: (self._and_n, ('d',)),  # ANDr_d
+            163: (self._and_n, ('e',)),  # ANDr_e
+            164: (self._and_n, ('h',)),  # ANDr_h
+            165: (self._and_n, ('l',)),  # ANDr_l
+            166: (self._and_n, ('hl',)),  # ANDHL
+            167: (self._and_n, ('a',)),  # ANDr_a
+            168: (self._xor_a_n, ('b',)),  # XORr_b
+            169: (self._xor_a_n, ('c',)),  # XORr_c
+            170: (self._xor_a_n, ('d',)),  # XORr_d
+            171: (self._xor_a_n, ('e',)),  # XORr_e
+            172: (self._xor_a_n, ('h',)),  # XORr_h
+            173: (self._xor_a_n, ('l',)),  # XORr_l
+            174: (self._raise_opcode_unimplemented, ()),  # XORHL
+            175: (self._xor_a_n, ('a',)),  # XORr_a
+            176: (self._or_n, ('b',)),  # ORr_b
+            177: (self._or_n, ('c',)),  # ORr_c
+            178: (self._or_n, ('d',)),  # ORr_d
+            179: (self._or_n, ('e',)),  # ORr_e
+            180: (self._or_n, ('h',)),  # ORr_h
+            181: (self._or_n, ('l',)),  # ORr_l
+            182: (self._raise_opcode_unimplemented, ()),  # ORHL
+            183: (self._or_n, ('a',)),  # ORr_a
+            184: (self._cp_n, ('b',)),  # CPr_b
+            185: (self._cp_n, ('c',)),  # CPr_c
+            186: (self._cp_n, ('d',)),  # CPr_d
+            187: (self._cp_n, ('e',)),  # CPr_e
+            188: (self._cp_n, ('h',)),  # CPr_h
+            189: (self._cp_n, ('l',)),  # CPr_l
+            190: (self._raise_opcode_unimplemented, ()),  # CPHL
+            191: (self._cp_n, ('a',)),  # CPr_a
+            192: (self._ret_f, (FLAG['zero'], 0x00)),  # RETNZ
+            193: (self._pop_nn, ('b', 'c')),  # POPBC
+            194: (self._jp_cc_nn, (FLAG['zero'], 0x00)),  # JPNZnn
+            195: (self._jp_nn, ()),  # JPnn
+            196: (self._raise_opcode_unimplemented, ()),  # CALLNZnn
+            197: (self._push_nn, ('b', 'c')),  # PUSHBC
+            198: (self._raise_opcode_unimplemented, ()),  # ADDn
+            199: (self._rst_n, (0x00,)),  # RST00
+            200: (self._ret_f, (FLAG['zero'], FLAG['zero'])),  # RETZ
+            201: (self._ret, ()),  # RET
+            202: (self._jp_cc_nn, (FLAG['zero'], FLAG['zero'])),  # JPZnn
+            203: (self._call_cb_op, ()),  # MAPcb
+            204: (self._raise_opcode_unimplemented, ()),  # CALLZnn
+            205: (self._call_nn, ()),  # CALLnn
+            206: (self._raise_opcode_unimplemented, ()),  # ADCn
+            207: (self._rst_n, (0x08,)),  # RST08
+            208: (self._ret_f, (FLAG['carry'], 0x00)),  # RETNC
+            209: (self._pop_nn, ('d', 'e')),  # POPDE
+            210: (self._jp_cc_nn, (FLAG['carry'], 0x00)),  # JPNCnn
+            211: (self._raise_opcode_unimplemented, ()),  # XX
+            212: (self._raise_opcode_unimplemented, ()),  # CALLNCnn
+            213: (self._push_nn, ('d', 'e')),  # PUSHDE
+            214: (self._raise_opcode_unimplemented, ()),  # SUBn
+            215: (self._rst_n, (FLAG['carry'],)),  # RST10
+            216: (self._ret_f, (FLAG['carry'], FLAG['carry'])),  # RETC
+            217: (self._reti, ()),  # RETI
+            218: (self._jp_cc_nn, (FLAG['carry'], FLAG['carry'])),  # JPCnn
+            219: (self._raise_opcode_unimplemented, ()),  # XX
+            220: (self._raise_opcode_unimplemented, ()),  # CALLCnn
+            221: (self._raise_opcode_unimplemented, ()),  # XX
+            222: (self._raise_opcode_unimplemented, ()),  # SBCn
+            223: (self._rst_n, (0x18,)),  # RST18
+            224: (self._ldh_n_a, ()),  # LDIOnA
+            225: (self._pop_nn, ('h', 'l')),  # POPHL
+            226: (self._ld_c_a, ()),  # LDIOCA
+            227: (self._raise_opcode_unimplemented, ()),  # XX
+            228: (self._raise_opcode_unimplemented, ()),  # XX
+            229: (self._push_nn, ('h', 'l')),  # PUSHHL
+            230: (self._and_n, ('pc',)),  # ANDn
+            231: (self._rst_n, (FLAG['half-carry'],)),  # RST20
+            232: (self._add_sp_n, ()),  # ADDSPn
+            233: (self._raise_opcode_unimplemented, ()),  # JPHL
+            234: (self._ld_nn_a, ()),  # LD nn A
+            235: (self._raise_opcode_unimplemented, ()),  # XX
+            236: (self._raise_opcode_unimplemented, ()),  # XX
+            237: (self._raise_opcode_unimplemented, ()),  # XX
+            238: (self._raise_opcode_unimplemented, ()),  # ORn
+            239: (self._rst_n, (0x28)),  # RST28
+            240: (self._ldh_a_n, ()),  # LD AIO n
+            241: (self._pop_nn, ('a', 'f')),  # POPAF
+            242: (self._ld_a_c, ()),  # LDAIOC
+            243: (self._di, ()),  # DI
+            244: (self._raise_opcode_unimplemented, ()),  # XX
+            245: (self._push_nn, ('a', 'f')),  # PUSHAF
+            246: (self._xor_n, ()),  # XORn
+            247: (self._rst_n, (0x30,)),  # RST30
+            248: (self._ld_hl_sp_n, ()),  # LD HL SP+n
+            249: (self._ld_sp_hl, ()),  # LS SP HL
+            250: (self._ld_a_nn, ()),  # LD A nn
+            251: (self._ei, ()),  # EI
+            252: (self._raise_opcode_unimplemented, ()),  # XX
+            253: (self._raise_opcode_unimplemented, ()),  # XX
+            254: (self._cp_n, ('pc',)),  # CPn
+            255: (self._rst_n, (0x38,)),  # RST38
         }
 
         self.cb_map = {
@@ -719,12 +696,12 @@ class GbZ80Cpu(object):
         global my_counter
         my_counter += 1
         op = self.read8(self.registers['pc'])
-        print('--------------------')
-        print("registers before exec:", self.registers)
+        # print('--------------------')
+        # print("registers before exec:", self.registers)
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
-        print("op:", op)
+        # print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
         opcode, args = instruction[0], instruction[1]
 
         # if op == 254:
@@ -733,7 +710,7 @@ class GbZ80Cpu(object):
 
         opcode(*args)
         self._inc_clock()
-        print("registers after exec:", self.registers)
+        # print("registers after exec:", self.registers)
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -948,9 +925,9 @@ class GbZ80Cpu(object):
         self.registers['f'] = 0
         xor_result = (self.registers['sp'] ^ n ^ result)
         if (xor_result & 0x100) == 0x100:
-            self._toggle_flag(FLAG_BITS['carry'])
-        if (xor_result & 0x10) == 0x10:
-            self._toggle_flag(FLAG_BITS['half-carry'])
+            self._toggle_flag(FLAG['carry'])
+        if (xor_result & 0x10) == FLAG['carry']:
+            self._toggle_flag(FLAG['half-carry'])
 
         self.registers['h'] = (result >> 8) & 255
         self.registers['l'] = result & 255
@@ -959,7 +936,8 @@ class GbZ80Cpu(object):
 
     def _ld_sp_hl(self):
         """Put HL into SP."""
-        self.registers['sp'] = (self.registers['h'] << 8) + self.registers['l']
+        h_shift = (self.registers['h'] << 8)
+        self.registers['sp'] = h_shift + self.registers['l']
         self.registers['m'] = 2
 
     # Jumps
@@ -1061,26 +1039,29 @@ class GbZ80Cpu(object):
         """
         a = self.registers['a']
         self.registers['a'] -= self.registers[r]
-        self.registers['f'] = 0x50 if self.registers['a'] < 0 else 0x40
+        self.registers['f'] = 0x50 if self.registers['a'] < 0 else FLAG['sub']
         self.registers['a'] &= 255
 
         if not self.registers['a']:
-            self.registers['f'] |= 0x80
-        if ((self.registers['a'] ^ self.registers[r] ^ a) & 0x10):
-            self.registers['f'] |= 0x20
+            self.registers['f'] |= FLAG['zero']
+        if ((self.registers['a'] ^ self.registers[r] ^ a) & FLAG['carry']):
+            self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 1
 
     def _sub_a_n(self, n):
         """Subtract n + Carry flag from A."""
         a = self.registers['a']
         self.registers['a'] -= self.registers[n]
-        self.registers['a'] -= 1 if (self.registers['f'] & 0x10) else 0
-        self.registers['f'] = 0x50 if self.registers['a'] < 0 else 0x40
+        self.registers['a'] -= 1 \
+            if (self.registers['f'] & FLAG['carry']) else 0
+
+        self.registers['f'] = 0x50 if self.registers['a'] < 0 else FLAG['sub']
         self.registers['a'] &= 255
+    
         if not self.registers['a']:
-            self.registers['f'] |= 0x80
-        if (self.registers['a'] ^ self.registers[n] ^ a) & 0x10:
-            self.registers['f'] |= 0x20
+            self.registers['f'] |= FLAG['zero']
+        if (self.registers['a'] ^ self.registers[n] ^ a) & FLAG['carry']:
+            self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 1
 
     def _cp_n(self, n):
@@ -1093,11 +1074,11 @@ class GbZ80Cpu(object):
         i = self.registers['a']
         i -= m
         self.registers['pc'] += 1
-        self.registers['f'] = 0x50 if i < 0 else 0x40
+        self.registers['f'] = 0x50 if i < 0 else FLAG['sub']
         if not i:
-            self.registers['f'] |= 0x80
-        if (self.registers['a'] ^ i ^ m) & 0x10:
-            self.registers['f'] |= 0x20
+            self.registers['f'] |= FLAG['zero']
+        if (self.registers['a'] ^ i ^ m) & FLAG['carry']:
+            self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 2
 
     def _add_a_n(self, n):  # bug!
@@ -1105,12 +1086,12 @@ class GbZ80Cpu(object):
         a = self.registers['a']
         self.registers['a'] += self.registers[n]
         # set flags...
-        self.registers['f'] = 0x10 if self.registers['a'] > 255 else 0
+        self.registers['f'] = FLAG['carry'] if self.registers['a'] > 255 else 0
         self.registers['a'] &= 255
         if not self.registers['a']:
-            self.registers['f'] |= 0x80
-        if (self.registers['a'] ^ self.registers['b'] ^ a) & 0x10:
-            self.registers['f'] |= 0x20
+            self.registers['f'] |= FLAG['zero']
+        if (self.registers['a'] ^ self.registers['b'] ^ a) & FLAG['carry']:
+            self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 1
 
     def _add_sp_n(self):
@@ -1133,7 +1114,7 @@ class GbZ80Cpu(object):
         hl = (self.registers['h'] << 8) + self.registers['l']
         hl += (self.registers[r1] << 8) + self.registers[r2]
         if hl > 65535:
-            self.registers['f'] |= 0x10
+            self.registers['f'] |= FLAG['carry']
         else:
             self.registers['f'] &= 0xEF
 
@@ -1150,7 +1131,7 @@ class GbZ80Cpu(object):
         hl += self.registers['sp']
 
         if hl > 65535:
-            self.registers['f'] |= 0x10
+            self.registers['f'] |= FLAG['carry']
         else:
             self.registers['f'] &= 0xEF
 
@@ -1183,14 +1164,14 @@ class GbZ80Cpu(object):
         """Decrement register."""
         self.registers[r] -= 1
         self.registers[r] &= 255
-        self.registers['f'] = 0 if self.registers[r] else 0x80
+        self.registers['f'] = 0 if self.registers[r] else FLAG['zero']
         self.registers['m'] = 1
 
     def _inc_r(self, r):
         """Increment register."""
         self.registers[r] += 1
         self.registers[r] &= 255
-        self.registers['f'] = 0 if self.registers[r] else 0x80
+        self.registers['f'] = 0 if self.registers[r] else FLAG['zero']
         self.registers['m'] = 1
 
     def _inc_sp(self):
@@ -1207,7 +1188,7 @@ class GbZ80Cpu(object):
         """Swap upper & lower nibles of n."""
         tr = self.registers[n]
         self.registers[n] = ((tr & 0xF) << 4) | ((tr & 0xF0) >> 4)
-        self.registers['f'] = 0 if self.registers[n] else 0x80
+        self.registers['f'] = 0 if self.registers[n] else FLAG['zero']
         self.registers['m'] = 1
 
     # Boolean logic
@@ -1226,20 +1207,20 @@ class GbZ80Cpu(object):
             self.registers['m'] = 1
 
         self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
 
     def _or_n(self, n):
         """Logical OR n with register A, result in A."""
         self.registers['a'] |= self.registers[n]
         self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
         self.registers['m'] = 1
 
     def _xor_a_n(self, n):
         """Logical XOR n with register A, result in A."""
         self.registers['a'] ^= self.registers[n]
         self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
         self.registers['m'] = 1
 
     def _xor_n(self):
@@ -1247,7 +1228,7 @@ class GbZ80Cpu(object):
         self.registers['a'] ^= self.read8(self.registers['pc'])
         self.registers['pc'] += 1
         self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else 0x80
+        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
         self.registers['m'] = 2
 
     # Returns
@@ -1301,22 +1282,24 @@ class GbZ80Cpu(object):
     def cpl(self):
         """Compliment A register (bit flip)."""
         self.registers['a'] = (~self.registers['a']) & 0xFF
-        self.registers['f'] &= 0x80
+        self.registers['f'] &= FLAG['zero']
         self.registers['f'] |= 0x60
         self.registers['m'] = 1
 
     def _rlc_n(self, n):
         """Rotate n left. Old bit 7 to Carry flag."""
-        ci, co = (1, 0x10) if (self.registers[n] & 0x80) else (0, 0)
+        ci, co = (1, FLAG['carry']) if (self.registers[n] & FLAG['zero']) \
+            else (0, 0)
         self.registers[n] = (self.registers[n] << 1) + ci
         self.registers[n] &= 255
-        f = 0 if self.registers[n] else 0x80
+        f = 0 if self.registers[n] else FLAG['zero']
         self.registers['f'] = (f & 0xEF) + co
         self.registers['m'] = 2
 
     def _rlc_a(self):
         """Rotate A left. Old bit 7 to Carry flag."""
-        ci, co = (1, 0x10) if (self.registers['a'] & 0x80) else (0, 0)
+        ci, co = (1, FLAG['carry']) if (self.registers['a'] & FLAG['zero']) \
+            else (0, 0)
         self.registers['a'] = (self.registers['a'] << 1) + ci
         self.registers['a'] &= 255
         self.registers['f'] = (self.registers['f'] & 0xEF) + co
@@ -1324,7 +1307,7 @@ class GbZ80Cpu(object):
 
     def _scf(self):
         """Set carry flag."""
-        self.registers['f'] |= 0x10
+        self.registers['f'] |= FLAG['carry']
         self.registers['m'] = 1
 
 
