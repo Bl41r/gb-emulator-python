@@ -192,6 +192,9 @@ class GbZ80Cpu(object):
             'm': 0      # cpu cycles/4
         }
 
+        self.rsv = {'a': 0, 'b': 0, 'c': 0, 'd': 0, 'e': 0, 'f': 0,
+                    'h': 0, 'l': 0}
+
         self.opcode_map = {
             # opcode number: func to call, args
             0: (self._nop, []),  # NOP
@@ -393,7 +396,7 @@ class GbZ80Cpu(object):
             196: (self._raise_opcode_unimplemented, []),  # CALLNZnn
             197: (self._push_nn, ['b', 'c']),  # PUSHBC
             198: (self._raise_opcode_unimplemented, []),  # ADDn
-            199: (self._raise_opcode_unimplemented, []),  # RST00
+            199: (self._rst_n, [0x00]),  # RST00
             200: (self._raise_opcode_unimplemented, []),  # RETZ
             201: (self._ret, []),  # RET
             202: (self._raise_opcode_unimplemented, []),  # JPZnn
@@ -401,7 +404,7 @@ class GbZ80Cpu(object):
             204: (self._raise_opcode_unimplemented, []),  # CALLZnn
             205: (self._call_nn, []),  # CALLnn
             206: (self._raise_opcode_unimplemented, []),  # ADCn
-            207: (self._raise_opcode_unimplemented, []),  # RST08
+            207: (self._rst_n, [0x08]),  # RST08
             208: (self._ret_nc, []),  # RETNC
             209: (self._pop_nn, ['d', 'e']),  # POPDE
             210: (self._raise_opcode_unimplemented, []),  # JPNCnn
@@ -409,15 +412,15 @@ class GbZ80Cpu(object):
             212: (self._raise_opcode_unimplemented, []),  # CALLNCnn
             213: (self._push_nn, ['d', 'e']),  # PUSHDE
             214: (self._raise_opcode_unimplemented, []),  # SUBn
-            215: (self._raise_opcode_unimplemented, []),  # RST10
+            215: (self._rst_n, [0x10]),  # RST10
             216: (self._raise_opcode_unimplemented, []),  # RETC
-            217: (self._raise_opcode_unimplemented, []),  # RETI
+            217: (self._reti, []),  # RETI
             218: (self._raise_opcode_unimplemented, []),  # JPCnn
             219: (self._raise_opcode_unimplemented, []),  # XX
             220: (self._raise_opcode_unimplemented, []),  # CALLCnn
             221: (self._raise_opcode_unimplemented, []),  # XX
             222: (self._raise_opcode_unimplemented, []),  # SBCn
-            223: (self._raise_opcode_unimplemented, []),  # RST18
+            223: (self._rst_n, [0x18]),  # RST18
             224: (self._ldh_n_a, []),  # LDIOnA
             225: (self._pop_nn, ['h', 'l']),  # POPHL
             226: (self._ld_c_a, []),  # LDIOCA
@@ -425,7 +428,7 @@ class GbZ80Cpu(object):
             228: (self._raise_opcode_unimplemented, []),  # XX
             229: (self._push_nn, ['h', 'l']),  # PUSHHL
             230: (self._and_n, ['pc']),  # ANDn
-            231: (self._raise_opcode_unimplemented, []),  # RST20
+            231: (self._rst_n, [0x20]),  # RST20
             232: (self._add_sp_n, []),  # ADDSPn
             233: (self._raise_opcode_unimplemented, []),  # JPHL
             234: (self._ld_nn_a, []),  # LD nn A
@@ -433,7 +436,7 @@ class GbZ80Cpu(object):
             236: (self._raise_opcode_unimplemented, []),  # XX
             237: (self._raise_opcode_unimplemented, []),  # XX
             238: (self._raise_opcode_unimplemented, []),  # ORn
-            239: (self._raise_opcode_unimplemented, []),  # RST28
+            239: (self._rst_n, [0x28]),  # RST28
             240: (self._ldh_a_n, []),  # LD AIO n
             241: (self._pop_nn, ['a', 'f']),  # POPAF
             242: (self._ld_a_c, []),  # LDAIOC
@@ -441,7 +444,7 @@ class GbZ80Cpu(object):
             244: (self._raise_opcode_unimplemented, []),  # XX
             245: (self._push_nn, ['a', 'f']),  # PUSHAF
             246: (self._raise_opcode_unimplemented, []),  # XORn
-            247: (self._raise_opcode_unimplemented, []),  # RST30
+            247: (self._rst_n, [0x30]),  # RST30
             248: (self._ld_hl_sp_n, []),  # LD HL SP+n
             249: (self._ld_sp_hl, []),  # LS SP HL
             250: (self._ld_a_nn, []),  # LD A nn
@@ -449,7 +452,7 @@ class GbZ80Cpu(object):
             252: (self._raise_opcode_unimplemented, []),  # XX
             253: (self._raise_opcode_unimplemented, []),  # XX
             254: (self._cp_n, ['pc']),  # CPn
-            255: (self._raise_opcode_unimplemented, []),  # RST38
+            255: (self._rst_n, [0x38]),  # RST38
         }
 
         self.cb_map = {
@@ -501,14 +504,14 @@ class GbZ80Cpu(object):
             45: (self._raise_cb_op_unimplemented, ['srar_l']),  # SRAr_l
             46: (self._raise_cb_op_unimplemented, ['xx']),  # XX
             47: (self._raise_cb_op_unimplemented, ['srar_a']),  # SRAr_a
-            48: (self._raise_cb_op_unimplemented, ['swapr_b']),  # SWAPr_b
-            49: (self._raise_cb_op_unimplemented, ['swapr_c']),  # SWAPr_c
-            50: (self._raise_cb_op_unimplemented, ['swapr_d']),  # SWAPr_d
-            51: (self._raise_cb_op_unimplemented, ['swapr_e']),  # SWAPr_e
-            52: (self._raise_cb_op_unimplemented, ['swapr_h']),  # SWAPr_h
-            53: (self._raise_cb_op_unimplemented, ['swapr_l']),  # SWAPr_l
+            48: (self._swap_n, ['b']),  # SWAPr_b
+            49: (self._swap_n, ['c']),  # SWAPr_c
+            50: (self._swap_n, ['d']),  # SWAPr_d
+            51: (self._swap_n, ['e']),  # SWAPr_e
+            52: (self._swap_n, ['h']),  # SWAPr_h
+            53: (self._swap_n, ['l']),  # SWAPr_l
             54: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            55: (self._raise_cb_op_unimplemented, ['swapr_a']),  # SWAPr_a
+            55: (self._swap_n, ['a']),  # SWAPr_a
             56: (self._raise_cb_op_unimplemented, ['srlr_b']),  # SRLr_b
             57: (self._raise_cb_op_unimplemented, ['srlr_c']),  # SRLr_c
             58: (self._raise_cb_op_unimplemented, ['srlr_d']),  # SRLr_d
@@ -1185,6 +1188,13 @@ class GbZ80Cpu(object):
         self.registers['sp'] = (self.registers['sp'] - 1) & 65535
         self.registers['m'] = 1
 
+    def _swap_n(self, n):
+        """Swap upper & lower nibles of n."""
+        tr = self.registers[n]
+        self.registers[n] = ((tr & 0xF) << 4) | ((tr & 0xF0) >> 4)
+        self.registers['f'] = 0 if self.registers[n] else 0x80
+        self.registers['m'] = 1
+
     # Boolean logic
     def _and_n(self, n):
         """Logically AND n with A, result in A."""
@@ -1224,3 +1234,44 @@ class GbZ80Cpu(object):
         self.registers['f'] &= 0x80
         self.registers['f'] |= 0x60
         self.registers['m'] = 1
+
+    def _rst_n(self, n):
+        """Push present address onto stack and jump to address $0000 + n.
+
+        n = n = $00,$08,$10,$18,$20,$28,$30,$38
+        """
+        self._rsv()
+        self.registers['sp'] -= 2
+        self.write16(self.registers['sp'], self.registers['pc'])
+        self.registers['pc'] = n
+        self.registers['m'] = 3
+
+    def _reti(self):
+        """Pop two bytes from stack & jump to that address.
+
+        Also enable interrupts
+        """
+        self.registers['ime'] = 1
+        self._rrs()
+        self.registers['pc'] = self.read16(self.registers['sp'])
+        self.registers['sp'] += 2
+        self.registers['m'] = 3
+
+    def _rsv(self):
+        """Copy some values from registers into rsv."""
+        for reg in ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'l']:
+            self.rsv[reg] = self.registers[reg]
+
+    def _rrs(self):
+        """Copy values from rsv into registers."""
+        for reg in ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'l']:
+            self.registers[reg] = self.rsv[reg]
+
+
+
+
+
+
+
+
+
