@@ -62,8 +62,8 @@ class GbGpu(object):
 
     def step(self, m):
         """Perform one step."""
-        self.mode_clock += m
-        self._mode_funcs[self.mode]()
+        self._mode_clock += m
+        self._mode_funcs[self._mode]()
 
     def update_tile(self, addr, val):
         """Update a tile.
