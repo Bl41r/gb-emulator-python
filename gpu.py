@@ -18,7 +18,7 @@ Region  Usage
 
 The background map is 32x32 tiles; this comes to 256 by 256 pixels. The
 display of the GameBoy is 160x144 pixels, so there's scope for the background 
-o be moved relative to the screeen. The GPU achieves this by defining a
+o be moved relative to the screen. The GPU achieves this by defining a
 point in the background that corresponds to the top-left of the screen:
 by moving this point between frames, the background is made to scroll on
 the screen. For this reason, the definition of the top-left corner is held
@@ -62,8 +62,8 @@ class GbGpu(object):
 
     def step(self, m):
         """Perform one step."""
-        self.mode_clock += m
-        self._mode_funcs[self.mode]()
+        self._mode_clock += m
+        self._mode_funcs[self._mode]()
 
     def update_tile(self, addr, val):
         """Update a tile.
@@ -80,7 +80,8 @@ class GbGpu(object):
             t2 = 2 if self.memory_interface.read_byte(addr + 1) & sx else 0
             self.tile_set[tile][y][i] = t1 + t2
 
-    def _create_tile_set(self):
+    @staticmethod
+    def _create_tile_set():
         return [
             [
                 [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8
@@ -89,13 +90,13 @@ class GbGpu(object):
 
     def _h_blank_render_screen(self):
         """Horizontal blank, and render screen data."""
-        if (self._mode_clock >= 204):
+        if self._mode_clock >= 20:
             self._mode_clock = 0
             self._line += 1
 
             if self._line == 143:
                 self._mode = 1
-                self.put_image_data(self.screen, 0, 0)
+                # self.put_image_data(self.screen, 0, 0)
             else:
                 self._mode = 2
 
@@ -111,7 +112,7 @@ class GbGpu(object):
 
     def _oam_read_mode(self):
         """OAM read."""
-        if (self._mode_clock >= 80):
+        if self._mode_clock >= 80:
             self._mode_clock = 0
             self._mode = 3
 
