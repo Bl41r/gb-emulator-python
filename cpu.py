@@ -122,7 +122,7 @@ RET cc  If cc is true, RET else continue.   If cc is true, 20 else 8.
 RETI    Return then enable interrupts.  16
 """
 
-import pdb
+# import pdb
 
 
 FLAG = {
@@ -136,7 +136,7 @@ my_counter = 0
 
 
 class ExecutionHalted(Exception):
-    """Raised when halt trap is issued."""
+    """Raised when execution should stop."""
 
     pass
 
@@ -710,6 +710,7 @@ class GbZ80Cpu(object):
 
         opcode(*args)
         self._inc_clock()
+
         # print("registers after exec:", self.registers)
 
     def execute_specific_instruction(self, op):
@@ -758,7 +759,8 @@ class GbZ80Cpu(object):
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value
 
-    def _raise_opcode_unimplemented(self):
+    @staticmethod
+    def _raise_opcode_unimplemented():
         print("counter:", my_counter)
         raise Exception("Opcode unimplemented!")
 
@@ -908,7 +910,7 @@ class GbZ80Cpu(object):
 
     def _ld_c_a(self):
         """Put A into mem @ address $FF00 + C."""
-        self.write8(self.read8(0xFF00 + self.registers['c']))
+        self.write8(self.read8(0xFF00 + self.registers['c']), self.registers['a'])
         self.registers['m'] = 2
 
     def _ld_hl_sp_n(self):
@@ -979,7 +981,7 @@ class GbZ80Cpu(object):
         """
         i = self.read8(self.registers['pc'])
         if i > 127:
-            i = -((~i + 1)) & 255
+            i = -(~i + 1) & 255
         self.registers['pc'] += 1
         self.registers['m'] = 2
         if (self.registers['f'] & and_val) == flag_check_value:
@@ -1044,7 +1046,7 @@ class GbZ80Cpu(object):
 
         if not self.registers['a']:
             self.registers['f'] |= FLAG['zero']
-        if ((self.registers['a'] ^ self.registers[r] ^ a) & FLAG['carry']):
+        if (self.registers['a'] ^ self.registers[r] ^ a) & FLAG['carry']:
             self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 1
 
