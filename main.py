@@ -17,7 +17,6 @@ LOG_DUMP = []   # append debug messages here
 
 def main(filename):
     """Main."""
-    # gb_memory.load_rom_image(filename)
     gb_memory = GbMemory()
     cpu = GbZ80Cpu()
     gpu = GbGpu()
@@ -28,11 +27,10 @@ def main(filename):
 
     sys_interface.load_rom_image(filename)
 
-    # import pdb; pdb.set_trace()
     try:
         sys_interface.start_game()
 
-    except ExecutionHalted:     # raised by trap_halt (expected exit)
+    except ExecutionHalted:
         print("\nShutting down...")
         sys.exit(0)
 
