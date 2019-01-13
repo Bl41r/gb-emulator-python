@@ -109,3 +109,5 @@ documents/
 memdump.txt
 
 
+.idea/
+*.gb
