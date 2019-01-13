@@ -88,6 +88,10 @@ class GbGpu(object):
             ] for i in range(512)
         ]
 
+    def reset_screen(self):
+        """Reset screen to white."""
+        self.screen_data = [255 for i in range(160 * 144 * 4)]
+
     def _h_blank_render_screen(self):
         """Horizontal blank, and render screen data."""
         if self._mode_clock >= 20:
@@ -121,4 +125,59 @@ class GbGpu(object):
         if self._mode_clock >= 172:
             self._mode_clock = 0
             self._mode = 0
-            self.renderscan()
+            self._renderscan()
+
+    def _renderscan(self):
+        """Render scan."""
+        print("_renderscan called!")
+
+        # VRAM offset for the tile map
+        mapoffs = 0x1C00 if self._bgmap else 0x1800
+
+        # Which line of tiles to use in the map
+        mapoffs += ((self._line + self._scy) & 255) >> 3
+
+        # Which tile to start with in the map line
+        lineoffs = (self._scx >> 3)
+
+        # Which line of pixels to use in the tiles
+        y = (self._line + self._scy) & 7
+
+        # Where in the tileline to start
+        x = self._scx & 7
+
+        # Where to render on the canvas
+        canvasoffs = self._line * 160 * 4
+
+        # Read tile index from the background map
+        tile = self._vram[mapoffs + lineoffs]
+
+        # If the tile data set in use is #1, the
+        # indices are signed; calculate a real tile offset
+        if (self._bgtile == 1) and (tile < 128):
+            tile += 256
+
+        for i in range(160):
+            # Re-map the tile pixel through the palette
+            color = self._pal[self._tileset[tile][y][x]]
+
+            # Plot the pixel to canvas
+            self._scrn.data[canvasoffs + 0] = color[0]
+            self._scrn.data[canvasoffs + 1] = color[1]
+            self._scrn.data[canvasoffs + 2] = color[2]
+            self._scrn.data[canvasoffs + 3] = color[3]
+            canvasoffs += 4
+
+            x += 1
+            if x == 8:
+                x = 0
+                lineoffs = (lineoffs + 1) & 31
+                tile = self._vram[mapoffs + lineoffs]
+                if (self._bgtile == 1 and tile < 128):
+                    tile += 256
+
+
+
+
+
+

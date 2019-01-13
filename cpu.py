@@ -701,11 +701,11 @@ class GbZ80Cpu(object):
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
+
         # print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
         opcode, args = instruction[0], instruction[1]
 
         # if op == 254:
-        #     print("my counter:", my_counter)
         #     pdb.set_trace()
 
         opcode(*args)
