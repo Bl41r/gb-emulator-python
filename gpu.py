@@ -101,8 +101,7 @@ class GbGpu(object):
         7   Display: on/off         Off     On
         """
         register_value = self.sys_interface.read_byte(
-            self.register_map['lcd_gpu_ctrl']
-        )
+            self.register_map['lcd_gpu_ctrl'])
 
         if reg_name == 'bgrnd':
             return register_value & 0x01
@@ -134,7 +133,7 @@ class GbGpu(object):
         """Reset screen to white."""
         self.screen_data = [255 for i in range(160 * 144 * 4)]
 
-    def set_system_interface(sys_interface):
+    def set_system_interface(self, sys_interface):
         """Set the system interface."""
         self.sys_interface = sys_interface
 
