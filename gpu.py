@@ -17,7 +17,7 @@ Region  Usage
 9C00-9FFF   Tile map #1
 
 The background map is 32x32 tiles; this comes to 256 by 256 pixels. The
-display of the GameBoy is 160x144 pixels, so there's scope for the background 
+display of the GameBoy is 160x144 pixels, so there's scope for the background
 o be moved relative to the screen. The GPU achieves this by defining a
 point in the background that corresponds to the top-left of the screen:
 by moving this point between frames, the background is made to scroll on
@@ -58,7 +58,14 @@ class GbGpu(object):
         }
         self.screen_data = [255 for i in range(160 * 144 * 4)]
         self.tile_set = self._create_tile_set()
-        self.memory_interface = None    # Set after interface instantiated
+        self.sys_interface = None    # Set after interface instantiated
+        self.register_map = {
+            'lcd_gpu_ctrl': 0xFF40,
+            'scroll_x': 0xFF42,
+            'scrolly_y': 0xFF43,
+            'curr_scan_line': 0xFF44,
+            'bgrnd_palette': 0xFF47
+        }
 
     def step(self, m):
         """Perform one step."""
@@ -80,17 +87,57 @@ class GbGpu(object):
             t2 = 2 if self.memory_interface.read_byte(addr + 1) & sx else 0
             self.tile_set[tile][y][i] = t1 + t2
 
+    def get_gpu_ctrl_reg(self, reg_name)
+        """Return on/off (bit value or 0) for the LCD/GPU control register bit
+
+        Bit  Function               When 0  When 1
+        0   Background: on/off      Off     On
+        1   Sprites: on/off         Off     On
+        2   Sprites: size (pixels)  8x8     8x16
+        3   Background: tile map    #0      #1
+        4   Background: tile set    #0      #1
+        5   Window: on/off          Off     On
+        6   Window: tile map        #0      #1
+        7   Display: on/off         Off     On
+        """
+        register_value = self.sys_interface.read_byte(
+            self.register_map['lcd_gpu_ctrl']
+        )
+
+        if reg_name == 'bgrnd':
+            return register_value & 0x01
+        elif reg_name == 'sprites':
+            return register_value & 0x02
+        elif reg_name == 'sprites_size':
+            return register_value & 0x04
+        elif reg_name == 'bgrnd_tilemap':
+            return register_value & 0x08
+        elif reg_name == 'bgrnd_tileset':
+            return register_value & 0x10
+        elif reg_name == 'window':
+            return register_value & 0x20
+        elif reg_name == 'window_tilemap':
+            return register_value & 0x40
+        elif reg_name == 'display':
+            return register_value & 0x80
+
+
     @staticmethod
     def _create_tile_set():
         return [
             [
-                [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8
+                [0] * 8, [0] * 8, [0] * 8, [0] * 8,
+                [0] * 8, [0] * 8, [0] * 8, [0] * 8
             ] for i in range(512)
         ]
 
     def reset_screen(self):
         """Reset screen to white."""
         self.screen_data = [255 for i in range(160 * 144 * 4)]
+
+    def set_system_interface(sys_interface):
+        """Set the system interface."""
+        self.sys_interface = sys_interface
 
     def _h_blank_render_screen(self):
         """Horizontal blank, and render screen data."""
@@ -175,9 +222,3 @@ class GbGpu(object):
                 tile = self._vram[mapoffs + lineoffs]
                 if (self._bgtile == 1 and tile < 128):
                     tile += 256
-
-
-
-
-
-

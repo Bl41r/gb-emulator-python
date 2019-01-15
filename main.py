@@ -23,7 +23,7 @@ def main(filename):
 
     sys_interface = GbSystemInterface(gb_memory, cpu, gpu)
     for component in [cpu, gpu]:
-        component.memory_interface = sys_interface
+        component.sys_interface = sys_interface
 
     sys_interface.load_rom_image(filename)
 
