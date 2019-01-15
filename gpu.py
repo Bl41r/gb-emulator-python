@@ -87,7 +87,7 @@ class GbGpu(object):
             t2 = 2 if self.memory_interface.read_byte(addr + 1) & sx else 0
             self.tile_set[tile][y][i] = t1 + t2
 
-    def get_gpu_ctrl_reg(self, reg_name)
+    def get_gpu_ctrl_reg(self, reg_name):
         """Return on/off (bit value or 0) for the LCD/GPU control register bit
 
         Bit  Function               When 0  When 1
@@ -120,7 +120,6 @@ class GbGpu(object):
             return register_value & 0x40
         elif reg_name == 'display':
             return register_value & 0x80
-
 
     @staticmethod
     def _create_tile_set():
