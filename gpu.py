@@ -26,11 +26,11 @@ by two GPU registers: Scroll X and Scroll Y.
 
 Palettes
 Each pixel is two bits.
-Value   Pixel   Emulated colour
-0   Off [255, 255, 255]
-1   33% on  [192, 192, 192]
-2   66% on  [96, 96, 96]
-3   On  [0, 0, 0]
+Value   Pixel       Emulated colour
+0       Off         [255, 255, 255]
+1       33% on      [192, 192, 192]
+2       66% on      [96, 96, 96]
+3       On          [0, 0, 0]
 
 These bits are read by the GPU when the tile is referenced in the map, run
 through the palette and pushed to screen. The hardware of the GPU is wired
@@ -48,6 +48,7 @@ class GbGpu(object):
     def __init__(self):
         """Init."""
         self._line = 0
+        self._curscan = 0
         self._mode = 0
         self._mode_clock = 0
         self._mode_funcs = {
@@ -61,16 +62,20 @@ class GbGpu(object):
         self.sys_interface = None    # Set after interface instantiated
         self.register_map = {
             'lcd_gpu_ctrl': 0xFF40,
-            'scroll_x': 0xFF42,
-            'scrolly_y': 0xFF43,
-            'curr_scan_line': 0xFF44,
+            'scroll_y': 0xFF42,
+            'scroll_x': 0xFF43,
+            'curr_line': 0xFF44,
+            'raster': 0xFF45,
+            'oam_dma': 0xFF46,
             'bgrnd_palette': 0xFF47
         }
+        self._linemode = 0
 
     def step(self, m):
         """Perform one step."""
         self._mode_clock += m
-        self._mode_funcs[self._mode]()
+        print("linemode:", self._mode_funcs[self._linemode].__name__)
+        self._mode_funcs[self._linemode]()
 
     def update_tile(self, addr, val):
         """Update a tile.
@@ -88,7 +93,7 @@ class GbGpu(object):
             self.tile_set[tile][y][i] = t1 + t2
 
     def get_gpu_ctrl_reg(self, reg_name):
-        """Return on/off (bit value or 0) for the LCD/GPU control register bit
+        """Return on/off (bit value or 0) for the LCD/GPU control register bit.
 
         Bit  Function               When 0  When 1
         0   Background: on/off      Off     On
@@ -137,37 +142,50 @@ class GbGpu(object):
         """Set the system interface."""
         self.sys_interface = sys_interface
 
+    def write_reg(self, register_name, val):
+        """Write a byte to memory."""
+        address = self.register_map[register_name]
+        self.sys_interface.write_byte(address, val)
+
+    def read_reg(self, register_name):
+        """Read a register from mem."""
+        return self.sys_interface.read_byte(self.register_map[register_name])
+
     def _h_blank_render_screen(self):
         """Horizontal blank, and render screen data."""
-        if self._mode_clock >= 20:
-            self._mode_clock = 0
-            self._line += 1
+        if self._mode_clock >= 51:
 
-            if self._line == 143:
+            if self.read_register('curr_line') == 143:
                 self._mode = 1
                 # self.put_image_data(self.screen, 0, 0)
+                # memory._interrupt_flag |= 1
             else:
                 self._mode = 2
 
+            self.write_reg('curr_line', self.read_reg('curr_line') + 1)
+            self.curscan += 640
+            self._mode_clock = 0
+
     def _v_blank(self):
         """."""
-        if self._mode_clock >= 456:
+        if self._mode_clock >= 114:
             self._mode_clock = 0
-            self._line += 1
+            self.write_reg('curr_line', self.read_reg('curr_line') + 1)
 
-            if self._line > 153:
+            if self.read_reg('curr_line') > 153:
+                self.write_reg('curr_line', 0)
+                self._curscan = 0
                 self._mode = 2
-                self._line = 0
 
     def _oam_read_mode(self):
         """OAM read."""
-        if self._mode_clock >= 80:
+        if self._mode_clock >= 20:
             self._mode_clock = 0
             self._mode = 3
 
     def _vram_read_mode(self):
         """VRAM read."""
-        if self._mode_clock >= 172:
+        if self._mode_clock >= 43:
             self._mode_clock = 0
             self._mode = 0
             self._renderscan()
@@ -175,48 +193,3 @@ class GbGpu(object):
     def _renderscan(self):
         """Render scan."""
         print("_renderscan called!")
-
-        # VRAM offset for the tile map
-        mapoffs = 0x1C00 if self._bgmap else 0x1800
-
-        # Which line of tiles to use in the map
-        mapoffs += ((self._line + self._scy) & 255) >> 3
-
-        # Which tile to start with in the map line
-        lineoffs = (self._scx >> 3)
-
-        # Which line of pixels to use in the tiles
-        y = (self._line + self._scy) & 7
-
-        # Where in the tileline to start
-        x = self._scx & 7
-
-        # Where to render on the canvas
-        canvasoffs = self._line * 160 * 4
-
-        # Read tile index from the background map
-        tile = self._vram[mapoffs + lineoffs]
-
-        # If the tile data set in use is #1, the
-        # indices are signed; calculate a real tile offset
-        if (self._bgtile == 1) and (tile < 128):
-            tile += 256
-
-        for i in range(160):
-            # Re-map the tile pixel through the palette
-            color = self._pal[self._tileset[tile][y][x]]
-
-            # Plot the pixel to canvas
-            self._scrn.data[canvasoffs + 0] = color[0]
-            self._scrn.data[canvasoffs + 1] = color[1]
-            self._scrn.data[canvasoffs + 2] = color[2]
-            self._scrn.data[canvasoffs + 3] = color[3]
-            canvasoffs += 4
-
-            x += 1
-            if x == 8:
-                x = 0
-                lineoffs = (lineoffs + 1) & 31
-                tile = self._vram[mapoffs + lineoffs]
-                if (self._bgtile == 1 and tile < 128):
-                    tile += 256
