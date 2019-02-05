@@ -95,8 +95,8 @@ class GbGpu(object):
         y = (base_addr >> 1) & 7
         for i in range(8):
             sx = 1 << (7 - i)   # Find bit index for this pixel
-            t1 = 1 if self.memory_interface.read_byte(addr) & sx else 0
-            t2 = 2 if self.memory_interface.read_byte(addr + 1) & sx else 0
+            t1 = 1 if self.sys_interface.read_byte(addr) & sx else 0
+            t2 = 2 if self.sys_interface.read_byte(addr + 1) & sx else 0
             self.tile_set[tile][y][i] = t1 + t2
 
     def get_gpu_ctrl_reg(self, reg_name):
