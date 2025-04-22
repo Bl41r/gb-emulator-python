@@ -1,5 +1,8 @@
 import sys
 import pygame
+import numpy as np
+import pygame.surfarray
+
 from memory import GbMemory
 from cpu import GbZ80Cpu, ExecutionHalted
 from gpu import GbGpu
@@ -13,21 +16,36 @@ SCALE = 3
 
 
 def draw_screen(gpu, screen):
-    """Draw screen buffer to pygame window."""
-    for y in range(SCREEN_HEIGHT):
-        for x in range(SCREEN_WIDTH):
-            offset = (y * SCREEN_WIDTH + x) * 4
-            color_val = gpu.screen['data'][offset]
-            pygame.draw.rect(screen,
-                             (color_val, color_val, color_val),
-                             pygame.Rect(x * SCALE, y * SCALE, SCALE, SCALE))
+    """Draw the GPU buffer to the Pygame window using fast blitting."""
+    # Convert 160x144x4 flat list into 3D NumPy array
+    buffer = np.array(gpu.screen['data'], dtype=np.uint8).reshape((144, 160, 4))
+
+    # Remove alpha channel (RGB only)
+    rgb_buffer = buffer[:, :, :3]
+
+    print("Sample pixel RGB:", rgb_buffer[0, 0])
+
+    # Create surface from array
+    surface = pygame.surfarray.make_surface(np.transpose(rgb_buffer, (1, 0, 2)))  # Transpose to (width, height, 3)
+
+    # Scale it
+    surface = pygame.transform.scale(surface, (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+
+    screen.blit(surface, (0, 0))
     pygame.display.flip()
+
 
 
 def main(filename):
     gb_memory = GbMemory()
     cpu = GbZ80Cpu()
     gpu = GbGpu()
+    # for tile_id in range(512):
+    #     for y in range(8):
+    #         for x in range(8):
+    #             gpu.tile_set[tile_id][y][x] = (x + y) % 4
+    #             # Fill visible tile map with tile 0
+
     sys_interface = GbSystemInterface(gb_memory, cpu, gpu)
 
     for component in [cpu, gpu]:
@@ -51,8 +69,11 @@ def main(filename):
 
             cpu.execute_next_operation()
 
+            print(f"GPU mode: {gpu._linemode}, curr_line: {gpu.read_reg('curr_line')}")
+
             # Check if we just hit the V-Blank mode
-            if gpu._mode == 1 and gpu.read_reg('curr_line') == 144:
+            if gpu._linemode == 1 and gpu.read_reg('curr_line') == 144:
+                print('hit v blank mode')
                 draw_screen(gpu, window)
                 clock.tick(60)  # cap at ~60 FPS
 

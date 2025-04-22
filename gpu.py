@@ -73,11 +73,12 @@ class GbGpu(object):
         self._scanrow = [0 for i in range(160)]
         self._palette = {'obj0': [], 'obj1': []}
         self._palette['bg'] = [
-            255,        # 0 - white
-            192,        # 1 - light gray
-            96,         # 2 - dark gray
-            0           # 3 - black
+            255,  # white
+            192,  # light gray
+            96,   # dark gray
+            0     # black
         ]
+
         self.screen = {
             'data': [255 for i in range(160 * 144 * 4)],
             'width': 160,
@@ -97,13 +98,19 @@ class GbGpu(object):
         internal tile set.
         """
         base_addr = addr & 0x1FFE
-        tile = (base_addr >> 4) & 511
-        y = (base_addr >> 1) & 7
-        for i in range(8):
-            sx = 1 << (7 - i)   # Find bit index for this pixel
-            t1 = 1 if self.sys_interface.read_byte(addr) & sx else 0
-            t2 = 2 if self.sys_interface.read_byte(addr + 1) & sx else 0
-            self.tile_set[tile][y][i] = t1 + t2
+        tile_index = (base_addr >> 4) & 511
+        row = (base_addr >> 1) & 7
+
+        byte1 = self.sys_interface.read_byte(base_addr)
+        byte2 = self.sys_interface.read_byte(base_addr + 1)
+
+        for x in range(8):
+            bit = 1 << (7 - x)
+            lo = 1 if byte1 & bit else 0
+            hi = 2 if byte2 & bit else 0
+            self.tile_set[tile_index][row][x] = lo + hi
+
+        print(f"Tile update: tile={tile_index}, row={row}, data={self.tile_set[tile_index][row]}")
 
     def get_gpu_ctrl_reg(self, reg_name):
         """Return on/off (bit value or 0) for the LCD/GPU control register bit.
@@ -202,7 +209,7 @@ class GbGpu(object):
 
     def _renderscan(self):
         """Render a single scanline of background tiles to the screen buffer."""
-        print("Calling _renderscan for scanline", self.read_reg('curr_line'))
+        # print("Calling _renderscan for scanline", self.read_reg('curr_line'))
 
         if not self.get_gpu_ctrl_reg('display'):
             return
@@ -231,6 +238,7 @@ class GbGpu(object):
 
                 color_index = tilerow[x]
                 color_val = self._palette['bg'][color_index]
+                # print(f"Drawing: scanline {line}, pixel {pixel}, color={color_val}")
 
                 px_offset = linebase + pixel * 4
                 self.screen['data'][px_offset + 0] = color_val  # R
@@ -238,7 +246,7 @@ class GbGpu(object):
                 self.screen['data'][px_offset + 2] = color_val  # B
                 self.screen['data'][px_offset + 3] = 255        # A (fully opaque)
 
-                print(f"Scanline {line}: tile_id={tile_id} color_row={tilerow}")
+                # print(f"Scanline {line}: tile_id={tile_id} color_row={tilerow}")
 
                 x += 1
                 if x == 8:
