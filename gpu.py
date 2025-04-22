@@ -71,7 +71,13 @@ class GbGpu(object):
         }
         self._linemode = 0
         self._scanrow = [0 for i in range(160)]
-        self._palette = {'bg': [], 'obj0': [], 'obj1': []}
+        self._palette = {'obj0': [], 'obj1': []}
+        self._palette['bg'] = [
+            255,        # 0 - white
+            192,        # 1 - light gray
+            96,         # 2 - dark gray
+            0           # 3 - black
+        ]
         self.screen = {
             'data': [255 for i in range(160 * 144 * 4)],
             'width': 160,
@@ -81,7 +87,7 @@ class GbGpu(object):
     def step(self, m):
         """Perform one step."""
         self._mode_clock += m
-        print("linemode:", self._mode_funcs[self._linemode].__name__)
+        print(f"GPU Step: mode={self._linemode}, clock={self._mode_clock}")
         self._mode_funcs[self._linemode]()
 
     def update_tile(self, addr, val):
@@ -164,7 +170,7 @@ class GbGpu(object):
         """Horizontal blank, and render screen data."""
         if self._mode_clock >= 51:
 
-            if self.read_register('curr_line') == 143:
+            if self.read_reg('curr_line') == 143:
                 self._mode = 1
                 # self.put_image_data(self.screen, 0, 0)
                 # memory._interrupt_flag |= 1
@@ -172,7 +178,7 @@ class GbGpu(object):
                 self._mode = 2
 
             self.write_reg('curr_line', self.read_reg('curr_line') + 1)
-            self.curscan += 640
+            self._curscan += 640
             self._mode_clock = 0
 
     def _v_blank(self):
@@ -200,59 +206,45 @@ class GbGpu(object):
             self._renderscan()
 
     def _renderscan(self):
-        """Render scan."""
-        print("_renderscan called!")
-        if self.get_gpu_ctrl_reg('display'):
-            print("display on")
+        """Render a single scanline of background tiles to the screen buffer."""
+        if not self.get_gpu_ctrl_reg('display'):
+            return
 
-            if self.get_gpu_ctrl_reg('bgrnd'):
-                print('bgrnd on')
-                linebase = self._curscan
-                mapbase = self._get_mapbase()
-                print('mapbase, linebase:', mapbase, linebase)
-                y = (self.read_register['curr_line']) & 7
-                x = self.read_register['scroll_x'] & 7
-                t = (self.read_register['scroll_x'] >> 3) & 31
-                w = 160
+        line = self.read_reg('curr_line')
+        linebase = line * 160 * 4  # start of this line in the screen buffer
 
-                if self.get_gpu_ctrl_reg('bgrnd_tileset'):
-                    import pdb; pdb.set_trace()
-                    tile = self.sys_interface.read_byte(mapbase + t)
-                    # need to be adjusted to abs mem position
-                    # we probably dont need to use mapbase here
-                    # or just add 0xFF40 to it
-                    if tile < 128:
-                        tile = 256 + tile
-                    tilerow = self.tile_set[tile][y]
-                    while w:
-                        self._scanrow[160 - x] = tilerow[x]
-                        pt = self._palette['bg'][tilerow[x]]
-                        self.screen['data'][self.linebase + 3] = pt
-                        x += 1
-                        if x == 8:
-                            t = (t + 1) & 31
-                            x = 0
-                            tile = self.read_reg(mapbase + t)
-                            # again, need real addr
-                            if tile < 128:
-                                tile += 256
-                            tilerow = self.tile_set[tile][y]
-                        linebase += 4
-                        w -= 1
-                else:
-                    pass
+        if self.get_gpu_ctrl_reg('bgrnd'):
+            mapbase = self._get_mapbase()
+            y = (line + self.read_reg('scroll_y')) & 255
+            tile_row_y = (y & 7)
+            x_scroll = self.read_reg('scroll_x')
+            x = x_scroll & 7
+            tile_index = (x_scroll >> 3) & 31
 
-            elif self.get_gpu_ctrl_reg('sprites'):
-                print('in sprites')
+            tileset_mode = self.get_gpu_ctrl_reg('bgrnd_tileset')
 
-                if self.get_gpu_ctrl_reg('sprites_size'):
-                    print('in sprites size')
-                    for i in range(40):
-                        pass    # ??
-                else:
-                    print('else of sprites size')
-                    for i in range(40):
-                        pass
+            for pixel in range(160):
+                map_offset = (y >> 3) * 32 + tile_index
+                tile_id = self.sys_interface.read_byte(mapbase + map_offset)
+
+                if not tileset_mode:
+                    if tile_id < 128:
+                        tile_id += 256
+                tilerow = self.tile_set[tile_id][tile_row_y]
+
+                color_index = tilerow[x]
+                color_val = self._palette['bg'][color_index]
+
+                px_offset = linebase + pixel * 4
+                self.screen['data'][px_offset + 0] = color_val  # R
+                self.screen['data'][px_offset + 1] = color_val  # G
+                self.screen['data'][px_offset + 2] = color_val  # B
+                self.screen['data'][px_offset + 3] = 255        # A (fully opaque)
+
+                x += 1
+                if x == 8:
+                    tile_index = (tile_index + 1) & 31
+                    x = 0
 
     def _get_mapbase(self):
         """Get mapbase."""

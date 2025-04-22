@@ -753,8 +753,10 @@ class GbZ80Cpu(object):
         op(*args)
 
     def _inc_clock(self):
-        """Increment clock registers."""
+        """Increment clock registers and step GPU."""
         self.clock['m'] += self.registers['m']
+        if self.sys_interface and self.sys_interface.gpu:
+            self.sys_interface.gpu.step(self.registers['m'] * 4)  # 1 m = 4 cycles
 
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value
