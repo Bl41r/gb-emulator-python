@@ -87,7 +87,7 @@ class GbGpu(object):
     def step(self, m):
         """Perform one step."""
         self._mode_clock += m
-        print(f"GPU Step: mode={self._linemode}, clock={self._mode_clock}")
+        # print(f"GPU Step: mode={self._linemode}, clock={self._mode_clock}")
         self._mode_funcs[self._linemode]()
 
     def update_tile(self, addr, val):
@@ -167,25 +167,20 @@ class GbGpu(object):
         return self.sys_interface.read_byte(self.register_map[register_name])
 
     def _h_blank_render_screen(self):
-        """Horizontal blank, and render screen data."""
         if self._mode_clock >= 51:
-
             if self.read_reg('curr_line') == 143:
-                self._mode = 1
-                # self.put_image_data(self.screen, 0, 0)
-                # memory._interrupt_flag |= 1
+                self._linemode = 1  # enter V-Blank
             else:
-                self._mode = 2
+                self._linemode = 2  # go to next scanline's OAM Read
 
-            self.write_reg('curr_line', self.read_reg('curr_line') + 1)
-            self._curscan += 640
+            self.write_reg('curr_line', (self.read_reg('curr_line') + 1) & 0xFF)
             self._mode_clock = 0
 
     def _v_blank(self):
         """."""
         if self._mode_clock >= 114:
             self._mode_clock = 0
-            self.write_reg('curr_line', self.read_reg('curr_line') + 1)
+            self.write_reg('curr_line', (self.read_reg('curr_line') + 1) & 0xFF)
 
             if self.read_reg('curr_line') > 153:
                 self.write_reg('curr_line', 0)
@@ -196,17 +191,19 @@ class GbGpu(object):
         """OAM read."""
         if self._mode_clock >= 20:
             self._mode_clock = 0
-            self._mode = 3
+            self._linemode = 3
 
     def _vram_read_mode(self):
         """VRAM read."""
         if self._mode_clock >= 43:
             self._mode_clock = 0
-            self._mode = 0
+            self._linemode = 0
             self._renderscan()
 
     def _renderscan(self):
         """Render a single scanline of background tiles to the screen buffer."""
+        print("Calling _renderscan for scanline", self.read_reg('curr_line'))
+
         if not self.get_gpu_ctrl_reg('display'):
             return
 
@@ -241,6 +238,8 @@ class GbGpu(object):
                 self.screen['data'][px_offset + 2] = color_val  # B
                 self.screen['data'][px_offset + 3] = 255        # A (fully opaque)
 
+                print(f"Scanline {line}: tile_id={tile_id} color_row={tilerow}")
+
                 x += 1
                 if x == 8:
                     tile_index = (tile_index + 1) & 31
@@ -248,7 +247,7 @@ class GbGpu(object):
 
     def _get_mapbase(self):
         """Get mapbase."""
-        a = ((self.read_reg['curr_line'] + self.read_reg['scroll_y']) & 255)
+        a = ((self.read_reg('curr_line') + self.read_reg('scroll_y')) & 0xFF)
         bgmapbase = self.get_gpu_ctrl_reg('bgrnd_tilemap')
         return bgmapbase + ((a >> 3) << 5)
 
