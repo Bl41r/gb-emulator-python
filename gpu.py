@@ -49,7 +49,6 @@ class GbGpu(object):
         """Init."""
         self._line = 0
         self._curscan = 0
-        self._mode = 0
         self._mode_clock = 0
         self._mode_funcs = {
             0: self._h_blank_render_screen,
@@ -192,7 +191,7 @@ class GbGpu(object):
             if self.read_reg('curr_line') > 153:
                 self.write_reg('curr_line', 0)
                 self._curscan = 0
-                self._mode = 2
+                self._linemode = 2
 
     def _oam_read_mode(self):
         """OAM read."""
