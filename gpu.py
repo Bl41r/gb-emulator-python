@@ -61,6 +61,7 @@ class GbGpu(object):
         self.sys_interface = None    # Set after interface instantiated
         self.register_map = {
             'lcd_gpu_ctrl': 0xFF40,
+            'stat': 0xFF41,
             'scroll_y': 0xFF42,
             'scroll_x': 0xFF43,
             'curr_line': 0xFF44,
@@ -68,7 +69,7 @@ class GbGpu(object):
             'oam_dma': 0xFF46,
             'bgrnd_palette': 0xFF47
         }
-        self._linemode = 0
+        self.linemode = 0
         self._scanrow = [0 for i in range(160)]
         self._palette = {'obj0': [], 'obj1': []}
         self._palette['bg'] = [
@@ -88,7 +89,7 @@ class GbGpu(object):
         """Perform one step."""
         self._mode_clock += m
         # print(f"GPU Step: mode={self._linemode}, clock={self._mode_clock}")
-        self._mode_funcs[self._linemode]()
+        self._mode_funcs[self.linemode]()
 
     def update_tile(self, addr, val):
         """Update a tile.
@@ -172,12 +173,29 @@ class GbGpu(object):
         """Read a register from mem."""
         return self.sys_interface.read_byte(self.register_map[register_name])
 
+    def _update_stat_register(self):
+        """Use whenever linemode is set"""
+        stat = self.read_reg('stat') & 0b11111000  # Clear mode + coincidence flag
+
+        # Set current mode (bits 0–1)
+        stat |= self.linemode & 0b11
+
+        # Bit 2 is undocumented, usually set to 1
+        stat |= 0b100
+
+        # Coincidence flag (bit 3)
+        if self.read_reg('curr_line') == self.read_reg('raster'):
+            stat |= 0b1000  # Bit 3: coincidence match
+
+        self.write_reg('stat', stat)
+
     def _h_blank_render_screen(self):
         if self._mode_clock >= 51:
             if self.read_reg('curr_line') == 143:
-                self._linemode = 1  # enter V-Blank
+                self.linemode = 1  # enter V-Blank
             else:
-                self._linemode = 2  # go to next scanline's OAM Read
+                self.linemode = 2  # go to next scanline's OAM Read
+            self._update_stat_register()
 
             self.write_reg('curr_line', (self.read_reg('curr_line') + 1) & 0xFF)
             self._mode_clock = 0
@@ -191,19 +209,22 @@ class GbGpu(object):
             if self.read_reg('curr_line') > 153:
                 self.write_reg('curr_line', 0)
                 self._curscan = 0
-                self._linemode = 2
+                self.linemode = 2
+                self._update_stat_register()
 
     def _oam_read_mode(self):
         """OAM read."""
         if self._mode_clock >= 20:
             self._mode_clock = 0
-            self._linemode = 3
+            self.linemode = 3
+            self._update_stat_register()
 
     def _vram_read_mode(self):
         """VRAM read."""
         if self._mode_clock >= 43:
             self._mode_clock = 0
-            self._linemode = 0
+            self.linemode = 0
+            self._update_stat_register()
             self._renderscan()
 
     def _renderscan(self):

@@ -64,10 +64,10 @@ def main(filename):
 
             cpu.execute_next_operation()
 
-            print(f"GPU mode: {gpu._linemode}, curr_line: {gpu.read_reg('curr_line')}")
+            # print(f"GPU mode: {gpu.linemode}, curr_line: {gpu.read_reg('curr_line')}")
 
             # Check if we just hit the V-Blank mode
-            if gpu._linemode == 1 and gpu.read_reg('curr_line') == 144:
+            if gpu.linemode == 1 and gpu.read_reg('curr_line') == 144:
                 # print('hit v blank mode')
                 draw_screen(gpu, window)
                 clock.tick(60)  # cap at ~60 FPS
@@ -75,6 +75,7 @@ def main(filename):
     except ExecutionHalted:
         print("\nShutting down...")
         pygame.quit()
+        dump_logs(gb_memory.memory, cpu)
         sys.exit(0)
 
     except Exception as e:

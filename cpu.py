@@ -189,8 +189,8 @@ class GbZ80Cpu(object):
             12: (self._inc_r, ('c',)),  # INCr_c
             13: (self._dec_r, ('c',)),  # DECr_c
             14: (self._ld_rn, ('c',)),  # LDrn_c
-            15: (self._raise_opcode_unimplemented, ()),  # RRCA
-            16: (self._raise_opcode_unimplemented, ()),  # DJNZn
+            15: (self._rrca, ()),  # RRCA
+            16: (self._djnz_n, ()),  # DJNZn
             17: (self._ld_r1r2_nn, ('d', 'e')),  # LDDEnn
             18: (self._ld_r1r2m_a, ('d', 'e')),  # LDDEmA
             19: (self._inc_r_r, ('d', 'e')),  # INCDE
@@ -237,7 +237,7 @@ class GbZ80Cpu(object):
             60: (self._inc_r, ('a',)),  # INCr_a
             61: (self._dec_r, ('a',)),  # DECr_a
             62: (self._ld_rn, ('a',)),  # LDrn_a
-            63: (self._raise_opcode_unimplemented, ()),  # CCF
+            63: (self._ccf, ()),  # CCF
             64: (self._ld_rr, ('b', 'b')),  # LDrr_bb (nop?)
             65: (self._ld_rr, ('b', 'c')),  # LDrr_bc
             66: (self._ld_rr, ('b', 'd')),  # LDrr_bd
@@ -310,21 +310,21 @@ class GbZ80Cpu(object):
             133: (self._add_a_n, ('l',)),  # ADDr_l
             134: (self._raise_opcode_unimplemented, ()),  # ADDHL
             135: (self._add_a_n, ('a',)),  # ADDr_a
-            136: (self._raise_opcode_unimplemented, ()),  # ADCr_b
-            137: (self._raise_opcode_unimplemented, ()),  # ADCr_c
-            138: (self._raise_opcode_unimplemented, ()),  # ADCr_d
-            139: (self._raise_opcode_unimplemented, ()),  # ADCr_e
-            140: (self._raise_opcode_unimplemented, ()),  # ADCr_h
-            141: (self._raise_opcode_unimplemented, ()),  # ADCr_l
-            142: (self._raise_opcode_unimplemented, ()),  # ADCHL
-            143: (self._raise_opcode_unimplemented, ()),  # ADCr_a
+            136: (self._adc_a_n, ('b',)),  # ADC A, B
+            137: (self._adc_a_n, ('c',)),  # ADC A, C
+            138: (self._adc_a_n, ('d',)),  # ADC A, D
+            139: (self._adc_a_n, ('e',)),  # ADC A, E
+            140: (self._adc_a_n, ('h',)),  # ADC A, H
+            141: (self._adc_a_n, ('l',)),  # ADC A, L
+            142: (self._adc_hl, ()),  # ADCHL
+            143: (self._adc_a_n, ('a',)),  # ADCr_a
             144: (self._sub_n, ('b',)),  # SUBr_b
             145: (self._sub_n, ('c',)),  # SUBr_c
             146: (self._sub_n, ('d',)),  # SUBr_d
             147: (self._sub_n, ('e',)),  # SUBr_e
             148: (self._sub_n, ('h',)),  # SUBr_h
             149: (self._sub_n, ('l',)),  # SUBr_l
-            150: (self._raise_opcode_unimplemented, ()),  # SUBHL
+            150: (self._sub_hl, ()),  # SUBHL
             151: (self._sub_n, ('a',)),  # SUBr_a
             152: (self._sub_a_n, ('b',)),  # SBCr_b
             153: (self._sub_a_n, ('c',)),  # SBCr_c
@@ -380,12 +380,12 @@ class GbZ80Cpu(object):
             203: (self._call_cb_op, ()),  # MAPcb
             204: (self._raise_opcode_unimplemented, ()),  # CALLZnn
             205: (self._call_nn, ()),  # CALLnn
-            206: (self._raise_opcode_unimplemented, ()),  # ADCn
+            206: (self._adc_n, ()),  # ADCn
             207: (self._rst_n, (0x08,)),  # RST08
             208: (self._ret_f, (FLAG['carry'], 0x00)),  # RETNC
             209: (self._pop_nn, ('d', 'e')),  # POPDE
             210: (self._jp_cc_nn, (FLAG['carry'], 0x00)),  # JPNCnn
-            211: (self._raise_opcode_unimplemented, ()),  # XX
+            211: (self._nop, ()),  # XX
             212: (self._raise_opcode_unimplemented, ()),  # CALLNCnn
             213: (self._push_nn, ('d', 'e')),  # PUSHDE
             214: (self._raise_opcode_unimplemented, ()),  # SUBn
@@ -393,32 +393,32 @@ class GbZ80Cpu(object):
             216: (self._ret_f, (FLAG['carry'], FLAG['carry'])),  # RETC
             217: (self._reti, ()),  # RETI
             218: (self._jp_cc_nn, (FLAG['carry'], FLAG['carry'])),  # JPCnn
-            219: (self._raise_opcode_unimplemented, ()),  # XX
+            219: (self._nop, ()),  # XX
             220: (self._raise_opcode_unimplemented, ()),  # CALLCnn
-            221: (self._raise_opcode_unimplemented, ()),  # XX
+            221: (self._nop, ()),  # XX
             222: (self._raise_opcode_unimplemented, ()),  # SBCn
             223: (self._rst_n, (0x18,)),  # RST18
             224: (self._ldh_n_a, ()),  # LDIOnA
             225: (self._pop_nn, ('h', 'l')),  # POPHL
             226: (self._ld_c_a, ()),  # LDIOCA
-            227: (self._raise_opcode_unimplemented, ()),  # XX
-            228: (self._raise_opcode_unimplemented, ()),  # XX
+            227: (self._nop, ()),  # XX
+            228: (self._nop, ()),  # XX
             229: (self._push_nn, ('h', 'l')),  # PUSHHL
             230: (self._and_n, ('pc',)),  # ANDn
             231: (self._rst_n, (FLAG['half-carry'],)),  # RST20
             232: (self._add_sp_n, ()),  # ADDSPn
             233: (self._raise_opcode_unimplemented, ()),  # JPHL
             234: (self._ld_nn_a, ()),  # LD nn A
-            235: (self._raise_opcode_unimplemented, ()),  # XX
-            236: (self._raise_opcode_unimplemented, ()),  # XX
-            237: (self._raise_opcode_unimplemented, ()),  # XX
+            235: (self._nop, ()),  # XX
+            236: (self._nop, ()),  # XX
+            237: (self._nop, ()),  # XX
             238: (self._raise_opcode_unimplemented, ()),  # ORn
             239: (self._rst_n, (0x28)),  # RST28
             240: (self._ldh_a_n, ()),  # LD AIO n
             241: (self._pop_nn, ('a', 'f')),  # POPAF
             242: (self._ld_a_c, ()),  # LDAIOC
             243: (self._di, ()),  # DI
-            244: (self._raise_opcode_unimplemented, ()),  # XX
+            244: (self._nop, ()),  # XX
             245: (self._push_nn, ('a', 'f')),  # PUSHAF
             246: (self._xor_n, ()),  # XORn
             247: (self._rst_n, (0x30,)),  # RST30
@@ -426,8 +426,8 @@ class GbZ80Cpu(object):
             249: (self._ld_sp_hl, ()),  # LS SP HL
             250: (self._ld_a_nn, ()),  # LD A nn
             251: (self._ei, ()),  # EI
-            252: (self._raise_opcode_unimplemented, ()),  # XX
-            253: (self._raise_opcode_unimplemented, ()),  # XX
+            252: (self._nop, ()),  # XX
+            253: (self._nop, ()),  # XX
             254: (self._cp_n, ('pc',)),  # CPn
             255: (self._rst_n, (0x38,)),  # RST38
         }
@@ -696,22 +696,17 @@ class GbZ80Cpu(object):
         global my_counter
         my_counter += 1
         op = self.read8(self.registers['pc'])
-        # print('--------------------')
-        # print("registers before exec:", self.registers)
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
-
-        # print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
         opcode, args = instruction[0], instruction[1]
 
-        # if op == 254:
-        #     pdb.set_trace()
-
-        opcode(*args)
-        self._inc_clock()
-
-        # print("registers after exec:", self.registers)
+        try:
+            opcode(*args)
+            self._inc_clock()
+        except Exception as e:
+            print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
+            raise e
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -990,6 +985,19 @@ class GbZ80Cpu(object):
             self.registers['pc'] += i
             self.registers['m'] += 1
 
+    def _djnz_n(self):
+        """Decrement B and jump if not zero."""
+        self.registers['b'] = (self.registers['b'] - 1) & 0xFF
+        if self.registers['b'] != 0:
+            n = self.read8(self.registers['pc'])
+            if n > 127:
+                n = -((~n + 1) & 0xFF)
+            self.registers['pc'] = (self.registers['pc'] + n + 1) & 0xFFFF
+            self.registers['m'] = 3  # 12 cycles
+        else:
+            self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
+            self.registers['m'] = 2  # 8 cycles
+
     # Interrupts
     def _di(self):
         """Disable interrupts."""
@@ -1068,6 +1076,26 @@ class GbZ80Cpu(object):
             self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 1
 
+    def _sub_hl(self):
+        """Subtract value at HL from A."""
+        hl_addr = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(hl_addr)
+        a = self.registers['a']
+
+        result = a - value
+
+        self.registers['f'] = FLAG['sub']  # Always set Subtract flag
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (a & 0xF) < (value & 0xF):
+            self.registers['f'] |= FLAG['half-carry']
+        if result < 0:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
+        self.registers['m'] = 2
+
+
     def _cp_n(self, n):
         """Compare A with n."""
         if n == 'pc':
@@ -1142,6 +1170,62 @@ class GbZ80Cpu(object):
         self.registers['h'] = (hl >> 8) & 255
         self.registers['l'] = hl & 255
         self.registers['m'] = 3
+
+    def _adc_a_n(self, n):
+        """Add register n + carry to register A."""
+        carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        value = self.registers[n]
+        result = self.registers['a'] + value + carry
+
+        # Set flags
+        self.registers['f'] = 0  # Clear flags first
+        if result & 0xFF == 0:
+            self.registers['f'] |= FLAG['zero']
+        if ((self.registers['a'] & 0xF) + (value & 0xF) + carry) > 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+        if result > 0xFF:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF  # Mask to 8 bits
+        self.registers['m'] = 1
+
+    def _adc_n(self):
+        """Add immediate 8-bit value + carry to A."""
+        carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        value = self.read8(self.registers['pc'])  # Read immediate byte
+        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
+
+        result = self.registers['a'] + value + carry
+
+        self.registers['f'] = 0
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if ((self.registers['a'] & 0xF) + (value & 0xF) + carry) > 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+        if result > 0xFF:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
+        self.registers['m'] = 2
+
+    def _adc_hl(self):
+        """Add value pointed by HL + carry to A."""
+        carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        hl_addr = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(hl_addr)
+
+        result = self.registers['a'] + value + carry
+
+        self.registers['f'] = 0
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if ((self.registers['a'] & 0xF) + (value & 0xF) + carry) > 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+        if result > 0xFF:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
+        self.registers['m'] = 2
 
     # INC / DEC
     def _inc_r_r(self, r1, r2, m=1):
@@ -1284,10 +1368,23 @@ class GbZ80Cpu(object):
 
     # Misc
     def cpl(self):
-        """Compliment A register (bit flip)."""
+        """Complement A register (bit flip)."""
         self.registers['a'] = (~self.registers['a']) & 0xFF
         self.registers['f'] &= FLAG['zero']
         self.registers['f'] |= 0x60
+        self.registers['m'] = 1
+
+    def _ccf(self):
+        """Complement Carry Flag."""
+        if self.registers['f'] & 0x10:
+            # If carry is set, clear it
+            self.registers['f'] &= ~0x10
+        else:
+            # If carry is clear, set it
+            self.registers['f'] |= 0x10
+
+        # CCF clears N and H flags, but preserves Z
+        self.registers['f'] &= 0x90  # Only preserve Zero (bit 7) and Carry (bit 4)
         self.registers['m'] = 1
 
     def _rlc_n(self, n):
@@ -1314,6 +1411,14 @@ class GbZ80Cpu(object):
         self.registers['f'] |= FLAG['carry']
         self.registers['m'] = 1
 
+    def _rrca(self):
+        """Rotate A right. Old bit 0 to Carry flag."""
+        carry = self.registers['a'] & 0x01
+        self.registers['a'] = (self.registers['a'] >> 1) | (carry << 7)
+        self.registers['f'] = 0
+        if carry:
+            self.registers['f'] |= 0x10  # Set carry flag
+        self.registers['m'] = 1
 
 
 

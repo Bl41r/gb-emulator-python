@@ -19,6 +19,7 @@ class GbSystemInterface(object):
 
     def __init__(self, memory, cpu, gpu):
         """Init."""
+        self.cartridge_type = None
         self.memory = memory
         self.cpu = cpu
         self.gpu = gpu
@@ -56,7 +57,7 @@ class GbSystemInterface(object):
         """Write a byte to an address."""
         self.memory.write_byte(address, value)
 
-        if address >= 0x8000 and address <= 0xA000:     # VRAM write
+        if 0x8000 <= address <= 0xA000:     # VRAM write
             self.gpu.update_tile(address, value)
             print("Writing to vram!", address, value)
 
@@ -79,13 +80,14 @@ class GbSystemInterface(object):
             rom_array.frombytes(f.read())
 
         if sys.byteorder != 'little':
+            print('byteswapping rom...')
             rom_array.byteswap()
 
         return rom_array
 
     def _show_mem_around_addr(self, address):
         """Print mem around address for dubugging."""
-        if address <= 65533 and address >= 3:
+        if 65533 >= address >= 3:
             print('\n--mem view-- address:val--------------------------------')
             print('{}:{}  {}:{}  >>{}:{}  {}:{}  {}:{}  {}:{}'.format(
                 address - 2, self.read_byte(address - 2),
