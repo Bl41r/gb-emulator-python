@@ -74,8 +74,8 @@ def main(filename):
 
     except ExecutionHalted:
         print("\nShutting down...")
-        pygame.quit()
         dump_logs(gb_memory.memory, cpu)
+        pygame.quit()
         sys.exit(0)
 
     except Exception as e:

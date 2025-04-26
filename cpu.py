@@ -153,14 +153,13 @@ class GbZ80Cpu(object):
         # Register set
         self.registers = {
             # 16-bit registers stored as two 8-bit registers
-            # 15..8   7..0
-            'a': 1, 'f': 0,
-            'b': 0, 'c': 0x13,
-            'd': 0, 'e': 216,
-            'h': 0, 'l': 0,
+            'a': 0x01, 'f': 0xB0,
+            'b': 0x00, 'c': 0x13,
+            'd': 0x00, 'e': 0xD8,
+            'h': 0x01, 'l': 0x4D,
 
             # Interrupts enabled/disabled
-            'ime': 0,
+            'ime': 1,
 
             # 16-bit registers (program counter, stack pointer)
             'pc': 0x100, 'sp': 0xFFFE,
@@ -213,7 +212,7 @@ class GbZ80Cpu(object):
             36: (self._inc_r, ('h',)),  # INCr_h
             37: (self._dec_r, ('h',)),  # DECr_h
             38: (self._ld_rn, ('h',)),  # LDrn_h
-            39: (self._raise_opcode_unimplemented, ()),  # XX
+            39: (self._nop, ()),  # XX
             40: (self._jr_cc_n, (FLAG['zero'], FLAG['zero'])),  # JRZn
             41: (self._add_hl_n, ('h', 'l')),  # ADDHLHL
             42: (self._ld_a_hl_i, ()),  # LDAHLI
@@ -348,7 +347,7 @@ class GbZ80Cpu(object):
             171: (self._xor_a_n, ('e',)),  # XORr_e
             172: (self._xor_a_n, ('h',)),  # XORr_h
             173: (self._xor_a_n, ('l',)),  # XORr_l
-            174: (self._raise_opcode_unimplemented, ()),  # XORHL
+            174: (self._xor_hl, ()),  # XORHL
             175: (self._xor_a_n, ('a',)),  # XORr_a
             176: (self._or_n, ('b',)),  # ORr_b
             177: (self._or_n, ('c',)),  # ORr_c
@@ -702,11 +701,14 @@ class GbZ80Cpu(object):
         opcode, args = instruction[0], instruction[1]
 
         try:
+            # print('executing instr count', my_counter)
             opcode(*args)
             self._inc_clock()
         except Exception as e:
             print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
             raise e
+
+        self.handle_interrupts()  # handle interrupts after each instruction
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -715,6 +717,35 @@ class GbZ80Cpu(object):
         opcode, args = instruction[0], instruction[1]
         opcode(*args)
         self._inc_clock()
+
+    def handle_interrupts(self):
+        if not self.registers['ime']:
+            return  # interrupts globally disabled
+
+        interrupt_enable = self.sys_interface.read_byte(0xFFFF)
+        interrupt_flags = self.sys_interface.read_byte(0xFF0F)
+        triggered = interrupt_enable & interrupt_flags
+        if triggered:
+            for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
+                if triggered & (1 << bit):
+                    self._execute_interrupt(bit, address)
+                    break  # only handle one interrupt per cycle
+
+    def _execute_interrupt(self, bit, address):
+        self.registers['ime'] = 0  # disable further interrupts
+        interrupt_flags = self.sys_interface.read_byte(0xFF0F)
+        interrupt_flags &= ~(1 << bit)  # clear handled interrupt
+        self.sys_interface.write_byte(0xFF0F, interrupt_flags)
+
+        # Push current PC to stack
+        self.registers['sp'] -= 2
+        self.write16(self.registers['sp'], self.registers['pc'])
+
+        # Jump to interrupt vector
+        self.registers['pc'] = address
+
+        # Interrupt takes 5 CPU cycles (20 clock cycles)
+        self.registers['m'] = 5
 
     def reset(self):
         """Reset registers."""
@@ -737,7 +768,8 @@ class GbZ80Cpu(object):
 
     def write16(self, address, val):
         """Write a word to memory at address."""
-        self.sys_interface.write_word(address, val)
+        self.sys_interface.write_byte(address, val & 0xFF)
+        self.sys_interface.write_byte(address + 1, (val >> 8) & 0xFF)
 
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
@@ -1318,6 +1350,22 @@ class GbZ80Cpu(object):
         self.registers['a'] &= 255
         self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
         self.registers['m'] = 2
+
+    def _xor_hl(self):
+        """Logical XOR between A and the value pointed to by HL."""
+        hl_addr = (self.registers['h'] << 8) + self.registers['l']
+        value = self.read8(hl_addr)
+
+        self.registers['a'] ^= value
+        self.registers['a'] &= 0xFF  # Ensure result is 8-bit
+
+        # Update flags
+        self.registers['f'] = 0  # Clear all flags first
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        # N, H, and C are reset (already cleared)
+        self.registers['m'] = 2  # 2 machine cycles = 8 clock cycles
 
     # Returns
     def _ret(self):

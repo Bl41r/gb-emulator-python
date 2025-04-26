@@ -48,18 +48,19 @@ class GbSystemInterface(object):
             title += chr(self.read_byte(i))
         print("Title:", title)
 
-    def start_game(self):
-        """Start the game."""
-        while True:
-            self.cpu.execute_next_operation()
+        self.fake_fill_vram()
+        print('loaded fake vram data!')
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
         self.memory.write_byte(address, value)
-
-        if 0x8000 <= address <= 0xA000:     # VRAM write
+        if address == 0xFF40:
+            print(f"!!! LCDC write detected: {hex(value)} !!!")
+        if 0x8000 <= address <= 0x97FF:     # VRAM tile area write
             self.gpu.update_tile(address, value)
-            print("Writing to vram!", address, value)
+            print(f"Writing to VRAM TILE area! Address: {hex(address)}, Value: {hex(value)}")
+        elif 0x9800 <= address <= 0x9FFF:   # VRAM tilemap area write
+            print(f"Writing to VRAM TILEMAP area! Address: {hex(address)}, Value: {hex(value)}")
 
     def write_word(self, address, value):
         """Write a word into memory."""
@@ -67,6 +68,11 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
+        # if address == 0xFF00:
+        #     # Pretend the player is holding down "Start" and "A"
+        #     # A = Bit 0, Start = Bit 3
+        #     # Joypad reads 0 when button is pressed
+        #     return 0b11100110  # Bits cleared (0) for A and Start
         return self.memory.read_byte(address)
 
     def read_word(self, address):
@@ -99,3 +105,14 @@ class GbSystemInterface(object):
             print('--------------------------------------------------------\n')
         else:
             print('{}:{}'.format(address, self.read_byte(address)))
+
+    def fake_fill_vram(self):
+        """Artificially fill VRAM with visible tile patterns."""
+        for tile_num in range(20):  # Fill 20 fake tiles
+            base_addr = 0x8000 + (tile_num * 16)
+            for row in range(8):
+                pattern = 0b10101010 if row % 2 == 0 else 0b01010101
+                self.memory.write_byte(base_addr + row*2, pattern)      # low bits
+                self.memory.write_byte(base_addr + row*2 + 1, pattern)   # high bits
+                self.gpu.update_tile(base_addr + row*2, pattern)
+                self.gpu.update_tile(base_addr + row*2 + 1, pattern)
