@@ -849,8 +849,9 @@ class GbZ80Cpu(object):
 
     def _ld_hlm_n(self):
         """Load mem @ pc into mem @ HL."""
+        value = self.read8(self.registers['pc'])
         address = (self.registers['h'] << 8) + self.registers['l']
-        self.write8(address, self.registers['pc'])
+        self.write8(address, value)
         self.registers['pc'] += 1
         self.registers['m'] = 3
 
@@ -964,26 +965,23 @@ class GbZ80Cpu(object):
 
 
     def _ld_hl_sp_n(self):
-        """Put SP+n effective address into HL.
-
-        n = 1 byte signed immediate value
-        """
+        """LD HL, SP+n (signed)"""
         n = self.read8(self.registers['pc'])
         if n > 127:
-            n = ((~n + 1) & 255)
-        result = n + self.registers['sp']
-
-        # set flags
-        self.registers['f'] = 0
-        xor_result = (self.registers['sp'] ^ n ^ result)
-        if (xor_result & 0x100) == 0x100:
-            self._toggle_flag(FLAG['carry'])
-        if (xor_result & 0x10) == FLAG['carry']:
-            self._toggle_flag(FLAG['half-carry'])
-
-        self.registers['h'] = (result >> 8) & 255
-        self.registers['l'] = result & 255
+            n = n - 256
         self.registers['pc'] += 1
+
+        result = (self.registers['sp'] + n) & 0xFFFF
+
+        self.registers['f'] = 0  # Z = 0, N = 0
+
+        if ((self.registers['sp'] & 0xF) + (n & 0xF)) > 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+        if ((self.registers['sp'] & 0xFF) + (n & 0xFF)) > 0xFF:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['h'] = (result >> 8) & 0xFF
+        self.registers['l'] = result & 0xFF
         self.registers['m'] = 3
 
     def _ld_sp_hl(self):
@@ -1017,8 +1015,7 @@ class GbZ80Cpu(object):
     def _jr_n(self):
         """Add signed immediate value to current address and jump to it."""
         i = self.read8(self.registers['pc'])
-        if i > 127:
-            i = -(~i + 1) & 255
+        i = i if i < 128 else i - 256
         self.registers['pc'] += 1
         self.registers['m'] = 2
         self.registers['pc'] += i
@@ -1098,19 +1095,21 @@ class GbZ80Cpu(object):
 
     # SUB / ADD
     def _sub_n(self, r):
-        """Subtract n from A.
-
-        n = A,B,C,D,E,H,L
-        """
+        """Subtract r from A."""
         a = self.registers['a']
-        self.registers['a'] -= self.registers[r]
-        self.registers['f'] = 0x50 if self.registers['a'] < 0 else FLAG['sub']
-        self.registers['a'] &= 255
+        val = self.registers[r]
+        result = a - val
 
-        if not self.registers['a']:
+        self.registers['f'] = FLAG['sub']  # Always set SUB flag
+
+        if (result & 0xFF) == 0:
             self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] ^ self.registers[r] ^ a) & FLAG['carry']:
+        if (a & 0xF) < (val & 0xF):
             self.registers['f'] |= FLAG['half-carry']
+        if result < 0:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
         self.registers['m'] = 1
 
     def _sub_a_n(self, n):
@@ -1150,21 +1149,25 @@ class GbZ80Cpu(object):
 
 
     def _cp_n(self, n):
-        """Compare A with n."""
+        """Compare register A with n."""
         if n == 'pc':
-            m = self.read8(self.registers[n])
+            value = self.read8(self.registers['pc'])
+            self.registers['pc'] += 1
         else:
-            m = self.registers[n]
+            value = self.registers[n]
 
-        i = self.registers['a']
-        i -= m
-        self.registers['pc'] += 1
-        self.registers['f'] = 0x50 if i < 0 else FLAG['sub']
-        if not i:
+        result = self.registers['a'] - value
+        self.registers['f'] = FLAG['sub']
+
+        if (result & 0xFF) == 0:
             self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] ^ i ^ m) & FLAG['carry']:
+        if (self.registers['a'] & 0xF) < (value & 0xF):
             self.registers['f'] |= FLAG['half-carry']
+        if result < 0:
+            self.registers['f'] |= FLAG['carry']
+
         self.registers['m'] = 2
+
 
     def _add_a_n(self, n):
         """Add n to A."""
@@ -1183,49 +1186,67 @@ class GbZ80Cpu(object):
         self.registers['m'] = 1
 
     def _add_sp_n(self):
-        """Add n to Stack Pointer (SP).
-
-        n = one byte signed immediate value
-        """
+        """Add signed immediate to SP."""
         n = self.read8(self.registers['pc'])
         if n > 127:
-            n = -((~n + 1) & 255)
+            n = n - 256
         self.registers['pc'] += 1
-        self.registers['sp'] += n
+
+        result = (self.registers['sp'] + n) & 0xFFFF
+
+        self.registers['f'] = 0  # Z = 0, N = 0
+
+        if ((self.registers['sp'] & 0xF) + (n & 0xF)) > 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+        if ((self.registers['sp'] & 0xFF) + (n & 0xFF)) > 0xFF:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['sp'] = result
         self.registers['m'] = 4
 
     def _add_hl_n(self, r1, r2):
-        """Add n to HL.
-
-        n = BC,DE,HL
-        """
+        """Add r16 (r1r2) to HL."""
         hl = (self.registers['h'] << 8) + self.registers['l']
-        hl += (self.registers[r1] << 8) + self.registers[r2]
-        if hl > 65535:
+        value = (self.registers[r1] << 8) + self.registers[r2]
+        result = hl + value
+
+        # Clear N flag
+        self.registers['f'] &= ~(FLAG['sub'])
+
+        # Set H flag if carry from bit 11
+        if ((hl & 0x0FFF) + (value & 0x0FFF)) > 0x0FFF:
+            self.registers['f'] |= FLAG['half-carry']
+        else:
+            self.registers['f'] &= ~FLAG['half-carry']
+
+        # Set C flag if carry from bit 15
+        if result > 0xFFFF:
             self.registers['f'] |= FLAG['carry']
         else:
-            self.registers['f'] &= 0xEF
+            self.registers['f'] &= ~FLAG['carry']
 
-        self.registers['h'] = (hl >> 8) & 255
-        self.registers['l'] = hl & 255
-        self.registers['m'] = 3
+        self.registers['h'] = (result >> 8) & 0xFF
+        self.registers['l'] = result & 0xFF
+        self.registers['m'] = 2  # Actually should be 2 m-cycles for ADD HL, r16
 
     def _add_hl_sp(self):
-        """Add n to HL.
-
-        n = SP
-        """
+        """Add SP to HL."""
         hl = (self.registers['h'] << 8) + self.registers['l']
-        hl += self.registers['sp']
+        sp = self.registers['sp']
+        result = hl + sp
 
-        if hl > 65535:
-            self.registers['f'] |= FLAG['carry']
+        # Clear N flag
+        self.registers['f'] &= ~FLAG['sub']
+
+        # Set H flag if carry from bit 11 (lower 12 bits overflow)
+        if ((hl & 0x0FFF) + (sp & 0x0FFF)) > 0x0FFF:
+            self.registers['f'] |= FLAG['half-carry']
         else:
-            self.registers['f'] &= 0xEF
+            self.registers['f'] &= ~FLAG['half-carry']
 
-        self.registers['h'] = (hl >> 8) & 255
-        self.registers['l'] = hl & 255
-        self.registers['m'] = 3
+        # Set C flag if carry from bit 15 (full 16 bits overflow)
+        if result > 0xFFFF:
+            self
 
     def _adc_a_n(self, n):
         """Add register n + carry to register A."""
@@ -1305,17 +1326,29 @@ class GbZ80Cpu(object):
         self.registers['m'] = m
 
     def _dec_r(self, r):
-        """Decrement register."""
-        self.registers[r] -= 1
-        self.registers[r] &= 255
-        self.registers['f'] = 0 if self.registers[r] else FLAG['zero']
+        """Decrement register r."""
+        old_value = self.registers[r]
+        self.registers[r] = (self.registers[r] - 1) & 0xFF
+
+        self.registers['f'] = FLAG['sub']
+        if self.registers[r] == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (old_value & 0xF) == 0:
+            self.registers['f'] |= FLAG['half-carry']
+
         self.registers['m'] = 1
 
     def _inc_r(self, r):
-        """Increment register."""
-        self.registers[r] += 1
-        self.registers[r] &= 255
-        self.registers['f'] = 0 if self.registers[r] else FLAG['zero']
+        """Increment register r."""
+        old_value = self.registers[r]
+        self.registers[r] = (self.registers[r] + 1) & 0xFF
+
+        self.registers['f'] = 0  # N cleared
+        if self.registers[r] == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (old_value & 0xF) == 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+
         self.registers['m'] = 1
 
     def _inc_sp(self):
@@ -1339,40 +1372,64 @@ class GbZ80Cpu(object):
     def _and_n(self, n):
         """Logically AND n with A, result in A."""
         if n == 'pc':
-            self.registers['a'] &= self.read8(self.registers['pc'])
+            value = self.read8(self.registers['pc'])
             self.registers['pc'] += 1
             self.registers['m'] = 2
         elif n == 'hl':
-            self.registers['a'] &= self.read8((self.registers['h'] << 8) +
-                                              self.registers['l'])
+            value = self.read8((self.registers['h'] << 8) + self.registers['l'])
             self.registers['m'] = 2
         else:
-            self.registers['a'] &= self.registers[n]
+            value = self.registers[n]
             self.registers['m'] = 1
 
-        self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
+        self.registers['a'] &= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags: Z, H=1, N=0, C=0
+        self.registers['f'] = FLAG['half-carry']
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
 
     def _or_n(self, n):
         """Logical OR n with register A, result in A."""
-        self.registers['a'] |= self.registers[n]
-        self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
+        value = self.registers[n]
+        self.registers['a'] |= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags: Z if zero, otherwise all flags cleared
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
         self.registers['m'] = 1
+
 
     def _xor_a_n(self, n):
         """Logical XOR n with register A, result in A."""
-        self.registers['a'] ^= self.registers[n]
-        self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
+        value = self.registers[n]
+        self.registers['a'] ^= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags: Z if zero, otherwise all flags cleared
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
         self.registers['m'] = 1
 
     def _xor_n(self):
         """Logical XOR immediate byte with register A, result in A."""
-        self.registers['a'] ^= self.read8(self.registers['pc'])
+        value = self.read8(self.registers['pc'])
         self.registers['pc'] += 1
-        self.registers['a'] &= 255
-        self.registers['f'] = 0 if self.registers['a'] else FLAG['zero']
+
+        self.registers['a'] ^= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags: Z if zero, otherwise all flags cleared
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
         self.registers['m'] = 2
 
     def _xor_hl(self):
