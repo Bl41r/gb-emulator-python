@@ -29,6 +29,18 @@ class GbSystemInterface(object):
         self.memory.reset_memory()
         rom_array = self._read_rom_file(filename)
 
+        # test rom shows stripes
+        # rom_array = [0x00] * 0x100 + [  # padding up to 0x100
+        #                0x3E, 0x91,  # LD A, $91
+        #                0xE0, 0x40,  # LD (FF40),A
+        #                0x21, 0x00, 0x80,  # LD HL, $8000
+        #                0x3E, 0xFF,  # LD A, $FF
+        #                0x22,        # LD (HL+), A
+        #                0x3E, 0x00,  # LD A, $00
+        #                0x22,        # LD (HL+), A
+        #                0xC3, 0x0D, 0x01  # JP 010D
+        #            ]
+
         for i in range(0, len(rom_array)):
             self.memory.write_byte(i, rom_array[i])
 
@@ -48,8 +60,8 @@ class GbSystemInterface(object):
             title += chr(self.read_byte(i))
         print("Title:", title)
 
-        self.fake_fill_vram()
-        print('loaded fake vram data!')
+        # self.fake_fill_vram()
+        # print('loaded fake vram data!')
 
     def write_byte(self, address, value):
         """Write a byte to an address."""

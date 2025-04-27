@@ -291,7 +291,7 @@ class GbZ80Cpu(object):
             115: (self._ld_hlm_r, ('e',)),  # LDHLmr_e
             116: (self._ld_hlm_r, ('h',)),  # LDHLmr_h
             117: (self._ld_hlm_r, ('l',)),  # LDHLmr_l
-            118: (self._raise_opcode_unimplemented, ()),  # HALT
+            118: (self._halt, ()),  # HALT
             119: (self._ld_hlm_r, ('a',)),  # LDHLmr_a
             120: (self._ld_rr, ('a', 'b')),  # LDrr_ab
             121: (self._ld_rr, ('a', 'c')),  # LDrr_ac
@@ -695,6 +695,14 @@ class GbZ80Cpu(object):
         global my_counter
         my_counter += 1
         op = self.read8(self.registers['pc'])
+
+        # # --- Log for first 1000 instructions ---
+        # if my_counter < 1000:
+        #     print(f"PC: {hex(self.registers['pc'])}, OP: {hex(op)}, SP: {hex(self.registers['sp'])}")
+        # else:
+        #     sys.exit(0)
+        # # ------------------------------------------------------
+
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535   # mask to 16-bits
         instruction = self.opcode_map[op]
@@ -709,6 +717,14 @@ class GbZ80Cpu(object):
             raise e
 
         self.handle_interrupts()  # handle interrupts after each instruction
+
+    def sanity_test_memory_write(self):
+        print("Memory at 0xC000 before:", self.sys_interface.read_byte(0xC000))
+        self.registers['h'] = 0xC0
+        self.registers['l'] = 0x00
+        self.registers['a'] = 0x42
+        self.write8((self.registers['h'] << 8) | self.registers['l'], self.registers['a'])
+        print("Memory at 0xC000 after :", self.sys_interface.read_byte(0xC000))
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -801,6 +817,10 @@ class GbZ80Cpu(object):
     # ----------------------------
     def _nop(self):
         """NOP opcode."""
+        self.registers['m'] = 1
+
+    def _halt(self):
+        """HALT CPU until interrupt."""
         self.registers['m'] = 1
 
     # Loads
@@ -938,9 +958,10 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
 
     def _ld_c_a(self):
-        """Put A into mem @ address $FF00 + C."""
-        self.write8(self.read8(0xFF00 + self.registers['c']), self.registers['a'])
+        """Put A into mem @ address $FF00+C (correct)."""
+        self.write8(0xFF00 + self.registers['c'], self.registers['a'])
         self.registers['m'] = 2
+
 
     def _ld_hl_sp_n(self):
         """Put SP+n effective address into HL.
@@ -1145,17 +1166,20 @@ class GbZ80Cpu(object):
             self.registers['f'] |= FLAG['half-carry']
         self.registers['m'] = 2
 
-    def _add_a_n(self, n):  # bug!
+    def _add_a_n(self, n):
         """Add n to A."""
-        a = self.registers['a']
-        self.registers['a'] += self.registers[n]
-        # set flags...
-        self.registers['f'] = FLAG['carry'] if self.registers['a'] > 255 else 0
-        self.registers['a'] &= 255
-        if not self.registers['a']:
+        value = self.registers[n]
+        result = self.registers['a'] + value
+
+        self.registers['f'] = 0
+        if (result & 0xFF) == 0:
             self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] ^ self.registers['b'] ^ a) & FLAG['carry']:
+        if ((self.registers['a'] & 0xF) + (value & 0xF)) > 0xF:
             self.registers['f'] |= FLAG['half-carry']
+        if result > 0xFF:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
         self.registers['m'] = 1
 
     def _add_sp_n(self):
@@ -1276,7 +1300,7 @@ class GbZ80Cpu(object):
         DEC HL, DEC DE, DEC BC
         """
         self.registers[r2] = (self.registers[r2] - 1) & 255
-        if self.registers[r2]:
+        if self.registers[r2] == 0xFF:
             self.registers[r1] = (self.registers[r1] - 1) & 255
         self.registers['m'] = m
 

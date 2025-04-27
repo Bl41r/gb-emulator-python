@@ -46,6 +46,8 @@ def main(filename):
     for component in [cpu, gpu]:
         component.sys_interface = sys_interface
 
+    cpu.sanity_test_memory_write()
+
     sys_interface.load_rom_image(filename)
 
     # Setup Pygame
