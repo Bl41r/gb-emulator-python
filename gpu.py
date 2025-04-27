@@ -40,6 +40,8 @@ is that one row of the tile is two bytes: from this results the slightly
 convoluted scheme for storage of the bits, where each pixel's low bit is
 held in one byte, and the high bit in the other byte.
 """
+import sys
+
 import numpy as np
 
 
@@ -199,6 +201,7 @@ class GbGpu(object):
                 self.vblank_counter += 1
                 if self.vblank_counter % 10 == 0:
                     print(f"VBlank {self.vblank_counter} occurred")
+                    # if self.vblank_counter == 100: sys.exit(0)
                 if self.vblank_counter == 60:  # or a little later if you prefer
                     print("\n==== Debugging Screen State ====")
 

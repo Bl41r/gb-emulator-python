@@ -123,6 +123,7 @@ RETI    Return then enable interrupts.  16
 """
 
 # import pdb
+import sys
 
 
 FLAG = {
@@ -181,7 +182,7 @@ class GbZ80Cpu(object):
             5: (self._dec_r, ('b',)),  # DECr_b
             6: (self._ld_rn, ('b',)),  # LDrn_b
             7: (self._rlc_a, ()),  # RLCA
-            8: (self._ld_nn_sp, ()),  # LDnnSP -- double check this one...
+            8: (self._ld_nn_sp, ()),  # LDnnSP
             9: (self._add_hl_n, ('b', 'c')),  # ADDHLBC
             10: (self._ld_a_r1r2m, ('b', 'c')),  # LDABCm
             11: (self._dec_r_r, ('b', 'c')),  # DECBC
@@ -696,7 +697,13 @@ class GbZ80Cpu(object):
         my_counter += 1
         op = self.read8(self.registers['pc'])
 
-        # # --- Log for first 1000 instructions ---
+        # temporary
+        print(f"PC={self.registers['pc']:04X} OP={op:02X} SP={self.registers['sp']:04X}")
+        if self.registers['pc'] > 0x5E00 and self.read8(self.registers['pc']) == 0x00:
+            print(f"!!! Stuck at PC={self.registers['pc']:04X} with NOP (0x00) instruction. Exiting.")
+            sys.exit(1)
+
+    # # --- Log for first 1000 instructions ---
         # if my_counter < 1000:
         #     print(f"PC: {hex(self.registers['pc'])}, OP: {hex(op)}, SP: {hex(self.registers['sp'])}")
         # else:
@@ -790,6 +797,7 @@ class GbZ80Cpu(object):
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
         i = self.read8(self.registers['pc'])
+        print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535
         op, args = self.cb_map[i]
@@ -821,6 +829,7 @@ class GbZ80Cpu(object):
 
     def _halt(self):
         """HALT CPU until interrupt."""
+        print('halt called')
         self.registers['m'] = 1
 
     # Loads
@@ -962,7 +971,6 @@ class GbZ80Cpu(object):
         """Put A into mem @ address $FF00+C (correct)."""
         self.write8(0xFF00 + self.registers['c'], self.registers['a'])
         self.registers['m'] = 2
-
 
     def _ld_hl_sp_n(self):
         """LD HL, SP+n (signed)"""
@@ -1186,16 +1194,19 @@ class GbZ80Cpu(object):
         self.registers['m'] = 1
 
     def _add_sp_n(self):
-        """Add signed immediate to SP."""
+        """Add signed immediate value to SP."""
         n = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
         if n > 127:
             n = n - 256
-        self.registers['pc'] += 1
 
         result = (self.registers['sp'] + n) & 0xFFFF
 
-        self.registers['f'] = 0  # Z = 0, N = 0
+        # Clear Z and N
+        self.registers['f'] = 0
 
+        # Set flags
         if ((self.registers['sp'] & 0xF) + (n & 0xF)) > 0xF:
             self.registers['f'] |= FLAG['half-carry']
         if ((self.registers['sp'] & 0xFF) + (n & 0xFF)) > 0xFF:
@@ -1203,6 +1214,7 @@ class GbZ80Cpu(object):
 
         self.registers['sp'] = result
         self.registers['m'] = 4
+
 
     def _add_hl_n(self, r1, r2):
         """Add r16 (r1r2) to HL."""
@@ -1362,11 +1374,18 @@ class GbZ80Cpu(object):
         self.registers['m'] = 1
 
     def _swap_n(self, n):
-        """Swap upper & lower nibles of n."""
+        """Swap upper & lower nibbles of n."""
         tr = self.registers[n]
-        self.registers[n] = ((tr & 0xF) << 4) | ((tr & 0xF0) >> 4)
-        self.registers['f'] = 0 if self.registers[n] else FLAG['zero']
-        self.registers['m'] = 1
+        result = ((tr & 0xF) << 4) | ((tr & 0xF0) >> 4)
+        self.registers[n] = result
+
+        self.registers['f'] = 0
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        self.registers['m'] = 2
+        print(f"SWAP done: A={self.registers['a']:02X}")
+
 
     # Boolean logic
     def _and_n(self, n):
