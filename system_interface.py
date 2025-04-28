@@ -61,21 +61,21 @@ class GbSystemInterface(object):
         for i in GbSystemInterface.CART_TITLE:
             title += chr(self.read_byte(i))
         print("Title:", title)
-        print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
 
+        # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
         # self.fake_fill_vram()
         # print('loaded fake vram data!')
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
         self.memory.write_byte(address, value)
-        if address == 0xFF40:
-            print(f"!!! LCDC write detected: {hex(value)} !!!")
+        # if address == 0xFF40:
+        #     print(f"!!! LCDC write detected: {hex(value)} !!!")
         if 0x8000 <= address <= 0x97FF:     # VRAM tile area write
             self.gpu.update_tile(address, value)
-            print(f"Writing to VRAM TILE area! Address: {hex(address)}, Value: {hex(value)}")
-        elif 0x9800 <= address <= 0x9FFF:   # VRAM tilemap area write
-            print(f"Writing to VRAM TILEMAP area! Address: {hex(address)}, Value: {hex(value)}")
+            # print(f"Writing to VRAM TILE area! Address: {hex(address)}, Value: {hex(value)}")
+        # elif 0x9800 <= address <= 0x9FFF:   # VRAM tilemap area write
+        #     print(f"Writing to VRAM TILEMAP area! Address: {hex(address)}, Value: {hex(value)}")
 
     def write_word(self, address, value):
         """Write a word into memory."""

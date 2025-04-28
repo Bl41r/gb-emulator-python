@@ -114,7 +114,7 @@ class GbGpu(object):
             hi = 2 if byte2 & bit else 0
             self.tile_set[tile_index][row][x] = lo + hi
 
-        print(f"Tile update: tile={tile_index}, row={row}, data={self.tile_set[tile_index][row]}")
+        # print(f"Tile update: tile={tile_index}, row={row}, data={self.tile_set[tile_index][row]}")
 
     def get_gpu_ctrl_reg(self, reg_name):
         """Return on/off (bit value or 0) for the LCD/GPU control register bit.
@@ -199,31 +199,31 @@ class GbGpu(object):
             if curr_line == 143:
                 self.linemode = 1  # enter V-Blank
                 self.vblank_counter += 1
-                if self.vblank_counter % 10 == 0:
-                    print(f"VBlank {self.vblank_counter} occurred")
+                # if self.vblank_counter % 10 == 0:
+                #     print(f"VBlank {self.vblank_counter} occurred")
                     # if self.vblank_counter == 100: sys.exit(0)
-                if self.vblank_counter == 60:  # or a little later if you prefer
-                    print("\n==== Debugging Screen State ====")
-
-                    # 1. Dump background tilemap (first 8x8 block)
-                    print("Tilemap data at 0x9800:")
-                    for addr in range(0x9800, 0x9800 + 64):
-                        if (addr - 0x9800) % 8 == 0:
-                            print()  # new line every 8 tiles
-                        print(f"{self.sys_interface.read_byte(addr):02x} ", end="")
-                    print("\n")
-
-                    # 2. Dump first tile's pixel data (tile 0)
-                    print("Tile 0 pixel rows:")
-                    for row in range(8):
-                        print(f"Row {row}: {self.tile_set[0][row]}")
-
-                    # 3. Dump scroll registers SCX and SCY
-                    scx = self.sys_interface.read_byte(0xFF43)
-                    scy = self.sys_interface.read_byte(0xFF42)
-                    print(f"Scroll X (SCX): {scx}, Scroll Y (SCY): {scy}")
-
-                    print("==== End Debugging Screen State ====\n")
+                # if self.vblank_counter == 60:  # or a little later if you prefer
+                #     print("\n==== Debugging Screen State ====")
+                #
+                #     # 1. Dump background tilemap (first 8x8 block)
+                #     print("Tilemap data at 0x9800:")
+                #     for addr in range(0x9800, 0x9800 + 64):
+                #         if (addr - 0x9800) % 8 == 0:
+                #             print()  # new line every 8 tiles
+                #         print(f"{self.sys_interface.read_byte(addr):02x} ", end="")
+                #     print("\n")
+                #
+                #     # 2. Dump first tile's pixel data (tile 0)
+                #     print("Tile 0 pixel rows:")
+                #     for row in range(8):
+                #         print(f"Row {row}: {self.tile_set[0][row]}")
+                #
+                #     # 3. Dump scroll registers SCX and SCY
+                #     scx = self.sys_interface.read_byte(0xFF43)
+                #     scy = self.sys_interface.read_byte(0xFF42)
+                #     print(f"Scroll X (SCX): {scx}, Scroll Y (SCY): {scy}")
+                #
+                #     print("==== End Debugging Screen State ====\n")
 
                 # Set V-Blank interrupt flag
                 interrupt_flags = self.sys_interface.read_byte(0xFF0F)
