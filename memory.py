@@ -28,11 +28,13 @@ import array
 class GbMemory(object):
     """Memory of the LC-3 VM."""
 
-    def __init__(self):
+    def __init__(self, skip_bios=False):
         """Init."""
         self.mem_size = 2**16
         self.memory = array.array('B', [0 for i in range(self.mem_size)])
         self.cartridge_type = 0
+        if not skip_bios:
+            self.initialize_memory()
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
@@ -57,3 +59,18 @@ class GbMemory(object):
         for i in range(self.mem_size):
             self.memory[i] = 0
         self.cartridge_type = 0
+
+    def initialize_memory(self):
+        initial_values = {
+            0xFF05: 0x00, 0xFF06: 0x00, 0xFF07: 0x00,
+            0xFF10: 0x80, 0xFF11: 0xBF, 0xFF12: 0xF3, 0xFF14: 0xBF,
+            0xFF16: 0x3F, 0xFF17: 0x00, 0xFF19: 0xBF,
+            0xFF1A: 0x7F, 0xFF1B: 0xFF, 0xFF1C: 0x9F, 0xFF1E: 0xBF,
+            0xFF20: 0xFF, 0xFF21: 0x00, 0xFF22: 0x00, 0xFF23: 0xBF,
+            0xFF24: 0x77, 0xFF25: 0xF3, 0xFF26: 0xF1,
+            0xFF40: 0x91, 0xFF42: 0x00, 0xFF43: 0x00, 0xFF45: 0x00,
+            0xFF47: 0xFC, 0xFF48: 0xFF, 0xFF49: 0xFF,
+            0xFF4A: 0x00, 0xFF4B: 0x00, 0xFFFF: 0x00
+        }
+        for addr, value in initial_values.items():
+            self.write_byte(addr, value)
