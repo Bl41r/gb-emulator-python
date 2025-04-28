@@ -44,6 +44,8 @@ class GbSystemInterface(object):
         for i in range(0, len(rom_array)):
             self.memory.write_byte(i, rom_array[i])
 
+        self.cpu.registers['pc'] = 0x0100
+
         self.cartridge_type = self.read_byte(
             GbSystemInterface.CART_TYPE_CHECK_BYTE)
         print(
@@ -59,6 +61,7 @@ class GbSystemInterface(object):
         for i in GbSystemInterface.CART_TITLE:
             title += chr(self.read_byte(i))
         print("Title:", title)
+        print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
 
         # self.fake_fill_vram()
         # print('loaded fake vram data!')
@@ -80,11 +83,6 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
-        # if address == 0xFF00:
-        #     # Pretend the player is holding down "Start" and "A"
-        #     # A = Bit 0, Start = Bit 3
-        #     # Joypad reads 0 when button is pressed
-        #     return 0b11100110  # Bits cleared (0) for A and Start
         return self.memory.read_byte(address)
 
     def read_word(self, address):

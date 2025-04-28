@@ -125,7 +125,6 @@ RETI    Return then enable interrupts.  16
 # import pdb
 import sys
 
-
 FLAG = {
     'zero': 0x80,           # Z flag
     'sub': 0x40,    # N flag
@@ -134,6 +133,7 @@ FLAG = {
 }
 
 my_counter = 0
+
 
 
 class ExecutionHalted(Exception):
@@ -145,9 +145,10 @@ class ExecutionHalted(Exception):
 class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
-    def __init__(self):
+    def __init__(self, log_dump):
         """Initialize an instance."""
         self.clock = {'m': 0}  # Time clock
+        self.log_dump = log_dump
 
         self.sys_interface = None    # Set after interface instantiated.
 
@@ -163,7 +164,7 @@ class GbZ80Cpu(object):
             'ime': 1,
 
             # 16-bit registers (program counter, stack pointer)
-            'pc': 0x100, 'sp': 0xFFFE,
+            'pc': 0x0100, 'sp': 0xFFFE,
 
             # Clock for last instr
             'm': 0      # cpu cycles/4
@@ -190,7 +191,8 @@ class GbZ80Cpu(object):
             13: (self._dec_r, ('c',)),  # DECr_c
             14: (self._ld_rn, ('c',)),  # LDrn_c
             15: (self._rrca, ()),  # RRCA
-            16: (self._djnz_n, ()),  # DJNZn
+            # 16: (self._djnz_n, ()),  # DJNZn or stop?
+            16: (self._stop, ()),  # DJNZn or stop?
             17: (self._ld_r1r2_nn, ('d', 'e')),  # LDDEnn
             18: (self._ld_r1r2m_a, ('d', 'e')),  # LDDEmA
             19: (self._inc_r_r, ('d', 'e')),  # INCDE
@@ -213,7 +215,7 @@ class GbZ80Cpu(object):
             36: (self._inc_r, ('h',)),  # INCr_h
             37: (self._dec_r, ('h',)),  # DECr_h
             38: (self._ld_rn, ('h',)),  # LDrn_h
-            39: (self._nop, ()),  # XX
+            39: (self._daa, ()),  # DAA
             40: (self._jr_cc_n, (FLAG['zero'], FLAG['zero'])),  # JRZn
             41: (self._add_hl_n, ('h', 'l')),  # ADDHLHL
             42: (self._ld_a_hl_i, ()),  # LDAHLI
@@ -692,46 +694,37 @@ class GbZ80Cpu(object):
         }
 
     def execute_next_operation(self):
-        """Execute the next operation."""
         global my_counter
         my_counter += 1
-        op = self.read8(self.registers['pc'])
 
-        # temporary
-        print(f"PC={self.registers['pc']:04X} OP={op:02X} SP={self.registers['sp']:04X}")
-        if self.registers['pc'] > 0x5E00 and self.read8(self.registers['pc']) == 0x00:
-            print(f"!!! Stuck at PC={self.registers['pc']:04X} with NOP (0x00) instruction. Exiting.")
-            sys.exit(1)
+        pc_before = self.registers['pc']
+        op = self.read8(pc_before)
 
-    # # --- Log for first 1000 instructions ---
-        # if my_counter < 1000:
-        #     print(f"PC: {hex(self.registers['pc'])}, OP: {hex(op)}, SP: {hex(self.registers['sp'])}")
-        # else:
-        #     sys.exit(0)
-        # # ------------------------------------------------------
+        # -- LOGGING before doing anything else
+        pcmem = [self.read8(pc_before + i) if (pc_before + i) < 0x10000 else 0 for i in range(4)]
+        log_line = (
+            f"A:{self.registers['a']:02X} F:{self.registers['f']:02X} "
+            f"B:{self.registers['b']:02X} C:{self.registers['c']:02X} "
+            f"D:{self.registers['d']:02X} E:{self.registers['e']:02X} "
+            f"H:{self.registers['h']:02X} L:{self.registers['l']:02X} "
+            f"SP:{self.registers['sp']:04X} PC:{pc_before:04X} "
+            f"PCMEM:{','.join(f'{b:02X}' for b in pcmem)}"
+        )
+        self.log_dump.append(log_line)
 
-        self.registers['pc'] += 1
-        self.registers['pc'] &= 65535   # mask to 16-bits
+        # -- THEN execute the instruction
+        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
         instruction = self.opcode_map[op]
         opcode, args = instruction[0], instruction[1]
 
         try:
-            # print('executing instr count', my_counter)
             opcode(*args)
             self._inc_clock()
         except Exception as e:
             print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
             raise e
 
-        self.handle_interrupts()  # handle interrupts after each instruction
-
-    def sanity_test_memory_write(self):
-        print("Memory at 0xC000 before:", self.sys_interface.read_byte(0xC000))
-        self.registers['h'] = 0xC0
-        self.registers['l'] = 0x00
-        self.registers['a'] = 0x42
-        self.write8((self.registers['h'] << 8) | self.registers['l'], self.registers['a'])
-        print("Memory at 0xC000 after :", self.sys_interface.read_byte(0xC000))
+        self.handle_interrupts()
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -797,7 +790,7 @@ class GbZ80Cpu(object):
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
         i = self.read8(self.registers['pc'])
-        print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
+        # print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535
         op, args = self.cb_map[i]
@@ -829,7 +822,7 @@ class GbZ80Cpu(object):
 
     def _halt(self):
         """HALT CPU until interrupt."""
-        print('halt called')
+        # print('halt called')
         self.registers['m'] = 1
 
     # Loads
@@ -1030,17 +1023,20 @@ class GbZ80Cpu(object):
         self.registers['m'] += 1
 
     def _jr_cc_n(self, and_val, flag_check_value):
-        """If Z flag reset, add n to current address and jump to it.
+        """Conditional relative jump
 
+        If Z flag reset, add n to current address and jump to it.
         n = one byte signed immediate value
         """
         i = self.read8(self.registers['pc'])
-        if i > 127:
-            i = -(~i + 1) & 255
-        self.registers['pc'] += 1
+        if i >= 0x80:
+            i -= 0x100  # Proper signed conversion
+
+        self.registers['pc'] += 1  # Advance PC past the immediate byte
         self.registers['m'] = 2
+
         if (self.registers['f'] & and_val) == flag_check_value:
-            self.registers['pc'] += i
+            self.registers['pc'] = (self.registers['pc'] + i) & 0xFFFF
             self.registers['m'] += 1
 
     def _djnz_n(self):
@@ -1096,9 +1092,11 @@ class GbZ80Cpu(object):
 
         Opcode #205
         """
+        target = self.read16(self.registers['pc'])
+        # print(f"CALL to {target:04X} from {self.registers['pc']:04X} SP={self.registers['sp']:04X}")
         self.registers['sp'] -= 2
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
-        self.registers['pc'] = self.read16(self.registers['pc'])
+        self.registers['pc'] = target
         self.registers['m'] = 5
 
     # SUB / ADD
@@ -1201,12 +1199,11 @@ class GbZ80Cpu(object):
         if n > 127:
             n = n - 256
 
+        old_sp = self.registers['sp']
         result = (self.registers['sp'] + n) & 0xFFFF
 
-        # Clear Z and N
         self.registers['f'] = 0
 
-        # Set flags
         if ((self.registers['sp'] & 0xF) + (n & 0xF)) > 0xF:
             self.registers['f'] |= FLAG['half-carry']
         if ((self.registers['sp'] & 0xFF) + (n & 0xFF)) > 0xFF:
@@ -1214,6 +1211,9 @@ class GbZ80Cpu(object):
 
         self.registers['sp'] = result
         self.registers['m'] = 4
+
+        # print(f"ADD SP, n: SP {old_sp:04X} + {n} = {self.registers['sp']:04X}")
+
 
 
     def _add_hl_n(self, r1, r2):
@@ -1338,30 +1338,43 @@ class GbZ80Cpu(object):
         self.registers['m'] = m
 
     def _dec_r(self, r):
-        """Decrement register r."""
-        old_value = self.registers[r]
-        self.registers[r] = (self.registers[r] - 1) & 0xFF
+        """Decrement register with correct flags."""
+        val = self.registers[r]
+        result = (val - 1) & 0xFF
 
-        self.registers['f'] = FLAG['sub']
-        if self.registers[r] == 0:
+        self.registers[r] = result
+
+        # Preserve Carry flag
+        carry_flag = self.registers['f'] & FLAG['carry']
+        self.registers['f'] = carry_flag | FLAG['sub']  # Always set Subtract flag
+
+        if result == 0:
             self.registers['f'] |= FLAG['zero']
-        if (old_value & 0xF) == 0:
+        if (val & 0xF) == 0:
             self.registers['f'] |= FLAG['half-carry']
 
         self.registers['m'] = 1
+
 
     def _inc_r(self, r):
-        """Increment register r."""
-        old_value = self.registers[r]
-        self.registers[r] = (self.registers[r] + 1) & 0xFF
+        """Increment register with correct flags."""
+        val = self.registers[r]
+        result = (val + 1) & 0xFF
 
-        self.registers['f'] = 0  # N cleared
-        if self.registers[r] == 0:
+        self.registers[r] = result
+
+        # Preserve the Carry flag
+        carry_flag = self.registers['f'] & FLAG['carry']
+        self.registers['f'] = carry_flag  # Start with carry preserved
+
+        if result == 0:
             self.registers['f'] |= FLAG['zero']
-        if (old_value & 0xF) == 0xF:
+        if (val & 0xF) + 1 > 0xF:
             self.registers['f'] |= FLAG['half-carry']
+        # N flag cleared (INC never sets subtract flag)
 
         self.registers['m'] = 1
+
 
     def _inc_sp(self):
         """Increment stack pointer."""
@@ -1384,7 +1397,7 @@ class GbZ80Cpu(object):
             self.registers['f'] |= FLAG['zero']
 
         self.registers['m'] = 2
-        print(f"SWAP done: A={self.registers['a']:02X}")
+        # print(f"SWAP done: A={self.registers['a']:02X}")
 
 
     # Boolean logic
@@ -1470,7 +1483,9 @@ class GbZ80Cpu(object):
     # Returns
     def _ret(self):
         """Pop two bytes from stack & jump to that address."""
-        self.registers['pc'] = self.read16(self.registers['sp'])
+        target = self.read16(self.registers['sp'])
+        # print(f"RET to {target:04X} from SP={self.registers['sp']:04X}")
+        self.registers['pc'] = target
         self.registers['sp'] += 2
         self.registers['m'] = 3
 
@@ -1515,6 +1530,17 @@ class GbZ80Cpu(object):
             self.registers[reg] = self.rsv[reg]
 
     # Misc
+
+    def _daa(self):
+        """Decimal adjust accumulator (not implemented yet)."""
+        # TODO: full DAA logic
+        self.registers['m'] = 1
+
+    def _stop(self):
+        """Fake STOP instruction."""
+        self.stopped = True
+        self.registers['m'] = 1
+
     def cpl(self):
         """Complement A register (bit flip)."""
         self.registers['a'] = (~self.registers['a']) & 0xFF

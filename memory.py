@@ -28,12 +28,13 @@ import array
 class GbMemory(object):
     """Memory of the LC-3 VM."""
 
-    def __init__(self):
+    def __init__(self, skip_bios=False):
         """Init."""
         self.mem_size = 2**16
         self.memory = array.array('B', [0 for i in range(self.mem_size)])
         self.cartridge_type = 0
-        self.initialize_memory()
+        if not skip_bios:
+            self.initialize_memory()
 
     def write_byte(self, address, value):
         """Write a byte to an address."""

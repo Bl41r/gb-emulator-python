@@ -1,4 +1,4 @@
-import sys
+import sys, os
 import pygame
 import numpy as np
 import pygame.surfarray
@@ -37,16 +37,14 @@ def draw_screen(gpu, screen):
 
 
 def main(filename):
-    gb_memory = GbMemory()
-    cpu = GbZ80Cpu()
+    gb_memory = GbMemory(skip_bios=True)
+    cpu = GbZ80Cpu(LOG_DUMP)
     gpu = GbGpu()
 
     sys_interface = GbSystemInterface(gb_memory, cpu, gpu)
 
     for component in [cpu, gpu]:
         component.sys_interface = sys_interface
-
-    cpu.sanity_test_memory_write()
 
     sys_interface.load_rom_image(filename)
 
@@ -66,19 +64,17 @@ def main(filename):
 
             cpu.execute_next_operation()
 
-            # print(f"GPU mode: {gpu.linemode}, curr_line: {gpu.read_reg('curr_line')}")
-
             # Check if we just hit the V-Blank mode
             if gpu.linemode == 1 and gpu.read_reg('curr_line') == 144:
                 # print('hit v blank mode')
                 draw_screen(gpu, window)
                 clock.tick(60)  # cap at ~60 FPS
 
-    except ExecutionHalted:
+    except ExecutionHalted as e:
         print("\nShutting down...")
         dump_logs(gb_memory.memory, cpu)
         pygame.quit()
-        sys.exit(0)
+        raise e
 
     except Exception as e:
         pygame.quit()
@@ -88,11 +84,16 @@ def main(filename):
 
 
 def dump_logs(memory, cpu):
-    print("\n\nLOG DUMP:")
-    for item in LOG_DUMP:
-        print(item)
-    print()
+    # print("\n\nLOG DUMP:")
+    # for item in LOG_DUMP:
+    #     print(item)
+    # print()
     dump_mem_map(memory)
+    if os.path.exists('cpu_log.txt'):
+        os.remove('cpu_log.txt')
+    with open('cpu_log.txt', 'w') as f:
+        for entry in LOG_DUMP:
+            f.write(entry + '\n')
     print("Registers:", cpu.registers)
 
 
