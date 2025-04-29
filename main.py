@@ -66,9 +66,10 @@ def main(filename):
 
             # Check if we just hit the V-Blank mode
             if gpu.linemode == 1 and gpu.read_reg('curr_line') == 144:
-                # print('hit v blank mode')
+                print(f"[GPU before] Register A: {cpu.registers['a']:02X}")
                 draw_screen(gpu, window)
                 clock.tick(60)  # cap at ~60 FPS
+                print(f"[GPU after] Register A: {cpu.registers['a']:02X}")
 
     except ExecutionHalted as e:
         print("\nShutting down...")

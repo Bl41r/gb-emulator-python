@@ -40,10 +40,7 @@ is that one row of the tile is two bytes: from this results the slightly
 convoluted scheme for storage of the bits, where each pixel's low bit is
 held in one byte, and the high bit in the other byte.
 """
-import sys
-
 import numpy as np
-
 
 class GbGpu(object):
     """GPU unit for the gameboy."""
@@ -194,36 +191,11 @@ class GbGpu(object):
         self.write_reg('stat', stat)
 
     def _h_blank_render_screen(self):
-        if self._mode_clock >= 51:
+        if self._mode_clock >= 204:
             curr_line = self.read_reg('curr_line')
             if curr_line == 143:
                 self.linemode = 1  # enter V-Blank
                 self.vblank_counter += 1
-                # if self.vblank_counter % 10 == 0:
-                #     print(f"VBlank {self.vblank_counter} occurred")
-                    # if self.vblank_counter == 100: sys.exit(0)
-                # if self.vblank_counter == 60:  # or a little later if you prefer
-                #     print("\n==== Debugging Screen State ====")
-                #
-                #     # 1. Dump background tilemap (first 8x8 block)
-                #     print("Tilemap data at 0x9800:")
-                #     for addr in range(0x9800, 0x9800 + 64):
-                #         if (addr - 0x9800) % 8 == 0:
-                #             print()  # new line every 8 tiles
-                #         print(f"{self.sys_interface.read_byte(addr):02x} ", end="")
-                #     print("\n")
-                #
-                #     # 2. Dump first tile's pixel data (tile 0)
-                #     print("Tile 0 pixel rows:")
-                #     for row in range(8):
-                #         print(f"Row {row}: {self.tile_set[0][row]}")
-                #
-                #     # 3. Dump scroll registers SCX and SCY
-                #     scx = self.sys_interface.read_byte(0xFF43)
-                #     scy = self.sys_interface.read_byte(0xFF42)
-                #     print(f"Scroll X (SCX): {scx}, Scroll Y (SCY): {scy}")
-                #
-                #     print("==== End Debugging Screen State ====\n")
 
                 # Set V-Blank interrupt flag
                 interrupt_flags = self.sys_interface.read_byte(0xFF0F)
@@ -231,13 +203,15 @@ class GbGpu(object):
                 self.sys_interface.write_byte(0xFF0F, interrupt_flags)
             else:
                 self.linemode = 2
+
             self._update_stat_register()
             self.write_reg('curr_line', (curr_line + 1) & 0xFF)
+
             self._mode_clock = 0
 
     def _v_blank(self):
         """."""
-        if self._mode_clock >= 114:
+        if self._mode_clock >= 456:
             self._mode_clock = 0
             self.write_reg('curr_line', (self.read_reg('curr_line') + 1) & 0xFF)
 
@@ -249,42 +223,24 @@ class GbGpu(object):
 
     def _oam_read_mode(self):
         """OAM read."""
-        if self._mode_clock >= 20:
+        if self._mode_clock >= 80:
             self._mode_clock = 0
             self.linemode = 3
             self._update_stat_register()
 
     def _vram_read_mode(self):
         """VRAM read."""
-        if self._mode_clock >= 43:
+        if self._mode_clock >= 172:
             self._mode_clock = 0
             self.linemode = 0
             self._update_stat_register()
             self._renderscan()
-
-    # def _renderscan(self):
-    #     if not self.is_display_enabled() or not self.is_background_enabled():
-    #         return
-    #
-    #     line = self.read_reg('curr_line')
-    #
-    #     for x in range(160):
-    #         # Fake checkerboard color without using tilemap
-    #         if ((line // 8) + (x // 8)) % 2 == 0:
-    #             color_val = 96  # dark gray
-    #         else:
-    #             color_val = 192  # light gray
-    #
-    #         px_offset = (line * 160 + x) * 4
-    #         self.screen['data'][px_offset:px_offset+4] = [color_val]*3 + [255]
-
 
     def _renderscan(self):
         if self.vblank_counter < 10:
             return  # Fast-forward: skip rendering the first 10 frames!
 
         line = self.read_reg('curr_line')
-        # print(f"Rendering scanline: {line}")
 
         if not self.is_display_enabled() or not self.is_background_enabled():
             # print("Display or BG disabled.")
@@ -298,8 +254,6 @@ class GbGpu(object):
         tileset_base = self.get_tile_data_base()
         signed_addressing = tileset_base == 0x8800
 
-        # print(f"Map Base: {hex(map_base)}, Tileset Base: {hex(tileset_base)}")
-
         for x in range(160):
             x_scrolled = (x + self.read_reg('scroll_x')) & 0xFF
             tile_col = x_scrolled >> 3
@@ -307,14 +261,6 @@ class GbGpu(object):
 
             tile_addr = map_base + tile_row * 32 + tile_col
             tile_id = self.sys_interface.read_byte(tile_addr)
-
-            # # --- INSTEAD of reading from 0x9800, FAKE a checkerboard pattern ---
-            # # Alternate between Tile 0 and Tile 1
-            # if (tile_row + tile_col) % 2 == 0:
-            #     tile_id = 0
-            # else:
-            #     tile_id = 1
-            #     # --- END checkerboard override ---
 
             if signed_addressing:
                 tile_id = tile_id - 256 if tile_id > 127 else tile_id
@@ -328,10 +274,6 @@ class GbGpu(object):
             bit_index = 7 - tile_pixel_col
             color_index = ((byte2 >> bit_index) & 1) << 1 | ((byte1 >> bit_index) & 1)
             color_val = self._palette['bg'][color_index]
-
-            # if x % 32 == 0:  # Print details every 32 pixels to reduce verbosity
-            #     print(f"x:{x}, TileID:{tile_id}, TileLoc:{hex(tile_loc)}, Byte1:{bin(byte1)}, Byte2:{bin(byte2)}, ColorIdx:{color_index}, Color:{color_val}")
-
             px_offset = (line * 160 + x) * 4
             self.screen['data'][px_offset:px_offset+4] = [color_val]*3 + [255]
 

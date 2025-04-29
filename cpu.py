@@ -123,7 +123,6 @@ RETI    Return then enable interrupts.  16
 """
 
 # import pdb
-import sys
 
 FLAG = {
     'zero': 0x80,           # Z flag
@@ -131,14 +130,10 @@ FLAG = {
     'half-carry': 0x20,     # H flag
     'carry': 0x10           # C flag
 }
-
 my_counter = 0
-
-
 
 class ExecutionHalted(Exception):
     """Raised when execution should stop."""
-
     pass
 
 
@@ -719,10 +714,22 @@ class GbZ80Cpu(object):
 
         try:
             opcode(*args)
+            print(f"[TRACE] Executed {opcode.__name__}, args: {str(args)}, m={self.registers['m']}")
             self._inc_clock()
         except Exception as e:
             print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
             raise e
+
+        # === A REGISTER TRACE ===
+        print(f"[TRACE] instr {my_counter} PC=0x{self.registers['pc']:04X} A=0x{self.registers['a']:02X}")
+        # ========================
+
+        # # === Insert mismatch check here ===
+        # if self.registers['pc'] == 0xCAED and self.registers['a'] != 0x90:
+        #     print(f"[STOP] Detected mismatch at PC=0x{self.registers['pc']:04X}")
+        #     print(f"A=0x{self.registers['a']:02X} (expected 0x90)")
+        #     raise Exception("CPU halted due to mismatch")
+        # # ===================================
 
         self.handle_interrupts()
 
@@ -787,6 +794,11 @@ class GbZ80Cpu(object):
         self.sys_interface.write_byte(address, val & 0xFF)
         self.sys_interface.write_byte(address + 1, (val >> 8) & 0xFF)
 
+    @staticmethod
+    def signed8(n):
+        """Convert 8-bit unsigned value to signed integer."""
+        return n - 0x100 if n >= 0x80 else n
+
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
         i = self.read8(self.registers['pc'])
@@ -798,8 +810,13 @@ class GbZ80Cpu(object):
 
     def _inc_clock(self):
         """Increment clock registers and step GPU."""
+        if self.registers['m'] == 0:
+            raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
+
         self.clock['m'] += self.registers['m']
+        print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
         if self.sys_interface and self.sys_interface.gpu:
+            print(f"[GPU STEP] stepping {self.registers['m']*4} cycles")
             self.sys_interface.gpu.step(self.registers['m'] * 4)  # 1 m = 4 cycles
 
     def _toggle_flag(self, flag_value):
@@ -995,7 +1012,7 @@ class GbZ80Cpu(object):
     def _jp_nn(self):
         """Jump to two byte immediate value."""
         self.registers['pc'] = self.read16(self.registers['pc'])
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _jp_cc_nn(self, and_val, flag_check_value):
         """Jump to address n if condition is true.
@@ -1015,12 +1032,11 @@ class GbZ80Cpu(object):
 
     def _jr_n(self):
         """Add signed immediate value to current address and jump to it."""
-        i = self.read8(self.registers['pc'])
-        i = i if i < 128 else i - 256
+        i = self.signed8(self.read8(self.registers['pc']))
         self.registers['pc'] += 1
         self.registers['m'] = 2
         self.registers['pc'] += i
-        self.registers['m'] += 1
+        self.registers['m'] += 3
 
     def _jr_cc_n(self, and_val, flag_check_value):
         """Conditional relative jump
@@ -1028,10 +1044,7 @@ class GbZ80Cpu(object):
         If Z flag reset, add n to current address and jump to it.
         n = one byte signed immediate value
         """
-        i = self.read8(self.registers['pc'])
-        if i >= 0x80:
-            i -= 0x100  # Proper signed conversion
-
+        i = self.signed8(self.read8(self.registers['pc']))
         self.registers['pc'] += 1  # Advance PC past the immediate byte
         self.registers['m'] = 2
 
@@ -1043,9 +1056,7 @@ class GbZ80Cpu(object):
         """Decrement B and jump if not zero."""
         self.registers['b'] = (self.registers['b'] - 1) & 0xFF
         if self.registers['b'] != 0:
-            n = self.read8(self.registers['pc'])
-            if n > 127:
-                n = -((~n + 1) & 0xFF)
+            n = self.signed8(self.read8(self.registers['pc']))
             self.registers['pc'] = (self.registers['pc'] + n + 1) & 0xFFFF
             self.registers['m'] = 3  # 12 cycles
         else:
@@ -1097,7 +1108,7 @@ class GbZ80Cpu(object):
         self.registers['sp'] -= 2
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = target
-        self.registers['m'] = 5
+        self.registers['m'] = 6
 
     # SUB / ADD
     def _sub_n(self, r):
