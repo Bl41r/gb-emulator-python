@@ -29,14 +29,14 @@ WATCH_ADDRESSES = {0xFF44}
 class GbMemory(object):
     """Memory of the LC-3 VM."""
 
-    def __init__(self, skip_bios=False):
+    def __init__(self, skip_bios=False, test_mode=False):
         """Init."""
         self.mem_size = 2**16
         self.memory = array.array('B', [0 for i in range(self.mem_size)])
         self.cartridge_type = 0
         if not skip_bios:
             self.initialize_memory()
-        self.in_test_mode = True
+        self.test_mode = test_mode
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
@@ -48,7 +48,7 @@ class GbMemory(object):
 
     def read_byte(self, address):
         """Return a byte from memory at an address."""
-        if address == 0xFF44 and self.in_test_mode:
+        if address == 0xFF44 and self.test_mode:
             return 0x90
         return self.memory[address]
 

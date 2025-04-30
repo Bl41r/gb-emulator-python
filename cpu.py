@@ -367,7 +367,7 @@ class GbZ80Cpu(object):
             193: (self._pop_nn, ('b', 'c')),  # POPBC
             194: (self._jp_cc_nn, (FLAG['zero'], 0x00)),  # JPNZnn
             195: (self._jp_nn, ()),  # JPnn
-            196: (self._raise_opcode_unimplemented, ()),  # CALLNZnn
+            196: (self._call_cc_nn, (FLAG['zero'], 0x00)),  # CALL NZ,nn
             197: (self._push_nn, ('b', 'c')),  # PUSHBC
             198: (self._raise_opcode_unimplemented, ()),  # ADDn
             199: (self._rst_n, (0x00,)),  # RST00
@@ -375,7 +375,7 @@ class GbZ80Cpu(object):
             201: (self._ret, ()),  # RET
             202: (self._jp_cc_nn, (FLAG['zero'], FLAG['zero'])),  # JPZnn
             203: (self._call_cb_op, ()),  # MAPcb
-            204: (self._raise_opcode_unimplemented, ()),  # CALLZnn
+            204: (self._call_cc_nn, (FLAG['zero'], FLAG['zero'])),  # CALL Z,nn
             205: (self._call_nn, ()),  # CALLnn
             206: (self._adc_n, ()),  # ADCn
             207: (self._rst_n, (0x08,)),  # RST08
@@ -383,7 +383,7 @@ class GbZ80Cpu(object):
             209: (self._pop_nn, ('d', 'e')),  # POPDE
             210: (self._jp_cc_nn, (FLAG['carry'], 0x00)),  # JPNCnn
             211: (self._nop, ()),  # XX
-            212: (self._raise_opcode_unimplemented, ()),  # CALLNCnn
+            212: (self._call_cc_nn, (FLAG['carry'], 0x00)), # CALL NC,nn
             213: (self._push_nn, ('d', 'e')),  # PUSHDE
             214: (self._raise_opcode_unimplemented, ()),  # SUBn
             215: (self._rst_n, (FLAG['carry'],)),  # RST10
@@ -391,7 +391,7 @@ class GbZ80Cpu(object):
             217: (self._reti, ()),  # RETI
             218: (self._jp_cc_nn, (FLAG['carry'], FLAG['carry'])),  # JPCnn
             219: (self._nop, ()),  # XX
-            220: (self._raise_opcode_unimplemented, ()),  # CALLCnn
+            220: (self._call_cc_nn, (FLAG['carry'], FLAG['carry'])), # CALL C,nn
             221: (self._nop, ()),  # XX
             222: (self._raise_opcode_unimplemented, ()),  # SBCn
             223: (self._rst_n, (0x18,)),  # RST18
@@ -1109,6 +1109,18 @@ class GbZ80Cpu(object):
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = target
         self.registers['m'] = 6
+
+    def _call_cc_nn(self, flag_mask, expected_value):
+        """Conditionally CALL nn if flag matches."""
+        address = self.read16(self.registers['pc'])
+        self.registers['pc'] += 2
+        self.registers['m'] = 3
+
+        if (self.registers['f'] & flag_mask) == expected_value:
+            self.registers['sp'] -= 2
+            self.write16(self.registers['sp'], self.registers['pc'])
+            self.registers['pc'] = address
+            self.registers['m'] += 3
 
     # SUB / ADD
     def _sub_n(self, r):

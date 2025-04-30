@@ -37,7 +37,7 @@ def draw_screen(gpu, screen):
 
 
 def main(filename):
-    gb_memory = GbMemory(skip_bios=True)
+    gb_memory = GbMemory(skip_bios=False, test_mode=True)
     cpu = GbZ80Cpu(LOG_DUMP)
     gpu = GbGpu()
 
