@@ -409,7 +409,7 @@ class GbZ80Cpu(object):
             235: (self._nop, ()),  # XX
             236: (self._nop, ()),  # XX
             237: (self._nop, ()),  # XX
-            238: (self._raise_opcode_unimplemented, ()),  # ORn
+            238: (self._xor_n_imm, ()),  # ORn
             239: (self._rst_n, (0x28)),  # RST28
             240: (self._ldh_a_n, ()),  # LD AIO n
             241: (self._pop_nn, ('a', 'f')),  # POPAF
@@ -417,7 +417,7 @@ class GbZ80Cpu(object):
             243: (self._di, ()),  # DI
             244: (self._nop, ()),  # XX
             245: (self._push_nn, ('a', 'f')),  # PUSHAF
-            246: (self._xor_n, ()),  # XORn
+            246: (self._or_n_imm, ()),  # ORn
             247: (self._rst_n, (0x30,)),  # RST30
             248: (self._ld_hl_sp_n, ()),  # LD HL SP+n
             249: (self._ld_sp_hl, ()),  # LS SP HL
@@ -1488,6 +1488,34 @@ class GbZ80Cpu(object):
 
         self.registers['m'] = 1
 
+    def _or_n_imm(self):
+        """Logical OR immediate byte with register A, result in A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
+        self.registers['a'] |= value
+        self.registers['a'] &= 0xFF
+
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        self.registers['m'] = 2
+
+    def _xor_n_imm(self):
+        """Logical XOR immediate byte with register A, result in A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
+        self.registers['a'] ^= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags: Z if zero, others cleared
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        self.registers['m'] = 2
 
     def _xor_a_n(self, n):
         """Logical XOR n with register A, result in A."""
