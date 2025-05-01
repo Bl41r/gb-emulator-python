@@ -25,7 +25,10 @@ class GbSystemInterface(object):
         self.gpu = gpu
 
     def load_rom_image(self, filename):
-        """Load a ROM image into memory."""
+        """Load a ROM image into memory.
+
+        TODO: multiple rom banks for oversized roms
+        """
         self.memory.reset_memory()
         rom_array = self._read_rom_file(filename)
 

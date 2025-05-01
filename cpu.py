@@ -744,16 +744,9 @@ class GbZ80Cpu(object):
             print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
             raise e
 
-        # === A REGISTER TRACE ===
-        print(f"[TRACE] instr {my_counter} PC=0x{self.registers['pc']:04X} A=0x{self.registers['a']:02X}")
-        # ========================
-
-        # # === Insert mismatch check here ===
-        # if self.registers['pc'] == 0xCAED and self.registers['a'] != 0x90:
-        #     print(f"[STOP] Detected mismatch at PC=0x{self.registers['pc']:04X}")
-        #     print(f"A=0x{self.registers['a']:02X} (expected 0x90)")
-        #     raise Exception("CPU halted due to mismatch")
-        # # ===================================
+        # Audit for invalid lower bits being set for flag register (remove later)
+        if self.registers['f'] & 0x0F:
+            raise ValueError(f"Invalid flag register value: {hex(self.registers['f'])} — lower bits must be 0")
 
         self.handle_interrupts()
 
@@ -773,6 +766,7 @@ class GbZ80Cpu(object):
         interrupt_flags = self.sys_interface.read_byte(0xFF0F)
         triggered = interrupt_enable & interrupt_flags
         if triggered:
+            print("[INTERRUPT] Interrupt triggered with flags: ", interrupt_flags)
             for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
                 if triggered & (1 << bit):
                     self._execute_interrupt(bit, address)
@@ -1120,10 +1114,15 @@ class GbZ80Cpu(object):
 
         Increment Stack Pointer (SP) twice.
         """
-        self.registers[r2] = self.read8(self.registers['sp'])
+        lo = self.read8(self.registers['sp'])
         self.registers['sp'] += 1
-        self.registers[r1] = self.read8(self.registers['sp'])
+        hi = self.read8(self.registers['sp'])
         self.registers['sp'] += 1
+
+        if (r1, r2) == ('a', 'f'):
+            lo &= 0xF0  # Only keep upper nibble (Z, N, H, C)
+        self.registers[r2] = lo
+        self.registers[r1] = hi
         self.registers['m'] = 3
 
     # CALLs
@@ -1792,8 +1791,36 @@ class GbZ80Cpu(object):
 
     # Misc
     def _daa(self):
-        """Decimal adjust accumulator (not implemented yet)."""
-        # TODO: full DAA logic
+        """Decimal adjust accumulator."""
+        a = self.registers['a']
+        f = self.registers['f']
+        n = f & FLAG['sub']
+        c = f & FLAG['carry']
+        h = f & FLAG['half-carry']
+        adjust = 0
+
+        if not n:
+            if h or (a & 0x0F) > 9:
+                adjust += 0x06
+            if c or a > 0x99:
+                adjust += 0x60
+                f |= FLAG['carry']
+        else:
+            if h:
+                adjust |= 0x06
+            if c:
+                adjust |= 0x60
+
+        a = (a - adjust) if n else (a + adjust)
+        a &= 0xFF
+
+        # Set flags
+        f &= FLAG['sub'] | FLAG['carry']  # preserve N and C
+        if a == 0:
+            f |= FLAG['zero']
+
+        self.registers['a'] = a
+        self.registers['f'] = f
         self.registers['m'] = 1
 
     def _stop(self):

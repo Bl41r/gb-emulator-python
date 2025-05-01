@@ -40,11 +40,11 @@ class GbMemory(object):
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
-        self.memory[address] = value
         # === DEBUG: Watch specific address ===
         if address in WATCH_ADDRESSES:
             print(f"[MEMORY] WRITE to {address:04X}: {value:02X}")
         # ======================================
+        self.memory[address] = value
 
     def read_byte(self, address):
         """Return a byte from memory at an address."""
