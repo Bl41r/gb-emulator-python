@@ -638,70 +638,78 @@ class GbZ80Cpu(object):
             189: (self._res_bit_r, [7, 'l']),
             190: (self._res_bit_hlm, [7]),
             191: (self._res_bit_r, [7, 'a']),
-            192: (self._raise_cb_op_unimplemented, ['set0b']),  # SET0b
-            193: (self._raise_cb_op_unimplemented, ['set0c']),  # SET0c
-            194: (self._raise_cb_op_unimplemented, ['set0d']),  # SET0d
-            195: (self._raise_cb_op_unimplemented, ['set0e']),  # SET0e
-            196: (self._raise_cb_op_unimplemented, ['set0h']),  # SET0h
-            197: (self._raise_cb_op_unimplemented, ['set0l']),  # SET0l
-            198: (self._raise_cb_op_unimplemented, ['set0m']),  # SET0m
-            199: (self._raise_cb_op_unimplemented, ['set0a']),  # SET0a
-            200: (self._raise_cb_op_unimplemented, ['set1b']),  # SET1b
-            201: (self._raise_cb_op_unimplemented, ['set1c']),  # SET1c
-            202: (self._raise_cb_op_unimplemented, ['set1d']),  # SET1d
-            203: (self._raise_cb_op_unimplemented, ['set1e']),  # SET1e
-            204: (self._raise_cb_op_unimplemented, ['set1h']),  # SET1h
-            205: (self._raise_cb_op_unimplemented, ['set1l']),  # SET1l
-            206: (self._raise_cb_op_unimplemented, ['set1m']),  # SET1m
-            207: (self._raise_cb_op_unimplemented, ['set1a']),  # SET1a
-            208: (self._raise_cb_op_unimplemented, ['set2b']),  # SET2b
-            209: (self._raise_cb_op_unimplemented, ['set2c']),  # SET2c
-            210: (self._raise_cb_op_unimplemented, ['set2d']),  # SET2d
-            211: (self._raise_cb_op_unimplemented, ['set2e']),  # SET2e
-            212: (self._raise_cb_op_unimplemented, ['set2h']),  # SET2h
-            213: (self._raise_cb_op_unimplemented, ['set2l']),  # SET2l
-            214: (self._raise_cb_op_unimplemented, ['set2m']),  # SET2m
-            215: (self._raise_cb_op_unimplemented, ['set2a']),  # SET2a
-            216: (self._raise_cb_op_unimplemented, ['set3b']),  # SET3b
-            217: (self._raise_cb_op_unimplemented, ['set3c']),  # SET3c
-            218: (self._raise_cb_op_unimplemented, ['set3d']),  # SET3d
-            219: (self._raise_cb_op_unimplemented, ['set3e']),  # SET3e
-            220: (self._raise_cb_op_unimplemented, ['set3h']),  # SET3h
-            221: (self._raise_cb_op_unimplemented, ['set3l']),  # SET3l
-            222: (self._raise_cb_op_unimplemented, ['set3m']),  # SET3m
-            223: (self._raise_cb_op_unimplemented, ['set3a']),  # SET3a
-            224: (self._raise_cb_op_unimplemented, ['set4b']),  # SET4b
-            225: (self._raise_cb_op_unimplemented, ['set4c']),  # SET4c
-            226: (self._raise_cb_op_unimplemented, ['set4d']),  # SET4d
-            227: (self._raise_cb_op_unimplemented, ['set4e']),  # SET4e
-            228: (self._raise_cb_op_unimplemented, ['set4h']),  # SET4h
-            229: (self._raise_cb_op_unimplemented, ['set4l']),  # SET4l
-            230: (self._raise_cb_op_unimplemented, ['set4m']),  # SET4m
-            231: (self._raise_cb_op_unimplemented, ['set4a']),  # SET4a
-            232: (self._raise_cb_op_unimplemented, ['set5b']),  # SET5b
-            233: (self._raise_cb_op_unimplemented, ['set5c']),  # SET5c
-            234: (self._raise_cb_op_unimplemented, ['set5d']),  # SET5d
-            235: (self._raise_cb_op_unimplemented, ['set5e']),  # SET5e
-            236: (self._raise_cb_op_unimplemented, ['set5h']),  # SET5h
-            237: (self._raise_cb_op_unimplemented, ['set5l']),  # SET5l
-            238: (self._raise_cb_op_unimplemented, ['set5m']),  # SET5m
-            239: (self._raise_cb_op_unimplemented, ['set5a']),  # SET5a
-            240: (self._raise_cb_op_unimplemented, ['set6b']),  # SET6b
-            241: (self._raise_cb_op_unimplemented, ['set6c']),  # SET6c
-            242: (self._raise_cb_op_unimplemented, ['set6d']),  # SET6d
-            243: (self._raise_cb_op_unimplemented, ['set6e']),  # SET6e
-            244: (self._raise_cb_op_unimplemented, ['set6h']),  # SET6h
-            245: (self._raise_cb_op_unimplemented, ['set6l']),  # SET6l
-            246: (self._raise_cb_op_unimplemented, ['set6m']),  # SET6m
-            247: (self._raise_cb_op_unimplemented, ['set6a']),  # SET6a
-            248: (self._raise_cb_op_unimplemented, ['set7b']),  # SET7b
-            249: (self._raise_cb_op_unimplemented, ['set7c']),  # SET7c
-            250: (self._raise_cb_op_unimplemented, ['set7d']),  # SET7d
-            251: (self._raise_cb_op_unimplemented, ['set7e']),  # SET7e
-            252: (self._raise_cb_op_unimplemented, ['set7h']),  # SET7h
-            253: (self._raise_cb_op_unimplemented, ['set7l']),  # SET7l
-            254: (self._raise_cb_op_unimplemented, ['set7m']),  # SET7m
-            255: (self._raise_cb_op_unimplemented, ['set7a']),  # SET7a
+            # SET 0
+            192: (self._set_bit_r, [0, 'b']),
+            193: (self._set_bit_r, [0, 'c']),
+            194: (self._set_bit_r, [0, 'd']),
+            195: (self._set_bit_r, [0, 'e']),
+            196: (self._set_bit_r, [0, 'h']),
+            197: (self._set_bit_r, [0, 'l']),
+            198: (self._set_bit_hlm, [0]),
+            199: (self._set_bit_r, [0, 'a']),
+            # SET 1
+            200: (self._set_bit_r, [1, 'b']),
+            201: (self._set_bit_r, [1, 'c']),
+            202: (self._set_bit_r, [1, 'd']),
+            203: (self._set_bit_r, [1, 'e']),
+            204: (self._set_bit_r, [1, 'h']),
+            205: (self._set_bit_r, [1, 'l']),
+            206: (self._set_bit_hlm, [1]),
+            207: (self._set_bit_r, [1, 'a']),
+            # SET 2
+            208: (self._set_bit_r, [2, 'b']),
+            209: (self._set_bit_r, [2, 'c']),
+            210: (self._set_bit_r, [2, 'd']),
+            211: (self._set_bit_r, [2, 'e']),
+            212: (self._set_bit_r, [2, 'h']),
+            213: (self._set_bit_r, [2, 'l']),
+            214: (self._set_bit_hlm, [2]),
+            215: (self._set_bit_r, [2, 'a']),
+            # SET 3
+            216: (self._set_bit_r, [3, 'b']),
+            217: (self._set_bit_r, [3, 'c']),
+            218: (self._set_bit_r, [3, 'd']),
+            219: (self._set_bit_r, [3, 'e']),
+            220: (self._set_bit_r, [3, 'h']),
+            221: (self._set_bit_r, [3, 'l']),
+            222: (self._set_bit_hlm, [3]),
+            223: (self._set_bit_r, [3, 'a']),
+            # SET 4
+            224: (self._set_bit_r, [4, 'b']),
+            225: (self._set_bit_r, [4, 'c']),
+            226: (self._set_bit_r, [4, 'd']),
+            227: (self._set_bit_r, [4, 'e']),
+            228: (self._set_bit_r, [4, 'h']),
+            229: (self._set_bit_r, [4, 'l']),
+            230: (self._set_bit_hlm, [4]),
+            231: (self._set_bit_r, [4, 'a']),
+            # SET 5
+            232: (self._set_bit_r, [5, 'b']),
+            233: (self._set_bit_r, [5, 'c']),
+            234: (self._set_bit_r, [5, 'd']),
+            235: (self._set_bit_r, [5, 'e']),
+            236: (self._set_bit_r, [5, 'h']),
+            237: (self._set_bit_r, [5, 'l']),
+            238: (self._set_bit_hlm, [5]),
+            239: (self._set_bit_r, [5, 'a']),
+            # SET 6
+            240: (self._set_bit_r, [6, 'b']),
+            241: (self._set_bit_r, [6, 'c']),
+            242: (self._set_bit_r, [6, 'd']),
+            243: (self._set_bit_r, [6, 'e']),
+            244: (self._set_bit_r, [6, 'h']),
+            245: (self._set_bit_r, [6, 'l']),
+            246: (self._set_bit_hlm, [6]),
+            247: (self._set_bit_r, [6, 'a']),
+            # SET 7
+            248: (self._set_bit_r, [7, 'b']),
+            249: (self._set_bit_r, [7, 'c']),
+            250: (self._set_bit_r, [7, 'd']),
+            251: (self._set_bit_r, [7, 'e']),
+            252: (self._set_bit_r, [7, 'h']),
+            253: (self._set_bit_r, [7, 'l']),
+            254: (self._set_bit_hlm, [7]),
+            255: (self._set_bit_r, [7, 'a']),
         }
 
     def execute_next_operation(self):
@@ -1768,6 +1776,19 @@ class GbZ80Cpu(object):
         self.registers['f'] |= FLAG['half-carry']
         if not (value & (1 << bit)):
             self.registers['f'] |= FLAG['zero']
+
+    def _set_bit_r(self, bit, r):
+        """Set bit `bit` in register `r`."""
+        self.registers[r] |= (1 << bit)
+        self.registers['m'] = 2
+
+    def _set_bit_hlm(self, bit):
+        """Set bit `bit` at memory[HL]."""
+        addr = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(addr)
+        value |= (1 << bit)
+        self.write8(addr, value)
+        self.registers['m'] = 4
 
     # Misc
     def _daa(self):
