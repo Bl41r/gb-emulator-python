@@ -194,7 +194,7 @@ class GbZ80Cpu(object):
             20: (self._inc_r, ('d',)),  # INCr_d
             21: (self._dec_r, ('d',)),  # DECr_d
             22: (self._ld_rn, ('d',)),  # LDrn_d
-            23: (self._raise_opcode_unimplemented, ()),  # RLA
+            23: (self._rla, ()),  # RLA
             24: (self._jr_n, ()),  # JRn
             25: (self._add_hl_n, ('d', 'e')),  # ADDHLDE
             26: (self._ld_a_r1r2m, ('d', 'e')),  # LDADEm
@@ -202,7 +202,7 @@ class GbZ80Cpu(object):
             28: (self._inc_r, ('e',)),  # INCr_e
             29: (self._dec_r, ('e',)),  # DECr_e
             30: (self._ld_rn, ('e',)),  # LDrn_e
-            31: (self._raise_opcode_unimplemented, ()),  # RRA
+            31: (self._rra, ()),  # RRA
             32: (self._jr_cc_n, (FLAG['zero'], 0x00)),  # JRNZn
             33: (self._ld_r1r2_nn, ('h', 'l')),  # LDHLnn
             34: (self._ld_hlmi_a, ()),  # LDHLIA
@@ -369,7 +369,7 @@ class GbZ80Cpu(object):
             195: (self._jp_nn, ()),  # JPnn
             196: (self._call_cc_nn, (FLAG['zero'], 0x00)),  # CALL NZ,nn
             197: (self._push_nn, ('b', 'c')),  # PUSHBC
-            198: (self._raise_opcode_unimplemented, ()),  # ADDn
+            198: (self._add_n, ()),  # ADDn
             199: (self._rst_n, (0x00,)),  # RST00
             200: (self._ret_f, (FLAG['zero'], FLAG['zero'])),  # RETZ
             201: (self._ret, ()),  # RET
@@ -385,7 +385,7 @@ class GbZ80Cpu(object):
             211: (self._nop, ()),  # XX
             212: (self._call_cc_nn, (FLAG['carry'], 0x00)), # CALL NC,nn
             213: (self._push_nn, ('d', 'e')),  # PUSHDE
-            214: (self._raise_opcode_unimplemented, ()),  # SUBn
+            214: (self._sub_n_imm, ()),  # SUBn
             215: (self._rst_n, (FLAG['carry'],)),  # RST10
             216: (self._ret_f, (FLAG['carry'], FLAG['carry'])),  # RETC
             217: (self._reti, ()),  # RETI
@@ -454,12 +454,12 @@ class GbZ80Cpu(object):
             21: (self._raise_cb_op_unimplemented, ['rlr_l']),  # RLr_l
             22: (self._raise_cb_op_unimplemented, ['rlhl']),  # RLHL
             23: (self._raise_cb_op_unimplemented, ['rlr_a']),  # RLr_a
-            24: (self._raise_cb_op_unimplemented, ['rrr_b']),  # RRr_b
-            25: (self._raise_cb_op_unimplemented, ['rrr_c']),  # RRr_c
-            26: (self._raise_cb_op_unimplemented, ['rrr_d']),  # RRr_d
-            27: (self._raise_cb_op_unimplemented, ['rrr_e']),  # RRr_e
-            28: (self._raise_cb_op_unimplemented, ['rrr_h']),  # RRr_h
-            29: (self._raise_cb_op_unimplemented, ['rrr_l']),  # RRr_l
+            24: (self._rr_n, ['b']),  # RR B
+            25: (self._rr_n, ['c']),  # RR C
+            26: (self._rr_n, ['d']),  # RR D
+            27: (self._rr_n, ['e']),  # RR E
+            28: (self._rr_n, ['h']),  # RR H
+            29: (self._rr_n, ['l']),  # RR L
             30: (self._raise_cb_op_unimplemented, ['rrhl']),  # RRHL
             31: (self._raise_cb_op_unimplemented, ['rrr_a']),  # RRr_a
             32: (self._raise_cb_op_unimplemented, ['slar_b']),  # SLAr_b
@@ -486,12 +486,12 @@ class GbZ80Cpu(object):
             53: (self._swap_n, ['l']),  # SWAPr_l
             54: (self._raise_cb_op_unimplemented, ['xx']),  # XX
             55: (self._swap_n, ['a']),  # SWAPr_a
-            56: (self._raise_cb_op_unimplemented, ['srlr_b']),  # SRLr_b
-            57: (self._raise_cb_op_unimplemented, ['srlr_c']),  # SRLr_c
-            58: (self._raise_cb_op_unimplemented, ['srlr_d']),  # SRLr_d
-            59: (self._raise_cb_op_unimplemented, ['srlr_e']),  # SRLr_e
-            60: (self._raise_cb_op_unimplemented, ['srlr_h']),  # SRLr_h
-            61: (self._raise_cb_op_unimplemented, ['srlr_l']),  # SRLr_l
+            56: (self._srl_n, ['b']),  # SRL B
+            57: (self._srl_n, ['c']),  # SRL C
+            58: (self._srl_n, ['d']),  # SRL D
+            59: (self._srl_n, ['e']),  # SRL E
+            60: (self._srl_n, ['h']),  # SRL H
+            61: (self._srl_n, ['l']),  # SRL L
             62: (self._raise_cb_op_unimplemented, ['xx']),  # XX
             63: (self._raise_cb_op_unimplemented, ['srlr_a']),  # SRLr_a
             64: (self._raise_cb_op_unimplemented, ['bit0b']),  # BIT0b
@@ -1141,6 +1141,26 @@ class GbZ80Cpu(object):
         self.registers['a'] = result & 0xFF
         self.registers['m'] = 1
 
+    def _sub_n_imm(self):
+        """Subtract immediate 8-bit value from A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
+        a = self.registers['a']
+        result = a - value
+
+        self.registers['f'] = FLAG['sub']  # always set subtract flag
+
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (a & 0xF) < (value & 0xF):
+            self.registers['f'] |= FLAG['half-carry']
+        if result < 0:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
+        self.registers['m'] = 2
+
     def _sub_a_n(self, n):
         """Subtract n + Carry flag from A."""
         a = self.registers['a']
@@ -1197,13 +1217,24 @@ class GbZ80Cpu(object):
 
         self.registers['m'] = 2
 
+    def _add_n(self):
+        """Add immediate 8-bit value to A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+        self.__add_to_a(value)
+        self.registers['m'] = 2
 
     def _add_a_n(self, n):
         """Add n to A."""
         value = self.registers[n]
-        result = self.registers['a'] + value
+        self.__add_to_a(value)
+        self.registers['m'] = 1
 
+    def __add_to_a(self, value):
+        """Shared logic for adding value to A with flag updates."""
+        result = self.registers['a'] + value
         self.registers['f'] = 0
+
         if (result & 0xFF) == 0:
             self.registers['f'] |= FLAG['zero']
         if ((self.registers['a'] & 0xF) + (value & 0xF)) > 0xF:
@@ -1212,7 +1243,6 @@ class GbZ80Cpu(object):
             self.registers['f'] |= FLAG['carry']
 
         self.registers['a'] = result & 0xFF
-        self.registers['m'] = 1
 
     def _add_sp_n(self):
         """Add signed immediate value to SP."""
@@ -1552,8 +1582,65 @@ class GbZ80Cpu(object):
         for reg in ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'l']:
             self.registers[reg] = self.rsv[reg]
 
-    # Misc
+    def _rra(self):
+        """Rotate A right through carry (RRA)."""
+        old_carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        bit0 = self.registers['a'] & 0x01
+        self.registers['a'] = (self.registers['a'] >> 1) | (old_carry << 7)
+        self.registers['a'] &= 0xFF
 
+        self.registers['f'] = 0
+        if bit0:
+            self.registers['f'] |= FLAG['carry']
+        self.registers['m'] = 1
+
+
+    def _rla(self):
+        """Rotate A left through carry (RLA)."""
+        old_carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        bit7 = (self.registers['a'] >> 7) & 0x01
+        self.registers['a'] = ((self.registers['a'] << 1) & 0xFF) | old_carry
+
+        self.registers['f'] = 0
+        if bit7:
+            self.registers['f'] |= FLAG['carry']
+        self.registers['m'] = 1
+
+
+    # CB opcodes
+    def _srl_n(self, r):
+        """Shift register r right logically (SRL)."""
+        val = self.registers[r]
+        result = val >> 1
+
+        self.registers[r] = result
+        self.registers['f'] = 0
+
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+        if val & 0x01:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['m'] = 2
+
+    def _rr_n(self, r):
+        """Rotate register r right through carry (RR r)."""
+        old_val = self.registers[r]
+        old_carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        new_carry = old_val & 0x01
+
+        result = (old_val >> 1) | (old_carry << 7)
+        self.registers[r] = result
+
+        self.registers['f'] = 0
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+        if new_carry:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['m'] = 2
+
+    # Misc
     def _daa(self):
         """Decimal adjust accumulator (not implemented yet)."""
         # TODO: full DAA logic
