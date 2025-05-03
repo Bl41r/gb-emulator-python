@@ -84,7 +84,6 @@ class GbGpu(object):
             'width': 160,
             'heaight': 144
         }
-        self.vblank_counter = 0
 
     def step(self, m):
         """Perform one step."""
@@ -192,54 +191,47 @@ class GbGpu(object):
 
     def _h_blank_render_screen(self):
         if self._mode_clock >= 204:
+            self._mode_clock -= 204
             curr_line = self.read_reg('curr_line')
+            self.write_reg('curr_line', (curr_line + 1) & 0xFF)
+
             if curr_line == 143:
                 self.linemode = 1  # enter V-Blank
-                self.vblank_counter += 1
-
-                # Set V-Blank interrupt flag
-                interrupt_flags = self.sys_interface.read_byte(0xFF0F)
-                interrupt_flags |= 0x01  # set bit 0 (V-Blank)
-                self.sys_interface.write_byte(0xFF0F, interrupt_flags)
+                self.sys_interface.write_byte(0xFF0F, self.sys_interface.read_byte(0xFF0F) | 0x01)  # Set V-Blank flag
             else:
                 self.linemode = 2
 
             self._update_stat_register()
-            self.write_reg('curr_line', (curr_line + 1) & 0xFF)
-
-            self._mode_clock = 0
 
     def _v_blank(self):
         """."""
         if self._mode_clock >= 456:
-            self._mode_clock = 0
+            self._mode_clock -= 456
             self.write_reg('curr_line', (self.read_reg('curr_line') + 1) & 0xFF)
 
             if self.read_reg('curr_line') > 153:
-                self.write_reg('curr_line', 0)
-                self._curscan = 0
-                self.linemode = 2
-                self._update_stat_register()
+                self.write_reg('curr_line', 0)  # reset LY
+                self.linemode = 2   # Switch to OAM mode
+                self._curscan = 0   # Reset scanline render state
+
+            self._update_stat_register()
 
     def _oam_read_mode(self):
         """OAM read."""
         if self._mode_clock >= 80:
-            self._mode_clock = 0
-            self.linemode = 3
+            self._mode_clock -= 80
+            self.linemode = 3   # Switch to VRAM mode
             self._update_stat_register()
 
     def _vram_read_mode(self):
         """VRAM read."""
         if self._mode_clock >= 172:
-            self._mode_clock = 0
-            self.linemode = 0
+            self._mode_clock -= 172
+            self.linemode = 0   # Switch to H-Blank mode
             self._update_stat_register()
             self._renderscan()
 
     def _renderscan(self):
-        if self.vblank_counter < 10:
-            return  # Fast-forward: skip rendering the first 10 frames!
-
         line = self.read_reg('curr_line')
 
         if not self.is_display_enabled() or not self.is_background_enabled():

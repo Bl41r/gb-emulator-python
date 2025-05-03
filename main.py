@@ -14,28 +14,6 @@ SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 144
 SCALE = 3
 
-
-def draw_screen(gpu, screen):
-    """Draw the GPU buffer to the Pygame window using fast blitting."""
-    # Convert 160x144x4 flat list into 3D NumPy array
-    buffer = np.array(gpu.screen['data'], dtype=np.uint8).reshape((144, 160, 4))
-
-    # Remove alpha channel (RGB only)
-    rgb_buffer = buffer[:, :, :3]
-
-    # print("Sample pixel RGB:", rgb_buffer[0, 0])
-
-    # Create surface from array
-    surface = pygame.surfarray.make_surface(np.transpose(rgb_buffer, (1, 0, 2)))  # Transpose to (width, height, 3)
-
-    # Scale it
-    surface = pygame.transform.scale(surface, (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
-
-    screen.blit(surface, (0, 0))
-    pygame.display.flip()
-
-
-
 def main(filename):
     gb_memory = GbMemory(skip_bios=False, test_mode=True)
     cpu = GbZ80Cpu(LOG_DUMP)
@@ -80,6 +58,26 @@ def main(filename):
         print('\ncpu clock:', sys_interface.cpu.clock['m'])
         dump_logs(gb_memory.memory, cpu)
         raise e
+
+
+def draw_screen(gpu, screen):
+    """Draw the GPU buffer to the Pygame window using fast blitting."""
+    # Convert 160x144x4 flat list into 3D NumPy array
+    buffer = np.array(gpu.screen['data'], dtype=np.uint8).reshape((144, 160, 4))
+
+    # Remove alpha channel (RGB only)
+    rgb_buffer = buffer[:, :, :3]
+
+    # print("Sample pixel RGB:", rgb_buffer[0, 0])
+
+    # Create surface from array
+    surface = pygame.surfarray.make_surface(np.transpose(rgb_buffer, (1, 0, 2)))  # Transpose to (width, height, 3)
+
+    # Scale it
+    surface = pygame.transform.scale(surface, (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+
+    screen.blit(surface, (0, 0))
+    pygame.display.flip()
 
 
 def dump_logs(memory, cpu):

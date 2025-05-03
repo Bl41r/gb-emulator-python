@@ -142,6 +142,8 @@ class GbZ80Cpu(object):
 
     def __init__(self, log_dump):
         """Initialize an instance."""
+        self.enable_interrupts_next_cycle = False
+        self.halted = False
         self.clock = {'m': 0}  # Time clock
         self.log_dump = log_dump
 
@@ -716,10 +718,22 @@ class GbZ80Cpu(object):
         global my_counter
         my_counter += 1
 
+        # Handle HALT state
+        if self.halted:
+            self.handle_interrupts()
+            if self.registers['ime'] and (self.sys_interface.read_byte(0xFFFF) & self.sys_interface.read_byte(0xFF0F)):
+                self.halted = False  # Exit HALT if interrupt available
+            else:
+                self.registers['m'] = 1
+                self._inc_clock()
+            return
+
         pc_before = self.registers['pc']
         op = self.read8(pc_before)
 
-        # -- LOGGING before doing anything else
+        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
+
+        # -- LOGGING after instruction complete
         pcmem = [self.read8(pc_before + i) if (pc_before + i) < 0x10000 else 0 for i in range(4)]
         log_line = (
             f"A:{self.registers['a']:02X} F:{self.registers['f']:02X} "
@@ -732,7 +746,6 @@ class GbZ80Cpu(object):
         self.log_dump.append(log_line)
 
         # -- THEN execute the instruction
-        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
         instruction = self.opcode_map[op]
         opcode, args = instruction[0], instruction[1]
 
@@ -743,6 +756,11 @@ class GbZ80Cpu(object):
         except Exception as e:
             print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
             raise e
+
+        # Handle delayed EI
+        if self.enable_interrupts_next_cycle:
+            self.registers['ime'] = 1
+            self.enable_interrupts_next_cycle = False
 
         # Audit for invalid lower bits being set for flag register (remove later)
         if self.registers['f'] & 0x0F:
@@ -853,11 +871,6 @@ class GbZ80Cpu(object):
     # ----------------------------
     def _nop(self):
         """NOP opcode."""
-        self.registers['m'] = 1
-
-    def _halt(self):
-        """HALT CPU until interrupt."""
-        # print('halt called')
         self.registers['m'] = 1
 
     # Loads
@@ -1093,9 +1106,23 @@ class GbZ80Cpu(object):
         self.registers['m'] = 1
 
     def _ei(self):
-        """Enable interrupts."""
-        self.registers['ime'] = 1
+        """Enable interrupts next cycle."""
+        self.enable_interrupts_next_cycle = True
         self.registers['m'] = 1
+
+    def _halt(self):
+        """HALT CPU until interrupt occurs."""
+        self.halted = True
+        self.registers['m'] = 1
+
+    def _reti(self):
+        """Return from interrupt, enable interrupts immediately."""
+        lo = self.read8(self.registers['sp'])
+        hi = self.read8(self.registers['sp'] + 1)
+        self.registers['sp'] += 2
+        self.registers['pc'] = (hi << 8) | lo
+        self.registers['ime'] = 1
+        self.registers['m'] = 4  # RETI should consume 4 machine cycles
 
     # PUSH / POP
     def _push_nn(self, r1, r2):
@@ -1654,17 +1681,6 @@ class GbZ80Cpu(object):
         self.registers['sp'] -= 2
         self.write16(self.registers['sp'], self.registers['pc'])
         self.registers['pc'] = n
-        self.registers['m'] = 3
-
-    def _reti(self):
-        """Pop two bytes from stack & jump to that address.
-
-        Also enable interrupts
-        """
-        self.registers['ime'] = 1
-        self._rrs()
-        self.registers['pc'] = self.read16(self.registers['sp'])
-        self.registers['sp'] += 2
         self.registers['m'] = 3
 
     def _ret_f(self, and_val, flag_check_value):
