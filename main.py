@@ -8,16 +8,24 @@ from cpu import GbZ80Cpu, ExecutionHalted
 from gpu import GbGpu
 from system_interface import GbSystemInterface
 
-LOG_DUMP = []
+GB_DR_TEST_MODE = False
+GB_DR_LOG_DUMP = []
 
+# Screen settings
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 144
 SCALE = 3
 
 def main(filename):
-    gb_memory = GbMemory(skip_bios=False, test_mode=True)
-    cpu = GbZ80Cpu(LOG_DUMP)
+    gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
+    cpu = GbZ80Cpu(GB_DR_LOG_DUMP, gb_doctor_test_mode=GB_DR_TEST_MODE)
     gpu = GbGpu()
+
+    if GB_DR_TEST_MODE:
+        caption = f"GameBoy Emulator (TEST MODE) - {filename}"
+        print("IN TEST MODE")
+    else:
+        caption = f"GameBoy Emulator - {filename}"
 
     sys_interface = GbSystemInterface(gb_memory, cpu, gpu)
 
@@ -29,7 +37,7 @@ def main(filename):
     # Setup Pygame
     pygame.init()
     window = pygame.display.set_mode((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
-    pygame.display.set_caption("Game Boy Emulator")
+    pygame.display.set_caption(caption)
 
     clock = pygame.time.Clock()
 
@@ -45,18 +53,13 @@ def main(filename):
             # Check if we just hit the V-Blank mode
             if gpu.linemode == 1 and gpu.read_reg('curr_line') == 144:
                 draw_screen(gpu, window)
-                clock.tick(60)  # cap at ~60 FPS
-
-    except ExecutionHalted as e:
-        print("\nShutting down...")
-        dump_logs(gb_memory.memory, cpu)
-        pygame.quit()
-        raise e
+                # clock.tick(60)  # cap at ~60 FPS
 
     except Exception as e:
+        print("\nShutting down...")
+        if GB_DR_TEST_MODE:
+            dump_logs(gb_memory.memory, cpu)
         pygame.quit()
-        print('\ncpu clock:', sys_interface.cpu.clock['m'])
-        dump_logs(gb_memory.memory, cpu)
         raise e
 
 
@@ -81,17 +84,14 @@ def draw_screen(gpu, screen):
 
 
 def dump_logs(memory, cpu):
-    # print("\n\nLOG DUMP:")
-    # for item in LOG_DUMP:
-    #     print(item)
-    # print()
     dump_mem_map(memory)
+
+    print("Registers:", cpu.registers)
     if os.path.exists('cpu_log.txt'):
         os.remove('cpu_log.txt')
     with open('cpu_log.txt', 'w') as f:
-        for entry in LOG_DUMP:
+        for entry in GB_DR_LOG_DUMP:
             f.write(entry + '\n')
-    print("Registers:", cpu.registers)
 
 
 def dump_mem_map(memory):

@@ -24,31 +24,31 @@ attributes.
 
 import array
 
-WATCH_ADDRESSES = {0xFF44}
+WATCH_ADDRESSES = {}
 
 class GbMemory(object):
     """Memory of the LC-3 VM."""
 
-    def __init__(self, skip_bios=False, test_mode=False):
+    def __init__(self, skip_bios=False, gb_doctor_test_mode=False):
         """Init."""
         self.mem_size = 2**16
         self.memory = array.array('B', [0 for i in range(self.mem_size)])
         self.cartridge_type = 0
         if not skip_bios:
             self.initialize_memory()
-        self.test_mode = test_mode
+        self.gb_doctor_test_mode = gb_doctor_test_mode
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
         # === DEBUG: Watch specific address ===
-        if address in WATCH_ADDRESSES:
-            print(f"[MEMORY] WRITE to {address:04X}: {value:02X}")
+        # if address in WATCH_ADDRESSES:
+        #     print(f"[MEMORY] WRITE to {address:04X}: {value:02X}")
         # ======================================
         self.memory[address] = value
 
     def read_byte(self, address):
         """Return a byte from memory at an address."""
-        if address == 0xFF44 and self.test_mode:
+        if address == 0xFF44 and self.gb_doctor_test_mode:
             return 0x90
         return self.memory[address]
 

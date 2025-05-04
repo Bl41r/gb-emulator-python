@@ -5,7 +5,7 @@ The CPU in the original GameBoy is a modified Zilog Z80.
 http://www.devrs.com/gb/files/opcodes.html :
 The GameBoy has instructions & registers similiar to the 8080, 8085, & Z80
 microprocessors. The internal 8-bit registers are A, B, C, D, E, F, H, & L.
-Theses registers may be used in pairs for 16-bit operations as AF, BC, DE, &
+These registers may be used in pairs for 16-bit operations as AF, BC, DE, &
 HL. The two remaining 16-bit registers are the program counter (PC) and the
 stack pointer (SP).
 
@@ -140,13 +140,13 @@ class ExecutionHalted(Exception):
 class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
-    def __init__(self, log_dump):
+    def __init__(self, log_dump, gb_doctor_test_mode):
         """Initialize an instance."""
+        self.gb_doctor_test_mode = gb_doctor_test_mode
         self.enable_interrupts_next_cycle = False
         self.halted = False
         self.clock = {'m': 0}  # Time clock
         self.log_dump = log_dump
-
         self.sys_interface = None    # Set after interface instantiated.
 
         # Register set
@@ -720,53 +720,45 @@ class GbZ80Cpu(object):
 
         # Handle HALT state
         if self.halted:
+            print("In HALTED state")
             self.handle_interrupts()
             if self.registers['ime'] and (self.sys_interface.read_byte(0xFFFF) & self.sys_interface.read_byte(0xFF0F)):
+                print("Exit HALTED state")
                 self.halted = False  # Exit HALT if interrupt available
             else:
                 self.registers['m'] = 1
                 self._inc_clock()
             return
 
-        pc_before = self.registers['pc']
-        op = self.read8(pc_before)
+        if self.gb_doctor_test_mode:
+            self.log_for_gameboy_dr(self.registers['pc'])
 
+        op = self.read8(self.registers['pc'])
         self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
 
-        # -- LOGGING after instruction complete
-        pcmem = [self.read8(pc_before + i) if (pc_before + i) < 0x10000 else 0 for i in range(4)]
-        log_line = (
-            f"A:{self.registers['a']:02X} F:{self.registers['f']:02X} "
-            f"B:{self.registers['b']:02X} C:{self.registers['c']:02X} "
-            f"D:{self.registers['d']:02X} E:{self.registers['e']:02X} "
-            f"H:{self.registers['h']:02X} L:{self.registers['l']:02X} "
-            f"SP:{self.registers['sp']:04X} PC:{pc_before:04X} "
-            f"PCMEM:{','.join(f'{b:02X}' for b in pcmem)}"
-        )
-        self.log_dump.append(log_line)
-
-        # -- THEN execute the instruction
-        instruction = self.opcode_map[op]
-        opcode, args = instruction[0], instruction[1]
-
-        try:
-            opcode(*args)
-            print(f"[TRACE] Executed {opcode.__name__}, args: {str(args)}, m={self.registers['m']}")
-            self._inc_clock()
-        except Exception as e:
-            print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
-            raise e
+        opcode, args = self.opcode_map[op]
+        opcode(*args)
+        print(f"[TRACE] Exec {opcode.__name__:<15} args: {str(args):<20} m={self.registers['m']}, instr: {my_counter}")
+        self._inc_clock()
 
         # Handle delayed EI
         if self.enable_interrupts_next_cycle:
             self.registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
 
-        # Audit for invalid lower bits being set for flag register (remove later)
-        if self.registers['f'] & 0x0F:
-            raise ValueError(f"Invalid flag register value: {hex(self.registers['f'])} — lower bits must be 0")
-
         self.handle_interrupts()
+
+    def log_for_gameboy_dr(self, pc):
+        pcmem = [self.read8(pc + i) if (pc + i) < 0x10000 else 0 for i in range(4)]
+        log_line = (
+            f"A:{self.registers['a']:02X} F:{self.registers['f']:02X} "
+            f"B:{self.registers['b']:02X} C:{self.registers['c']:02X} "
+            f"D:{self.registers['d']:02X} E:{self.registers['e']:02X} "
+            f"H:{self.registers['h']:02X} L:{self.registers['l']:02X} "
+            f"SP:{self.registers['sp']:04X} PC:{pc:04X} "
+            f"PCMEM:{','.join(f'{b:02X}' for b in pcmem)}"
+        )
+        self.log_dump.append(log_line)
 
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
@@ -785,10 +777,12 @@ class GbZ80Cpu(object):
         triggered = interrupt_enable & interrupt_flags
         if triggered:
             print("[INTERRUPT] Interrupt triggered with flags: ", interrupt_flags)
+            print(f"[DEBUG PRE-INTERRUPT ] PC={self.registers['pc']:04X}, SP={self.registers['sp']:04X}")
             for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
                 if triggered & (1 << bit):
                     self._execute_interrupt(bit, address)
                     break  # only handle one interrupt per cycle
+            print(f"[DEBUG POST-INTERRUPT] PC={self.registers['pc']:04X}, SP={self.registers['sp']:04X}")
 
     def _execute_interrupt(self, bit, address):
         self.registers['ime'] = 0  # disable further interrupts
@@ -850,9 +844,9 @@ class GbZ80Cpu(object):
             raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
 
         self.clock['m'] += self.registers['m']
-        print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
+        # print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
         if self.sys_interface and self.sys_interface.gpu:
-            print(f"[GPU STEP] stepping {self.registers['m']*4} cycles")
+            # print(f"[GPU STEP] stepping {self.registers['m']*4} cycles")
             self.sys_interface.gpu.step(self.registers['m'] * 4)  # 1 m = 4 cycles
 
     def _toggle_flag(self, flag_value):
