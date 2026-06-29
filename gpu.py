@@ -105,12 +105,14 @@ class GbGpu(object):
         Called when a value written to VRAM, and updates the
         internal tile set.
         """
-        base_addr = addr & 0x1FFE
-        tile_index = (base_addr >> 4) & 511
-        row = (base_addr >> 1) & 7
+        base_addr = addr & 0xFFFE
+        vram_offset = base_addr - 0x8000
+        tile_index = (vram_offset >> 4) & 511
+        row = (vram_offset >> 1) & 7
 
-        byte1 = self.sys_interface.read_byte(base_addr)
-        byte2 = self.sys_interface.read_byte(base_addr + 1)
+        memory = self.sys_interface.memory.memory
+        byte1 = memory[base_addr]
+        byte2 = memory[base_addr + 1]
 
         for x in range(8):
             bit = 1 << (7 - x)
@@ -243,7 +245,7 @@ class GbGpu(object):
     def _renderscan(self):
         line = self.read_reg('curr_line')
 
-        if not self.is_display_enabled():
+        if line >= 144 or not self.is_display_enabled():
             return
 
         if self.is_background_enabled():
@@ -258,55 +260,59 @@ class GbGpu(object):
 
     def _render_background_scanline(self, line):
         """Render the background and retain its color IDs for OBJ priority."""
-        y = (line + self.read_reg('scroll_y')) & 0xFF
+        memory = self.sys_interface.memory.memory
+        scroll_y = memory[self.register_map['scroll_y']]
+        scroll_x = memory[self.register_map['scroll_x']]
+        y = (line + scroll_y) & 0xFF
         tile_row = y >> 3
         tile_pixel_row = y & 7
         map_base = self.get_tile_map_base()
         tileset_base = self.get_tile_data_base()
         signed_addressing = tileset_base == 0x8800
-        background_palette = self.read_reg('bgrnd_palette')
+        palette = self._palette_lookup(memory[self.register_map['bgrnd_palette']])
+        screen_data = self.screen['data']
+        screen_offset = line * 160 * 4
+        scanrow = self._scanrow
 
         for x in range(160):
-            x_scrolled = (x + self.read_reg('scroll_x')) & 0xFF
+            x_scrolled = (x + scroll_x) & 0xFF
             tile_col = x_scrolled >> 3
             tile_pixel_col = x_scrolled & 7
 
             tile_addr = map_base + tile_row * 32 + tile_col
-            tile_id = self.sys_interface.read_byte(tile_addr)
+            tile_id = memory[tile_addr]
 
             if signed_addressing:
                 tile_id = tile_id - 256 if tile_id > 127 else tile_id
-                tile_loc = 0x9000 + (tile_id * 16)
+                tile_index = 256 + tile_id
             else:
-                tile_loc = tileset_base + (tile_id * 16)
+                tile_index = tile_id
 
-            byte1 = self.sys_interface.read_byte(tile_loc + (tile_pixel_row * 2))
-            byte2 = self.sys_interface.read_byte(tile_loc + (tile_pixel_row * 2) + 1)
-
-            bit_index = 7 - tile_pixel_col
-            color_index = ((byte2 >> bit_index) & 1) << 1 | ((byte1 >> bit_index) & 1)
-            self._scanrow[x] = color_index
-            self._write_pixel(
-                line,
-                x,
-                self._palette_color(background_palette, color_index),
-            )
+            color_index = self.tile_set[tile_index][tile_pixel_row][tile_pixel_col]
+            scanrow[x] = color_index
+            color = palette[color_index]
+            offset = screen_offset + x * 4
+            screen_data[offset] = color
+            screen_data[offset + 1] = color
+            screen_data[offset + 2] = color
+            screen_data[offset + 3] = 255
 
     def _render_sprite_scanline(self, line):
         """Composite the DMG's first ten eligible objects onto one scanline."""
+        memory = self.sys_interface.memory.memory
         height = 16 if self.get_gpu_ctrl_reg('sprites_size') else 8
         objects = []
 
         for index in range(40):
             base = 0xFE00 + index * 4
-            object_y = self.sys_interface.read_byte(base) - 16
+            object_y = memory[base] - 16
             if object_y <= line < object_y + height:
                 objects.append((
-                    self.sys_interface.read_byte(base + 1),
+                    memory[base + 1],
                     index,
                     object_y,
-                    self.sys_interface.read_byte(base + 2),
-                    self.sys_interface.read_byte(base + 3),
+                    memory[base + 2],
+                    memory[base + 3],
                 ))
                 if len(objects) == 10:
                     break
@@ -314,6 +320,10 @@ class GbGpu(object):
         # On DMG, smaller X wins; equal X uses the earlier OAM entry.
         objects.sort(key=lambda obj: (obj[0], obj[1]))
         claimed = [False for _ in range(160)]
+        screen_data = self.screen['data']
+        screen_offset = line * 160 * 4
+        obj0_palette = self._palette_lookup(memory[0xFF48])
+        obj1_palette = self._palette_lookup(memory[0xFF49])
 
         for object_x, _, object_y, tile_index, attributes in objects:
             row = line - object_y
@@ -324,20 +334,16 @@ class GbGpu(object):
                 tile_index = (tile_index & 0xFE) + (row >> 3)
                 row &= 7
 
-            tile_address = 0x8000 + tile_index * 16 + row * 2
-            byte1 = self.sys_interface.read_byte(tile_address)
-            byte2 = self.sys_interface.read_byte(tile_address + 1)
+            tile_row = self.tile_set[tile_index][row]
+            palette = obj1_palette if attributes & 0x10 else obj0_palette
 
             for pixel in range(8):
                 screen_x = object_x - 8 + pixel
                 if not 0 <= screen_x < 160 or claimed[screen_x]:
                     continue
 
-                bit_index = pixel if attributes & 0x20 else 7 - pixel
-                color_index = (
-                    ((byte2 >> bit_index) & 1) << 1
-                    | ((byte1 >> bit_index) & 1)
-                )
+                tile_x = 7 - pixel if attributes & 0x20 else pixel
+                color_index = tile_row[tile_x]
                 if color_index == 0:
                     continue
 
@@ -345,15 +351,18 @@ class GbGpu(object):
                 if attributes & 0x80 and self._scanrow[screen_x] != 0:
                     continue
 
-                palette_address = 0xFF49 if attributes & 0x10 else 0xFF48
-                self._write_pixel(
-                    line,
-                    screen_x,
-                    self._palette_color(
-                        self.sys_interface.read_byte(palette_address),
-                        color_index,
-                    ),
-                )
+                color = palette[color_index]
+                offset = screen_offset + screen_x * 4
+                screen_data[offset] = color
+                screen_data[offset + 1] = color
+                screen_data[offset + 2] = color
+                screen_data[offset + 3] = 255
+
+    @staticmethod
+    def _palette_lookup(palette):
+        """Return the four grayscale shades selected by a DMG palette."""
+        shades = (255, 192, 96, 0)
+        return tuple(shades[(palette >> (index * 2)) & 0x03] for index in range(4))
 
     @staticmethod
     def _palette_color(palette, color_index):

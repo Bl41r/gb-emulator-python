@@ -23,6 +23,14 @@ debugging with:
 python main.py --trace path/to/game.gb
 ```
 
+For performance work, run a ROM for a fixed number of frames and optionally
+write a `cProfile` capture:
+
+```powershell
+python main.py roms/tetris.gb --max-frames 60 --profile profile.stats
+python main.py roms/tetris.gb --no-display --max-frames 60 --profile profile-headless.stats
+```
+
 Keyboard controls are the same on Windows, Linux, and macOS:
 
 - D-pad: arrow keys

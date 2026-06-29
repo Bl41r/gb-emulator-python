@@ -1,8 +1,11 @@
 import argparse
+import cProfile
 import os
 import pygame
 import numpy as np
 import pygame.surfarray
+import pstats
+import time
 
 from memory import GbMemory
 from cpu import GbZ80Cpu, ExecutionHalted
@@ -30,7 +33,7 @@ KEY_BINDINGS = {
 }
 
 
-def main(filename, trace=False):
+def main(filename, trace=False, max_frames=None, no_display=False):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
         GB_DR_LOG_DUMP,
@@ -52,38 +55,82 @@ def main(filename, trace=False):
 
     sys_interface.load_rom_image(filename)
 
-    # Setup Pygame
-    pygame.init()
-    window = pygame.display.set_mode((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
-    pygame.display.set_caption(caption)
+    window = None
+    if not no_display:
+        # Setup Pygame
+        pygame.init()
+        window = pygame.display.set_mode((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+        pygame.display.set_caption(caption)
 
-    clock = pygame.time.Clock()
+    stats = {
+        'instructions': 0,
+        'frames': 0,
+        'draw_seconds': 0.0,
+        'start_seconds': time.perf_counter(),
+    }
 
     try:
         while True:
-            # Handle window events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    raise ExecutionHalted()
-                if event.type in (pygame.KEYDOWN, pygame.KEYUP):
-                    button = KEY_BINDINGS.get(event.key)
-                    if button:
-                        sys_interface.set_button(
-                            button, event.type == pygame.KEYDOWN
-                        )
+            if not no_display:
+                # Handle window events
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        raise ExecutionHalted()
+                    if event.type in (pygame.KEYDOWN, pygame.KEYUP):
+                        button = KEY_BINDINGS.get(event.key)
+                        if button:
+                            sys_interface.set_button(
+                                button, event.type == pygame.KEYDOWN
+                            )
 
             cpu.execute_next_operation()
+            stats['instructions'] += 1
 
             if gpu.consume_frame_ready():
-                draw_screen(gpu, window)
-                # clock.tick(60)  # cap at ~60 FPS
+                stats['frames'] += 1
+                if not no_display:
+                    draw_start = time.perf_counter()
+                    draw_screen(gpu, window)
+                    stats['draw_seconds'] += time.perf_counter() - draw_start
 
+                if max_frames is not None and stats['frames'] >= max_frames:
+                    break
+
+    except ExecutionHalted:
+        pass
     except Exception as e:
         print("\nShutting down...")
         if GB_DR_TEST_MODE:
             dump_logs(gb_memory.memory, cpu)
-        pygame.quit()
+        if not no_display:
+            pygame.quit()
         raise e
+    finally:
+        if not no_display:
+            pygame.quit()
+        print_run_stats(stats, no_display)
+
+
+def print_run_stats(stats, no_display):
+    elapsed = time.perf_counter() - stats['start_seconds']
+    elapsed = max(elapsed, 0.000001)
+    draw_seconds = stats['draw_seconds']
+    emulation_seconds = elapsed - draw_seconds
+    print(
+        "Run stats: "
+        f"{stats['frames']} frames, "
+        f"{stats['instructions']} instructions, "
+        f"{elapsed:.2f}s elapsed, "
+        f"{stats['frames'] / elapsed:.2f} fps, "
+        f"{stats['instructions'] / elapsed:,.0f} instr/s"
+    )
+    if not no_display:
+        print(
+            "Rendering: "
+            f"{draw_seconds:.2f}s drawing "
+            f"({draw_seconds / elapsed * 100:.1f}% of elapsed), "
+            f"{emulation_seconds:.2f}s emulation/event loop"
+        )
 
 
 def draw_screen(gpu, screen):
@@ -136,5 +183,42 @@ if __name__ == '__main__':
         action="store_true",
         help="print each executed instruction and interrupt",
     )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        help="exit automatically after rendering this many frames",
+    )
+    parser.add_argument(
+        "--no-display",
+        action="store_true",
+        help="run without opening a pygame window or drawing frames",
+    )
+    parser.add_argument(
+        "--profile",
+        help="write cProfile stats to this file",
+    )
     args = parser.parse_args()
-    main(args.rom, trace=args.trace)
+
+    if args.profile:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        try:
+            main(
+                args.rom,
+                trace=args.trace,
+                max_frames=args.max_frames,
+                no_display=args.no_display,
+            )
+        finally:
+            profiler.disable()
+            profiler.dump_stats(args.profile)
+            print(f"Profile written to {args.profile}")
+            stats = pstats.Stats(profiler).sort_stats('cumulative')
+            stats.print_stats(25)
+    else:
+        main(
+            args.rom,
+            trace=args.trace,
+            max_frames=args.max_frames,
+            no_display=args.no_display,
+        )
