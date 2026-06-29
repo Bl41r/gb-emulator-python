@@ -140,9 +140,10 @@ class ExecutionHalted(Exception):
 class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
-    def __init__(self, log_dump, gb_doctor_test_mode):
+    def __init__(self, log_dump, gb_doctor_test_mode, trace_enabled=False):
         """Initialize an instance."""
         self.gb_doctor_test_mode = gb_doctor_test_mode
+        self.trace_enabled = trace_enabled
         self.enable_interrupts_next_cycle = False
         self.halted = False
         self.clock = {'m': 0}  # Time clock
@@ -745,7 +746,12 @@ class GbZ80Cpu(object):
 
         opcode, args = self.opcode_map[op]
         opcode(*args)
-        print(f"[TRACE] Exec {opcode.__name__:<15} args: {str(args):<20} m={self.registers['m']}, instr: {my_counter}")
+        if self.trace_enabled:
+            print(
+                f"[TRACE] Exec {opcode.__name__:<15} "
+                f"args: {str(args):<20} "
+                f"m={self.registers['m']}, instr: {my_counter}"
+            )
         self._inc_clock()
 
         # Handle delayed EI
@@ -768,7 +774,8 @@ class GbZ80Cpu(object):
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
         instruction = self.opcode_map[op]
-        print(instruction)
+        if self.trace_enabled:
+            print(instruction)
         opcode, args = instruction[0], instruction[1]
         opcode(*args)
         self._inc_clock()
@@ -781,12 +788,22 @@ class GbZ80Cpu(object):
         interrupt_flags = self.sys_interface.read_byte(0xFF0F)
         triggered = interrupt_enable & interrupt_flags
         if triggered:
-            print("[INTERRUPT] Interrupt triggered with flags: ", interrupt_flags)
-            print(f"[DEBUG PRE-INTERRUPT ] PC={self.registers['pc']:04X}, SP={self.registers['sp']:04X}")
+            if self.trace_enabled:
+                print("[INTERRUPT] Interrupt triggered with flags: ", interrupt_flags)
+                print(
+                    f"[DEBUG PRE-INTERRUPT ] "
+                    f"PC={self.registers['pc']:04X}, "
+                    f"SP={self.registers['sp']:04X}"
+                )
             for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
                 if triggered & (1 << bit):
                     self._execute_interrupt(bit, address)
-                    print(f"[DEBUG POST-INTERRUPT] PC={self.registers['pc']:04X}, SP={self.registers['sp']:04X}")
+                    if self.trace_enabled:
+                        print(
+                            f"[DEBUG POST-INTERRUPT] "
+                            f"PC={self.registers['pc']:04X}, "
+                            f"SP={self.registers['sp']:04X}"
+                        )
                     return True  # only handle one interrupt per boundary
         return False
 

@@ -7,12 +7,15 @@ units.
 import array
 import sys
 
+from cartridge import Cartridge
+from joypad import Joypad
+
 
 class GbSystemInterface(object):
     """Interface between CPU/GPU and memory unit."""
 
     CART_TITLE = range(0x0134, 0x0143)
-    CART_TYPE_CHECK_BYTE = 0x0147e
+    CART_TYPE_CHECK_BYTE = 0x0147
     MANUFACTURER_CODE_BYTE = 0x14B
     LANGUAGE_BYTE = 0x14A
     VERSION_BYTE = 0x14C
@@ -24,6 +27,8 @@ class GbSystemInterface(object):
         self.cpu = cpu
         self.gpu = gpu
         self.divider_counter = 0
+        self.cartridge = None
+        self.joypad = Joypad()
 
     def load_rom_image(self, filename):
         """Load a ROM image into memory.
@@ -32,33 +37,47 @@ class GbSystemInterface(object):
         """
         self.memory.reset_memory()
         self.divider_counter = 0
+        self.joypad = Joypad()
         rom_array = self._read_rom_file(filename)
-
-        for i in range(0, len(rom_array)):
-            self.memory.write_byte(i, rom_array[i])
+        self.cartridge = Cartridge(rom_array)
 
         self.cpu.registers['pc'] = 0x0100
 
-        self.cartridge_type = self.read_byte(
-            GbSystemInterface.CART_TYPE_CHECK_BYTE)
+        self.cartridge_type = self.cartridge.cartridge_type
         print(
             "Cartridge type:",
-            self.read_byte(GbSystemInterface.CART_TYPE_CHECK_BYTE))
+            "0x{:02X} ({})".format(
+                self.cartridge_type, self.cartridge.type_name
+            ))
         print(
             "Manufacturer code:",
             self.read_byte(GbSystemInterface.MANUFACTURER_CODE_BYTE))
         print(
             "Language:",
             self.read_byte(GbSystemInterface.LANGUAGE_BYTE))
-        title = ""
-        for i in GbSystemInterface.CART_TITLE:
-            title += chr(self.read_byte(i))
-        print("Title:", title)
+        print("Title:", self.cartridge.title)
 
         # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
+        if (
+            0x0000 <= address <= 0x7FFF
+            or 0xA000 <= address <= 0xBFFF
+        ):
+            if self.cartridge:
+                self.cartridge.write(address, value)
+            return
+
+        if address == 0xFF00:
+            if self.joypad.write(value):
+                self._request_interrupt(0x10)
+            return
+
+        if address == 0xFF46:
+            self._transfer_oam(value)
+            return
+
         if address == 0xFF04:
             old_signal = self._timer_signal()
             self.divider_counter = 0
@@ -124,15 +143,45 @@ class GbSystemInterface(object):
 
     def write_word(self, address, value):
         """Write a word into memory."""
-        self.memory.write_word(address, value)
+        self.write_byte(address, value & 0xFF)
+        self.write_byte((address + 1) & 0xFFFF, (value >> 8) & 0xFF)
 
     def read_byte(self, address):
         """Read a byte in memory."""
+        if address == 0xFF00:
+            return self.joypad.read()
+        if (
+            self.cartridge
+            and (
+                0x0000 <= address <= 0x7FFF
+                or 0xA000 <= address <= 0xBFFF
+            )
+        ):
+            return self.cartridge.read(address)
         return self.memory.read_byte(address)
+
+    def set_button(self, button, is_pressed):
+        """Update a joypad button and request its interrupt on a falling edge."""
+        if self.joypad.set_button(button, is_pressed):
+            self._request_interrupt(0x10)
+
+    def _request_interrupt(self, mask):
+        interrupt_flags = self.memory.read_byte(0xFF0F) | mask
+        self.memory.write_byte(0xFF0F, interrupt_flags)
+
+    def _transfer_oam(self, source_page):
+        """Copy one page's first 160 bytes into object attribute memory."""
+        self.memory.write_byte(0xFF46, source_page)
+        source = source_page << 8
+        values = [self.read_byte(source + offset) for offset in range(0xA0)]
+        for offset, value in enumerate(values):
+            self.memory.write_byte(0xFE00 + offset, value)
 
     def read_word(self, address):
         """Read a word from memory."""
-        return self.memory.read_word(address)
+        low = self.read_byte(address)
+        high = self.read_byte((address + 1) & 0xFFFF)
+        return low | (high << 8)
 
     def _read_rom_file(self, filename):
         """Return an array containing ROM file."""

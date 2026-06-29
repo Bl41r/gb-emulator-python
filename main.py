@@ -1,4 +1,5 @@
-import sys, os
+import argparse
+import os
 import pygame
 import numpy as np
 import pygame.surfarray
@@ -16,9 +17,26 @@ SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 144
 SCALE = 3
 
-def main(filename):
+KEY_BINDINGS = {
+    pygame.K_RIGHT: "right",
+    pygame.K_LEFT: "left",
+    pygame.K_UP: "up",
+    pygame.K_DOWN: "down",
+    pygame.K_z: "a",
+    pygame.K_x: "b",
+    pygame.K_BACKSPACE: "select",
+    pygame.K_RETURN: "start",
+    pygame.K_KP_ENTER: "start",
+}
+
+
+def main(filename, trace=False):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
-    cpu = GbZ80Cpu(GB_DR_LOG_DUMP, gb_doctor_test_mode=GB_DR_TEST_MODE)
+    cpu = GbZ80Cpu(
+        GB_DR_LOG_DUMP,
+        gb_doctor_test_mode=GB_DR_TEST_MODE,
+        trace_enabled=trace,
+    )
     gpu = GbGpu()
 
     if GB_DR_TEST_MODE:
@@ -47,11 +65,16 @@ def main(filename):
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise ExecutionHalted()
+                if event.type in (pygame.KEYDOWN, pygame.KEYUP):
+                    button = KEY_BINDINGS.get(event.key)
+                    if button:
+                        sys_interface.set_button(
+                            button, event.type == pygame.KEYDOWN
+                        )
 
             cpu.execute_next_operation()
 
-            # Check if we just hit the V-Blank mode
-            if gpu.linemode == 1 and gpu.read_reg('curr_line') == 144:
+            if gpu.consume_frame_ready():
                 draw_screen(gpu, window)
                 # clock.tick(60)  # cap at ~60 FPS
 
@@ -106,7 +129,12 @@ def dump_mem_map(memory):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("usage: python3 main.py <rom_filename>")
-        sys.exit(1)
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Run the Game Boy emulator")
+    parser.add_argument("rom", help="path to a Game Boy ROM")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="print each executed instruction and interrupt",
+    )
+    args = parser.parse_args()
+    main(args.rom, trace=args.trace)
