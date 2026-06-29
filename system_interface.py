@@ -141,13 +141,21 @@ class GbSystemInterface(object):
     def read_byte(self, address):
         """Read a byte in memory."""
         if 0x0000 <= address <= 0x7FFF:
-            if self.cartridge:
-                return self.cartridge.read(address)
+            cartridge = self.cartridge
+            if cartridge:
+                if cartridge.is_rom_only_type:
+                    return (
+                        cartridge.rom[address]
+                        if address < len(cartridge.rom)
+                        else 0xFF
+                    )
+                return cartridge.read(address)
             return self.memory.memory[address]
 
         if 0xA000 <= address <= 0xBFFF:
-            if self.cartridge:
-                return self.cartridge.read(address)
+            cartridge = self.cartridge
+            if cartridge:
+                return cartridge.read(address)
             return self.memory.memory[address]
 
         if (

@@ -718,22 +718,24 @@ class GbZ80Cpu(object):
     def execute_next_operation(self):
         global my_counter
         my_counter += 1
+        registers = self.registers
+        sys_interface = self.sys_interface
 
         # Handle HALT state
         if self.halted:
             pending = (
-                self.sys_interface.read_byte(0xFFFF)
-                & self.sys_interface.read_byte(0xFF0F)
+                sys_interface.read_byte(0xFFFF)
+                & sys_interface.read_byte(0xFF0F)
                 & 0x1F
             )
             if not pending:
-                self.registers['m'] = 1
+                registers['m'] = 1
                 self._inc_clock()
                 return
             self.halted = False
 
         if self.gb_doctor_test_mode:
-            self.log_for_gameboy_dr(self.registers['pc'])
+            self.log_for_gameboy_dr(registers['pc'])
 
         # Interrupts are accepted at the next instruction boundary. The
         # boundary state is logged above, then execution continues at the
@@ -741,22 +743,25 @@ class GbZ80Cpu(object):
         if self.handle_interrupts():
             self._inc_clock()
 
-        op = self.read8(self.registers['pc'])
-        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
+        op = sys_interface.read_byte(registers['pc'])
+        registers['pc'] = (registers['pc'] + 1) & 0xFFFF
 
         opcode, args = self.opcode_map[op]
-        opcode(*args)
+        if args:
+            opcode(*args)
+        else:
+            opcode()
         if self.trace_enabled:
             print(
                 f"[TRACE] Exec {opcode.__name__:<15} "
                 f"args: {str(args):<20} "
-                f"m={self.registers['m']}, instr: {my_counter}"
+                f"m={registers['m']}, instr: {my_counter}"
             )
         self._inc_clock()
 
         # Handle delayed EI
         if self.enable_interrupts_next_cycle:
-            self.registers['ime'] = 1
+            registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
 
     def log_for_gameboy_dr(self, pc):
@@ -781,19 +786,21 @@ class GbZ80Cpu(object):
         self._inc_clock()
 
     def handle_interrupts(self):
-        if not self.registers['ime']:
+        registers = self.registers
+        if not registers['ime']:
             return False  # interrupts globally disabled
 
-        interrupt_enable = self.sys_interface.read_byte(0xFFFF)
-        interrupt_flags = self.sys_interface.read_byte(0xFF0F)
+        memory = self.sys_interface.memory.memory
+        interrupt_enable = memory[0xFFFF]
+        interrupt_flags = memory[0xFF0F]
         triggered = interrupt_enable & interrupt_flags
         if triggered:
             if self.trace_enabled:
                 print("[INTERRUPT] Interrupt triggered with flags: ", interrupt_flags)
                 print(
                     f"[DEBUG PRE-INTERRUPT ] "
-                    f"PC={self.registers['pc']:04X}, "
-                    f"SP={self.registers['sp']:04X}"
+                    f"PC={registers['pc']:04X}, "
+                    f"SP={registers['sp']:04X}"
                 )
             for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
                 if triggered & (1 << bit):
@@ -801,8 +808,8 @@ class GbZ80Cpu(object):
                     if self.trace_enabled:
                         print(
                             f"[DEBUG POST-INTERRUPT] "
-                            f"PC={self.registers['pc']:04X}, "
-                            f"SP={self.registers['sp']:04X}"
+                            f"PC={registers['pc']:04X}, "
+                            f"SP={registers['sp']:04X}"
                         )
                     return True  # only handle one interrupt per boundary
         return False
@@ -863,16 +870,20 @@ class GbZ80Cpu(object):
 
     def _inc_clock(self):
         """Increment clock registers and step GPU."""
-        if self.registers['m'] == 0:
+        registers = self.registers
+        m_cycles = registers['m']
+        if m_cycles == 0:
             raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
 
-        self.clock['m'] += self.registers['m']
-        if self.sys_interface:
-            self.sys_interface.step(self.registers['m'])
+        self.clock['m'] += m_cycles
+        sys_interface = self.sys_interface
+        if sys_interface:
+            sys_interface.step(m_cycles)
         # print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
-        if self.sys_interface and self.sys_interface.gpu:
+        gpu = sys_interface.gpu if sys_interface else None
+        if gpu:
             # print(f"[GPU STEP] stepping {self.registers['m']*4} cycles")
-            self.sys_interface.gpu.step(self.registers['m'] * 4)  # 1 m = 4 cycles
+            gpu.step(m_cycles * 4)  # 1 m = 4 cycles
 
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value
@@ -1008,19 +1019,32 @@ class GbZ80Cpu(object):
 
     def _ldh_a_n(self):
         """Put mem @ address $FF00+n into register a."""
-        n = self.read8(self.registers['pc'])
-        addr = 0xFF00 + n
-        val = self.read8(addr)
-        self.registers['a'] = val
-        self.registers['pc'] += 1
-        self.registers['m'] = 3
+        registers = self.registers
+        sys_interface = self.sys_interface
+        pc = registers['pc']
+        n = sys_interface.read_byte(pc)
+        address = 0xFF00 + n
+        if address == 0xFF00:
+            registers['a'] = sys_interface.joypad.read()
+        elif (
+            address == 0xFF44
+            and sys_interface.memory.gb_doctor_test_mode
+        ):
+            registers['a'] = 0x90
+        else:
+            registers['a'] = sys_interface.memory.memory[address]
+        registers['pc'] = pc + 1
+        registers['m'] = 3
 
     def _ldh_n_a(self):
         """Put register A into mem @ address $FF00+n."""
-        n = self.read8(self.registers['pc'])
-        self.write8(0xFF00 + n, self.registers['a'])
-        self.registers['pc'] += 1
-        self.registers['m'] = 3
+        registers = self.registers
+        sys_interface = self.sys_interface
+        pc = registers['pc']
+        n = sys_interface.read_byte(pc)
+        sys_interface.write_byte(0xFF00 + n, registers['a'])
+        registers['pc'] = pc + 1
+        registers['m'] = 3
 
     def _ld_a_c(self):
         """Put value @ address $FF00+C into register A."""
@@ -1099,13 +1123,18 @@ class GbZ80Cpu(object):
         If Z flag reset, add n to current address and jump to it.
         n = one byte signed immediate value
         """
-        i = self.signed8(self.read8(self.registers['pc']))
-        self.registers['pc'] += 1  # Advance PC past the immediate byte
-        self.registers['m'] = 2
+        registers = self.registers
+        pc = registers['pc']
+        i = self.sys_interface.read_byte(pc)
+        if i >= 0x80:
+            i -= 0x100
+        pc += 1
+        registers['pc'] = pc  # Advance PC past the immediate byte
+        registers['m'] = 2
 
-        if (self.registers['f'] & and_val) == flag_check_value:
-            self.registers['pc'] = (self.registers['pc'] + i) & 0xFFFF
-            self.registers['m'] += 1
+        if (registers['f'] & and_val) == flag_check_value:
+            registers['pc'] = (pc + i) & 0xFFFF
+            registers['m'] = 3
 
     def _djnz_n(self):
         """Decrement B and jump if not zero."""
