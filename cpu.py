@@ -720,18 +720,25 @@ class GbZ80Cpu(object):
 
         # Handle HALT state
         if self.halted:
-            print("In HALTED state")
-            self.handle_interrupts()
-            if self.registers['ime'] and (self.sys_interface.read_byte(0xFFFF) & self.sys_interface.read_byte(0xFF0F)):
-                print("Exit HALTED state")
-                self.halted = False  # Exit HALT if interrupt available
-            else:
+            pending = (
+                self.sys_interface.read_byte(0xFFFF)
+                & self.sys_interface.read_byte(0xFF0F)
+                & 0x1F
+            )
+            if not pending:
                 self.registers['m'] = 1
                 self._inc_clock()
-            return
+                return
+            self.halted = False
 
         if self.gb_doctor_test_mode:
             self.log_for_gameboy_dr(self.registers['pc'])
+
+        # Interrupts are accepted at the next instruction boundary. The
+        # boundary state is logged above, then execution continues at the
+        # interrupt vector instead of the interrupted PC.
+        if self.handle_interrupts():
+            self._inc_clock()
 
         op = self.read8(self.registers['pc'])
         self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
@@ -745,8 +752,6 @@ class GbZ80Cpu(object):
         if self.enable_interrupts_next_cycle:
             self.registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
-
-        self.handle_interrupts()
 
     def log_for_gameboy_dr(self, pc):
         pcmem = [self.read8(pc + i) if (pc + i) < 0x10000 else 0 for i in range(4)]
@@ -770,7 +775,7 @@ class GbZ80Cpu(object):
 
     def handle_interrupts(self):
         if not self.registers['ime']:
-            return  # interrupts globally disabled
+            return False  # interrupts globally disabled
 
         interrupt_enable = self.sys_interface.read_byte(0xFFFF)
         interrupt_flags = self.sys_interface.read_byte(0xFF0F)
@@ -781,8 +786,9 @@ class GbZ80Cpu(object):
             for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
                 if triggered & (1 << bit):
                     self._execute_interrupt(bit, address)
-                    break  # only handle one interrupt per cycle
-            print(f"[DEBUG POST-INTERRUPT] PC={self.registers['pc']:04X}, SP={self.registers['sp']:04X}")
+                    print(f"[DEBUG POST-INTERRUPT] PC={self.registers['pc']:04X}, SP={self.registers['sp']:04X}")
+                    return True  # only handle one interrupt per boundary
+        return False
 
     def _execute_interrupt(self, bit, address):
         self.registers['ime'] = 0  # disable further interrupts
@@ -844,6 +850,8 @@ class GbZ80Cpu(object):
             raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
 
         self.clock['m'] += self.registers['m']
+        if self.sys_interface:
+            self.sys_interface.step(self.registers['m'])
         # print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
         if self.sys_interface and self.sys_interface.gpu:
             # print(f"[GPU STEP] stepping {self.registers['m']*4} cycles")
@@ -1400,7 +1408,13 @@ class GbZ80Cpu(object):
 
         # Set C flag if carry from bit 15 (full 16 bits overflow)
         if result > 0xFFFF:
-            self
+            self.registers['f'] |= FLAG['carry']
+        else:
+            self.registers['f'] &= ~FLAG['carry']
+
+        self.registers['h'] = (result >> 8) & 0xFF
+        self.registers['l'] = result & 0xFF
+        self.registers['m'] = 2
 
     def _adc_a_n(self, n):
         """Add register n + carry to register A."""

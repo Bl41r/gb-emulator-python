@@ -23,6 +23,7 @@ class GbSystemInterface(object):
         self.memory = memory
         self.cpu = cpu
         self.gpu = gpu
+        self.divider_counter = 0
 
     def load_rom_image(self, filename):
         """Load a ROM image into memory.
@@ -30,6 +31,7 @@ class GbSystemInterface(object):
         TODO: multiple rom banks for oversized roms
         """
         self.memory.reset_memory()
+        self.divider_counter = 0
         rom_array = self._read_rom_file(filename)
 
         for i in range(0, len(rom_array)):
@@ -57,9 +59,68 @@ class GbSystemInterface(object):
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
+        if address == 0xFF04:
+            old_signal = self._timer_signal()
+            self.divider_counter = 0
+            self.memory.write_byte(address, 0)
+            if old_signal and not self._timer_signal():
+                self._increment_tima()
+            return
+
+        if address == 0xFF07:
+            old_signal = self._timer_signal()
+            self.memory.write_byte(address, value & 0x07)
+            if old_signal and not self._timer_signal():
+                self._increment_tima()
+            return
+
         self.memory.write_byte(address, value)
         if 0x8000 <= address <= 0x97FF:     # VRAM tile area write
             self.gpu.update_tile(address, value)
+
+    def step(self, m_cycles):
+        """Advance the divider and programmable timer by CPU M-cycles."""
+        if not (self.read_byte(0xFF07) & 0x04):
+            self.divider_counter = (
+                self.divider_counter + m_cycles
+            ) & 0x3FFF
+            self.memory.write_byte(
+                0xFF04, (self.divider_counter >> 6) & 0xFF
+            )
+            return
+
+        for _ in range(m_cycles):
+            old_signal = self._timer_signal()
+            self.divider_counter = (self.divider_counter + 1) & 0x3FFF
+            self.memory.write_byte(
+                0xFF04, (self.divider_counter >> 6) & 0xFF
+            )
+            if old_signal and not self._timer_signal():
+                self._increment_tima()
+
+    def _timer_signal(self):
+        """Return the timer input selected by TAC."""
+        tac = self.memory.read_byte(0xFF07)
+        if not (tac & 0x04):
+            return 0
+
+        divider_bits = {
+            0x00: 7,
+            0x01: 1,
+            0x02: 3,
+            0x03: 5,
+        }
+        return (self.divider_counter >> divider_bits[tac & 0x03]) & 1
+
+    def _increment_tima(self):
+        """Increment TIMA and request its interrupt on overflow."""
+        tima = self.memory.read_byte(0xFF05)
+        if tima == 0xFF:
+            self.memory.write_byte(0xFF05, self.memory.read_byte(0xFF06))
+            interrupt_flags = self.memory.read_byte(0xFF0F) | 0x04
+            self.memory.write_byte(0xFF0F, interrupt_flags)
+        else:
+            self.memory.write_byte(0xFF05, tima + 1)
 
     def write_word(self, address, value):
         """Write a word into memory."""
