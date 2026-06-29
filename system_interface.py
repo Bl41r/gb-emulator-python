@@ -19,6 +19,7 @@ class GbSystemInterface(object):
     MANUFACTURER_CODE_BYTE = 0x14B
     LANGUAGE_BYTE = 0x14A
     VERSION_BYTE = 0x14C
+    TIMER_BITS = (7, 1, 3, 5)
 
     def __init__(self, memory, cpu, gpu):
         """Init."""
@@ -99,22 +100,19 @@ class GbSystemInterface(object):
 
     def step(self, m_cycles):
         """Advance the divider and programmable timer by CPU M-cycles."""
-        if not (self.read_byte(0xFF07) & 0x04):
-            self.divider_counter = (
-                self.divider_counter + m_cycles
-            ) & 0x3FFF
-            self.memory.write_byte(
-                0xFF04, (self.divider_counter >> 6) & 0xFF
-            )
+        memory = self.memory.memory
+        tac = memory[0xFF07]
+        if not (tac & 0x04):
+            self.divider_counter = (self.divider_counter + m_cycles) & 0x3FFF
+            memory[0xFF04] = (self.divider_counter >> 6) & 0xFF
             return
 
+        bit = self.TIMER_BITS[tac & 0x03]
         for _ in range(m_cycles):
-            old_signal = self._timer_signal()
+            old_signal = (self.divider_counter >> bit) & 1
             self.divider_counter = (self.divider_counter + 1) & 0x3FFF
-            self.memory.write_byte(
-                0xFF04, (self.divider_counter >> 6) & 0xFF
-            )
-            if old_signal and not self._timer_signal():
+            memory[0xFF04] = (self.divider_counter >> 6) & 0xFF
+            if old_signal and not ((self.divider_counter >> bit) & 1):
                 self._increment_tima()
 
     def _timer_signal(self):
@@ -123,13 +121,7 @@ class GbSystemInterface(object):
         if not (tac & 0x04):
             return 0
 
-        divider_bits = {
-            0x00: 7,
-            0x01: 1,
-            0x02: 3,
-            0x03: 5,
-        }
-        return (self.divider_counter >> divider_bits[tac & 0x03]) & 1
+        return (self.divider_counter >> self.TIMER_BITS[tac & 0x03]) & 1
 
     def _increment_tima(self):
         """Increment TIMA and request its interrupt on overflow."""
@@ -148,17 +140,26 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
+        if 0x0000 <= address <= 0x7FFF:
+            if self.cartridge:
+                return self.cartridge.read(address)
+            return self.memory.memory[address]
+
+        if 0xA000 <= address <= 0xBFFF:
+            if self.cartridge:
+                return self.cartridge.read(address)
+            return self.memory.memory[address]
+
+        if (
+            address == 0xFF44
+            and self.memory.gb_doctor_test_mode
+        ):
+            return 0x90
+
         if address == 0xFF00:
             return self.joypad.read()
-        if (
-            self.cartridge
-            and (
-                0x0000 <= address <= 0x7FFF
-                or 0xA000 <= address <= 0xBFFF
-            )
-        ):
-            return self.cartridge.read(address)
-        return self.memory.read_byte(address)
+
+        return self.memory.memory[address]
 
     def set_button(self, button, is_pressed):
         """Update a joypad button and request its interrupt on a falling edge."""

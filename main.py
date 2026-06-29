@@ -67,31 +67,24 @@ def main(filename, trace=False, max_frames=None, no_display=False):
         'frames': 0,
         'draw_seconds': 0.0,
         'start_seconds': time.perf_counter(),
+        'last_caption_seconds': time.perf_counter(),
+        'last_caption_frames': 0,
+        'last_caption_instructions': 0,
     }
 
     try:
         while True:
-            if not no_display:
-                # Handle window events
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        raise ExecutionHalted()
-                    if event.type in (pygame.KEYDOWN, pygame.KEYUP):
-                        button = KEY_BINDINGS.get(event.key)
-                        if button:
-                            sys_interface.set_button(
-                                button, event.type == pygame.KEYDOWN
-                            )
-
             cpu.execute_next_operation()
             stats['instructions'] += 1
 
             if gpu.consume_frame_ready():
                 stats['frames'] += 1
                 if not no_display:
+                    handle_events(sys_interface)
                     draw_start = time.perf_counter()
                     draw_screen(gpu, window)
                     stats['draw_seconds'] += time.perf_counter() - draw_start
+                    update_caption(caption, stats)
 
                 if max_frames is not None and stats['frames'] >= max_frames:
                     break
@@ -109,6 +102,38 @@ def main(filename, trace=False, max_frames=None, no_display=False):
         if not no_display:
             pygame.quit()
         print_run_stats(stats, no_display)
+
+
+def handle_events(sys_interface):
+    """Handle pending pygame events once per displayed frame."""
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            raise ExecutionHalted()
+        if event.type in (pygame.KEYDOWN, pygame.KEYUP):
+            button = KEY_BINDINGS.get(event.key)
+            if button:
+                sys_interface.set_button(button, event.type == pygame.KEYDOWN)
+
+
+def update_caption(base_caption, stats):
+    """Refresh the window title with recent performance once per second."""
+    now = time.perf_counter()
+    elapsed = now - stats['last_caption_seconds']
+    if elapsed < 1.0:
+        return
+
+    frames = stats['frames'] - stats['last_caption_frames']
+    instructions = stats['instructions'] - stats['last_caption_instructions']
+    fps = frames / elapsed
+    instructions_per_second = instructions / elapsed
+
+    pygame.display.set_caption(
+        f"{base_caption} - {fps:.1f} FPS - "
+        f"{instructions_per_second:,.0f} instr/s"
+    )
+    stats['last_caption_seconds'] = now
+    stats['last_caption_frames'] = stats['frames']
+    stats['last_caption_instructions'] = stats['instructions']
 
 
 def print_run_stats(stats, no_display):

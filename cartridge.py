@@ -37,6 +37,8 @@ class Cartridge:
         self.cartridge_type = self.rom[0x0147]
         self.rom_size_code = self.rom[0x0148]
         self.ram_size_code = self.rom[0x0149]
+        self.has_mbc1 = self.cartridge_type in MBC1_TYPES
+        self.is_rom_only_type = self.cartridge_type in ROM_ONLY_TYPES
 
         if self.cartridge_type not in ROM_ONLY_TYPES | MBC1_TYPES:
             raise NotImplementedError(
@@ -75,21 +77,35 @@ class Cartridge:
 
     @property
     def is_mbc1(self):
-        return self.cartridge_type in MBC1_TYPES
+        return self.has_mbc1
 
     def read(self, address):
         """Read a cartridge-mapped byte."""
+        if self.is_rom_only_type:
+            if 0x0000 <= address <= 0x7FFF:
+                return self.rom[address] if address < len(self.rom) else 0xFF
+
+            if 0xA000 <= address <= 0xBFFF:
+                if not self.ram or not self.ram_enabled:
+                    return 0xFF
+                offset = address - 0xA000
+                return self.ram[offset] if offset < len(self.ram) else 0xFF
+
+            raise ValueError(
+                "address 0x{:04X} is not cartridge-mapped".format(address)
+            )
+
         if 0x0000 <= address <= 0x3FFF:
             bank = (
                 self.secondary_bank << 5
-                if self.is_mbc1 and self.banking_mode
+                if self.has_mbc1 and self.banking_mode
                 else 0
             )
             return self._read_rom_bank(bank, address)
 
         if 0x4000 <= address <= 0x7FFF:
             bank = self.rom_bank
-            if self.is_mbc1:
+            if self.has_mbc1:
                 bank |= self.secondary_bank << 5
             return self._read_rom_bank(bank, address - 0x4000)
 
@@ -98,7 +114,7 @@ class Cartridge:
                 return 0xFF
             bank = (
                 self.secondary_bank
-                if self.is_mbc1 and self.banking_mode
+                if self.has_mbc1 and self.banking_mode
                 else 0
             )
             offset = bank * self.RAM_BANK_SIZE + (address - 0xA000)
@@ -117,7 +133,7 @@ class Cartridge:
                 return
             bank = (
                 self.secondary_bank
-                if self.is_mbc1 and self.banking_mode
+                if self.has_mbc1 and self.banking_mode
                 else 0
             )
             offset = bank * self.RAM_BANK_SIZE + (address - 0xA000)
@@ -125,7 +141,7 @@ class Cartridge:
                 self.ram[offset] = value
             return
 
-        if not self.is_mbc1:
+        if not self.has_mbc1:
             return
 
         if 0x0000 <= address <= 0x1FFF:

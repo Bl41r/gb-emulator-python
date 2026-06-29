@@ -31,6 +31,9 @@ python main.py roms/tetris.gb --max-frames 60 --profile profile.stats
 python main.py roms/tetris.gb --no-display --max-frames 60 --profile profile-headless.stats
 ```
 
+When running with a window, the title bar updates about once per second with
+recent FPS and instruction throughput.
+
 Keyboard controls are the same on Windows, Linux, and macOS:
 
 - D-pad: arrow keys
