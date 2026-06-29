@@ -714,6 +714,8 @@ class GbZ80Cpu(object):
             254: (self._set_bit_hlm, [7]),
             255: (self._set_bit_r, [7, 'a']),
         }
+        self.opcode_table = [self.opcode_map[i] for i in range(256)]
+        self.cb_table = [self.cb_map[i] for i in range(256)]
 
     def execute_next_operation(self):
         global my_counter
@@ -743,10 +745,15 @@ class GbZ80Cpu(object):
         if self.handle_interrupts():
             self._inc_clock()
 
-        op = sys_interface.read_byte(registers['pc'])
-        registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+        pc = registers['pc']
+        cartridge = sys_interface.cartridge
+        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
+            op = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        else:
+            op = sys_interface.read_byte(pc)
+        registers['pc'] = (pc + 1) & 0xFFFF
 
-        opcode, args = self.opcode_map[op]
+        opcode, args = self.opcode_table[op]
         if args:
             opcode(*args)
         else:
@@ -790,7 +797,7 @@ class GbZ80Cpu(object):
         if not registers['ime']:
             return False  # interrupts globally disabled
 
-        memory = self.sys_interface.memory.memory
+        memory = self.sys_interface.raw_memory
         interrupt_enable = memory[0xFFFF]
         interrupt_flags = memory[0xFF0F]
         triggered = interrupt_enable & interrupt_flags
@@ -865,8 +872,11 @@ class GbZ80Cpu(object):
         # print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535
-        op, args = self.cb_map[i]
-        op(*args)
+        op, args = self.cb_table[i]
+        if args:
+            op(*args)
+        else:
+            op()
 
     def _inc_clock(self):
         """Increment clock registers and step GPU."""
@@ -1022,7 +1032,11 @@ class GbZ80Cpu(object):
         registers = self.registers
         sys_interface = self.sys_interface
         pc = registers['pc']
-        n = sys_interface.read_byte(pc)
+        cartridge = sys_interface.cartridge
+        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
+            n = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        else:
+            n = sys_interface.read_byte(pc)
         address = 0xFF00 + n
         if address == 0xFF00:
             registers['a'] = sys_interface.joypad.read()
@@ -1032,7 +1046,7 @@ class GbZ80Cpu(object):
         ):
             registers['a'] = 0x90
         else:
-            registers['a'] = sys_interface.memory.memory[address]
+            registers['a'] = sys_interface.raw_memory[address]
         registers['pc'] = pc + 1
         registers['m'] = 3
 
@@ -1041,7 +1055,11 @@ class GbZ80Cpu(object):
         registers = self.registers
         sys_interface = self.sys_interface
         pc = registers['pc']
-        n = sys_interface.read_byte(pc)
+        cartridge = sys_interface.cartridge
+        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
+            n = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        else:
+            n = sys_interface.read_byte(pc)
         sys_interface.write_byte(0xFF00 + n, registers['a'])
         registers['pc'] = pc + 1
         registers['m'] = 3
@@ -1125,7 +1143,12 @@ class GbZ80Cpu(object):
         """
         registers = self.registers
         pc = registers['pc']
-        i = self.sys_interface.read_byte(pc)
+        sys_interface = self.sys_interface
+        cartridge = sys_interface.cartridge
+        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
+            i = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        else:
+            i = sys_interface.read_byte(pc)
         if i >= 0x80:
             i -= 0x100
         pc += 1

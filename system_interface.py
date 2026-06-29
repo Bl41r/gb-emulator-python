@@ -25,6 +25,7 @@ class GbSystemInterface(object):
         """Init."""
         self.cartridge_type = None
         self.memory = memory
+        self.raw_memory = memory.memory
         self.cpu = cpu
         self.gpu = gpu
         self.divider_counter = 0
@@ -100,7 +101,7 @@ class GbSystemInterface(object):
 
     def step(self, m_cycles):
         """Advance the divider and programmable timer by CPU M-cycles."""
-        memory = self.memory.memory
+        memory = self.raw_memory
         tac = memory[0xFF07]
         if not (tac & 0x04):
             self.divider_counter = (self.divider_counter + m_cycles) & 0x3FFF
@@ -150,13 +151,13 @@ class GbSystemInterface(object):
                         else 0xFF
                     )
                 return cartridge.read(address)
-            return self.memory.memory[address]
+            return self.raw_memory[address]
 
         if 0xA000 <= address <= 0xBFFF:
             cartridge = self.cartridge
             if cartridge:
                 return cartridge.read(address)
-            return self.memory.memory[address]
+            return self.raw_memory[address]
 
         if (
             address == 0xFF44
@@ -167,7 +168,7 @@ class GbSystemInterface(object):
         if address == 0xFF00:
             return self.joypad.read()
 
-        return self.memory.memory[address]
+        return self.raw_memory[address]
 
     def set_button(self, button, is_pressed):
         """Update a joypad button and request its interrupt on a falling edge."""
