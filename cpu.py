@@ -307,7 +307,7 @@ class GbZ80Cpu(object):
             131: (self._add_a_n, ('e',)),  # ADDr_e
             132: (self._add_a_n, ('h',)),  # ADDr_h
             133: (self._add_a_n, ('l',)),  # ADDr_l
-            134: (self._raise_opcode_unimplemented, ()),  # ADDHL
+            134: (self._add_a_hl, ()),  # ADD A,(HL)
             135: (self._add_a_n, ('a',)),  # ADDr_a
             136: (self._adc_a_n, ('b',)),  # ADC A, B
             137: (self._adc_a_n, ('c',)),  # ADC A, C
@@ -331,7 +331,7 @@ class GbZ80Cpu(object):
             155: (self._sub_a_n, ('e',)),  # SBCr_e
             156: (self._sub_a_n, ('h',)),  # SBCr_h
             157: (self._sub_a_n, ('l',)),  # SBCr_l
-            158: (self._raise_opcode_unimplemented, ()),  # SBCHL
+            158: (self._sbc_a_hl, ()),  # SBC A,(HL)
             159: (self._sub_a_n, ('a',)),  # SBCr_a
             160: (self._and_n, ('b',)),  # ANDr_b
             161: (self._and_n, ('c',)),  # ANDr_c
@@ -363,7 +363,7 @@ class GbZ80Cpu(object):
             187: (self._cp_n, ('e',)),  # CPr_e
             188: (self._cp_n, ('h',)),  # CPr_h
             189: (self._cp_n, ('l',)),  # CPr_l
-            190: (self._raise_opcode_unimplemented, ()),  # CPHL
+            190: (self._cp_hl, ()),  # CP (HL)
             191: (self._cp_n, ('a',)),  # CPr_a
             192: (self._ret_f, (FLAG['zero'], 0x00)),  # RETNZ
             193: (self._pop_nn, ('b', 'c')),  # POPBC
@@ -395,7 +395,7 @@ class GbZ80Cpu(object):
             219: (self._nop, ()),  # XX
             220: (self._call_cc_nn, (FLAG['carry'], FLAG['carry'])), # CALL C,nn
             221: (self._nop, ()),  # XX
-            222: (self._raise_opcode_unimplemented, ()),  # SBCn
+            222: (self._sbc_n, ()),  # SBC A,n
             223: (self._rst_n, (0x18,)),  # RST18
             224: (self._ldh_n_a, ()),  # LDIOnA
             225: (self._pop_nn, ('h', 'l')),  # POPHL
@@ -438,55 +438,55 @@ class GbZ80Cpu(object):
             3: (self._rlc_n, ['e']),  # RLCr_e
             4: (self._rlc_n, ['h']),  # RLCr_h
             5: (self._rlc_n, ['l']),  # RLCr_l
-            6: (self._raise_cb_op_unimplemented, ['rlchl']),  # RLCHL
+            6: (self._rlc_hlm, ()),  # RLC (HL)
             7: (self._rlc_n, ['a']),  # RLCr_a
-            8: (self._raise_cb_op_unimplemented, ['rrcr_b']),  # RRCr_b
-            9: (self._raise_cb_op_unimplemented, ['rrcr_c']),  # RRCr_c
-            10: (self._raise_cb_op_unimplemented, ['rrcr_d']),  # RRCr_d
-            11: (self._raise_cb_op_unimplemented, ['rrcr_e']),  # RRCr_e
-            12: (self._raise_cb_op_unimplemented, ['rrcr_h']),  # RRCr_h
-            13: (self._raise_cb_op_unimplemented, ['rrcr_l']),  # RRCr_l
-            14: (self._raise_cb_op_unimplemented, ['rrchl']),  # RRCHL
-            15: (self._raise_cb_op_unimplemented, ['rrcr_a']),  # RRCr_a
-            16: (self._raise_cb_op_unimplemented, ['rlr_b']),  # RLr_b
-            17: (self._raise_cb_op_unimplemented, ['rlr_c']),  # RLr_c
-            18: (self._raise_cb_op_unimplemented, ['rlr_d']),  # RLr_d
-            19: (self._raise_cb_op_unimplemented, ['rlr_e']),  # RLr_e
-            20: (self._raise_cb_op_unimplemented, ['rlr_h']),  # RLr_h
-            21: (self._raise_cb_op_unimplemented, ['rlr_l']),  # RLr_l
-            22: (self._raise_cb_op_unimplemented, ['rlhl']),  # RLHL
-            23: (self._raise_cb_op_unimplemented, ['rlr_a']),  # RLr_a
+            8: (self._rrc_n, ['b']),  # RRC B
+            9: (self._rrc_n, ['c']),  # RRC C
+            10: (self._rrc_n, ['d']),  # RRC D
+            11: (self._rrc_n, ['e']),  # RRC E
+            12: (self._rrc_n, ['h']),  # RRC H
+            13: (self._rrc_n, ['l']),  # RRC L
+            14: (self._rrc_hlm, ()),  # RRC (HL)
+            15: (self._rrc_n, ['a']),  # RRC A
+            16: (self._rl_n, ['b']),  # RL B
+            17: (self._rl_n, ['c']),  # RL C
+            18: (self._rl_n, ['d']),  # RL D
+            19: (self._rl_n, ['e']),  # RL E
+            20: (self._rl_n, ['h']),  # RL H
+            21: (self._rl_n, ['l']),  # RL L
+            22: (self._rl_hlm, ()),  # RL (HL)
+            23: (self._rl_n, ['a']),  # RL A
             24: (self._rr_n, ['b']),  # RR B
             25: (self._rr_n, ['c']),  # RR C
             26: (self._rr_n, ['d']),  # RR D
             27: (self._rr_n, ['e']),  # RR E
             28: (self._rr_n, ['h']),  # RR H
             29: (self._rr_n, ['l']),  # RR L
-            30: (self._raise_cb_op_unimplemented, ['rrhl']),  # RRHL
-            31: (self._raise_cb_op_unimplemented, ['rrr_a']),  # RRr_a
-            32: (self._raise_cb_op_unimplemented, ['slar_b']),  # SLAr_b
-            33: (self._raise_cb_op_unimplemented, ['slar_c']),  # SLAr_c
-            34: (self._raise_cb_op_unimplemented, ['slar_d']),  # SLAr_d
-            35: (self._raise_cb_op_unimplemented, ['slar_e']),  # SLAr_e
-            36: (self._raise_cb_op_unimplemented, ['slar_h']),  # SLAr_h
-            37: (self._raise_cb_op_unimplemented, ['slar_l']),  # SLAr_l
-            38: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            39: (self._raise_cb_op_unimplemented, ['slar_a']),  # SLAr_a
-            40: (self._raise_cb_op_unimplemented, ['srar_b']),  # SRAr_b
-            41: (self._raise_cb_op_unimplemented, ['srar_c']),  # SRAr_c
-            42: (self._raise_cb_op_unimplemented, ['srar_d']),  # SRAr_d
-            43: (self._raise_cb_op_unimplemented, ['srar_e']),  # SRAr_e
-            44: (self._raise_cb_op_unimplemented, ['srar_h']),  # SRAr_h
-            45: (self._raise_cb_op_unimplemented, ['srar_l']),  # SRAr_l
-            46: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            47: (self._raise_cb_op_unimplemented, ['srar_a']),  # SRAr_a
+            30: (self._rr_hlm, ()),  # RR (HL)
+            31: (self._rr_n, ['a']),  # RR A
+            32: (self._sla_n, ['b']),  # SLA B
+            33: (self._sla_n, ['c']),  # SLA C
+            34: (self._sla_n, ['d']),  # SLA D
+            35: (self._sla_n, ['e']),  # SLA E
+            36: (self._sla_n, ['h']),  # SLA H
+            37: (self._sla_n, ['l']),  # SLA L
+            38: (self._sla_hlm, ()),  # SLA (HL)
+            39: (self._sla_n, ['a']),  # SLA A
+            40: (self._sra_n, ['b']),  # SRA B
+            41: (self._sra_n, ['c']),  # SRA C
+            42: (self._sra_n, ['d']),  # SRA D
+            43: (self._sra_n, ['e']),  # SRA E
+            44: (self._sra_n, ['h']),  # SRA H
+            45: (self._sra_n, ['l']),  # SRA L
+            46: (self._sra_hlm, ()),  # SRA (HL)
+            47: (self._sra_n, ['a']),  # SRA A
             48: (self._swap_n, ['b']),  # SWAPr_b
             49: (self._swap_n, ['c']),  # SWAPr_c
             50: (self._swap_n, ['d']),  # SWAPr_d
             51: (self._swap_n, ['e']),  # SWAPr_e
             52: (self._swap_n, ['h']),  # SWAPr_h
             53: (self._swap_n, ['l']),  # SWAPr_l
-            54: (self._raise_cb_op_unimplemented, ['xx']),  # XX
+            54: (self._swap_hlm, ()),  # SWAP (HL)
             55: (self._swap_n, ['a']),  # SWAPr_a
             56: (self._srl_n, ['b']),  # SRL B
             57: (self._srl_n, ['c']),  # SRL C
@@ -494,8 +494,8 @@ class GbZ80Cpu(object):
             59: (self._srl_n, ['e']),  # SRL E
             60: (self._srl_n, ['h']),  # SRL H
             61: (self._srl_n, ['l']),  # SRL L
-            62: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            63: (self._raise_cb_op_unimplemented, ['srlr_a']),  # SRLr_a
+            62: (self._srl_hlm, ()),  # SRL (HL)
+            63: (self._srl_n, ['a']),  # SRL A
             # BIT 0
             64: (self._bit_test_r, [0, 'b']),
             65: (self._bit_test_r, [0, 'c']),
@@ -1212,19 +1212,37 @@ class GbZ80Cpu(object):
 
     def _sub_a_n(self, n):
         """Subtract n + Carry flag from A."""
-        a = self.registers['a']
-        self.registers['a'] -= self.registers[n]
-        self.registers['a'] -= 1 \
-            if (self.registers['f'] & FLAG['carry']) else 0
-
-        self.registers['f'] = 0x50 if self.registers['a'] < 0 else FLAG['sub']
-        self.registers['a'] &= 255
-    
-        if not self.registers['a']:
-            self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] ^ self.registers[n] ^ a) & FLAG['carry']:
-            self.registers['f'] |= FLAG['half-carry']
+        self.__sbc_from_a(self.registers[n])
         self.registers['m'] = 1
+
+    def _sbc_a_hl(self):
+        """Subtract the byte at HL and Carry from A."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        self.__sbc_from_a(self.read8(address))
+        self.registers['m'] = 2
+
+    def _sbc_n(self):
+        """Subtract an immediate byte and Carry from A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
+        self.__sbc_from_a(value)
+        self.registers['m'] = 2
+
+    def __sbc_from_a(self, value):
+        """Shared SBC logic with Z, N, H, and C flag updates."""
+        a = self.registers['a']
+        carry = 1 if self.registers['f'] & FLAG['carry'] else 0
+        result = a - value - carry
+
+        self.registers['f'] = FLAG['sub']
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (a & 0x0F) < ((value & 0x0F) + carry):
+            self.registers['f'] |= FLAG['half-carry']
+        if a < value + carry:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
 
     def _sub_hl(self):
         """Subtract value at HL from A."""
@@ -1266,6 +1284,22 @@ class GbZ80Cpu(object):
 
         self.registers['m'] = 2
 
+    def _cp_hl(self):
+        """Compare A with the byte at HL."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        result = self.registers['a'] - value
+
+        self.registers['f'] = FLAG['sub']
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (self.registers['a'] & 0x0F) < (value & 0x0F):
+            self.registers['f'] |= FLAG['half-carry']
+        if result < 0:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['m'] = 2
+
     def _add_n(self):
         """Add immediate 8-bit value to A."""
         value = self.read8(self.registers['pc'])
@@ -1278,6 +1312,12 @@ class GbZ80Cpu(object):
         value = self.registers[n]
         self.__add_to_a(value)
         self.registers['m'] = 1
+
+    def _add_a_hl(self):
+        """Add the byte at HL to A."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        self.__add_to_a(self.read8(address))
+        self.registers['m'] = 2
 
     def __add_to_a(self, value):
         """Shared logic for adding value to A with flag updates."""
@@ -1511,7 +1551,8 @@ class GbZ80Cpu(object):
         result = (val - 1) & 0xFF
 
         self.write8(addr, result)
-        self.registers['f'] = FLAG['sub']  # Always set N
+        carry = self.registers['f'] & FLAG['carry']
+        self.registers['f'] = carry | FLAG['sub']
 
         if result == 0:
             self.registers['f'] |= FLAG['zero']
@@ -1721,20 +1762,81 @@ class GbZ80Cpu(object):
 
 
     # CB opcodes
+    def __set_cb_flags(self, result, carry):
+        """Set flags shared by CB-prefixed rotate and shift operations."""
+        self.registers['f'] = 0
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+        if carry:
+            self.registers['f'] |= FLAG['carry']
+
+    def _rlc_hlm(self):
+        """Rotate the byte at HL left circularly."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = (value >> 7) & 1
+        result = ((value << 1) & 0xFF) | carry
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _rrc_n(self, r):
+        """Rotate register r right circularly."""
+        value = self.registers[r]
+        carry = value & 1
+        result = (value >> 1) | (carry << 7)
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 2
+
+    def _rrc_hlm(self):
+        """Rotate the byte at HL right circularly."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = value & 1
+        result = (value >> 1) | (carry << 7)
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _rl_n(self, r):
+        """Rotate register r left through Carry."""
+        value = self.registers[r]
+        carry_in = 1 if self.registers['f'] & FLAG['carry'] else 0
+        carry_out = (value >> 7) & 1
+        result = ((value << 1) & 0xFF) | carry_in
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry_out)
+        self.registers['m'] = 2
+
+    def _rl_hlm(self):
+        """Rotate the byte at HL left through Carry."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry_in = 1 if self.registers['f'] & FLAG['carry'] else 0
+        carry_out = (value >> 7) & 1
+        result = ((value << 1) & 0xFF) | carry_in
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry_out)
+        self.registers['m'] = 4
+
     def _srl_n(self, r):
         """Shift register r right logically (SRL)."""
         val = self.registers[r]
         result = val >> 1
 
         self.registers[r] = result
-        self.registers['f'] = 0
-
-        if result == 0:
-            self.registers['f'] |= FLAG['zero']
-        if val & 0x01:
-            self.registers['f'] |= FLAG['carry']
-
+        self.__set_cb_flags(result, val & 1)
         self.registers['m'] = 2
+
+    def _srl_hlm(self):
+        """Shift the byte at HL right logically."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        result = value >> 1
+        self.write8(address, result)
+        self.__set_cb_flags(result, value & 1)
+        self.registers['m'] = 4
 
     def _rr_n(self, r):
         """Rotate register r right through carry (RR r)."""
@@ -1744,14 +1846,66 @@ class GbZ80Cpu(object):
 
         result = (old_val >> 1) | (old_carry << 7)
         self.registers[r] = result
-
-        self.registers['f'] = 0
-        if result == 0:
-            self.registers['f'] |= FLAG['zero']
-        if new_carry:
-            self.registers['f'] |= FLAG['carry']
-
+        self.__set_cb_flags(result, new_carry)
         self.registers['m'] = 2
+
+    def _rr_hlm(self):
+        """Rotate the byte at HL right through Carry."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry_in = 1 if self.registers['f'] & FLAG['carry'] else 0
+        carry_out = value & 1
+        result = (value >> 1) | (carry_in << 7)
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry_out)
+        self.registers['m'] = 4
+
+    def _sla_n(self, r):
+        """Shift register r left arithmetically."""
+        value = self.registers[r]
+        carry = (value >> 7) & 1
+        result = (value << 1) & 0xFF
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 2
+
+    def _sla_hlm(self):
+        """Shift the byte at HL left arithmetically."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = (value >> 7) & 1
+        result = (value << 1) & 0xFF
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _sra_n(self, r):
+        """Shift register r right while retaining its sign bit."""
+        value = self.registers[r]
+        carry = value & 1
+        result = (value >> 1) | (value & 0x80)
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 2
+
+    def _sra_hlm(self):
+        """Shift the byte at HL right while retaining its sign bit."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = value & 1
+        result = (value >> 1) | (value & 0x80)
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _swap_hlm(self):
+        """Swap the upper and lower nibbles of the byte at HL."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        result = ((value & 0x0F) << 4) | ((value & 0xF0) >> 4)
+        self.write8(address, result)
+        self.__set_cb_flags(result, 0)
+        self.registers['m'] = 4
 
     def _res_bit_r(self, bit, reg):
         """Reset bit `bit` in register `reg`."""
@@ -1841,8 +1995,8 @@ class GbZ80Cpu(object):
     def cpl(self):
         """Complement A register (bit flip)."""
         self.registers['a'] = (~self.registers['a']) & 0xFF
-        self.registers['f'] &= FLAG['zero']
-        self.registers['f'] |= 0x60
+        self.registers['f'] &= FLAG['zero'] | FLAG['carry']
+        self.registers['f'] |= FLAG['sub'] | FLAG['half-carry']
         self.registers['m'] = 1
 
     def _ccf(self):
@@ -1874,11 +2028,12 @@ class GbZ80Cpu(object):
             else (0, 0)
         self.registers['a'] = (self.registers['a'] << 1) + ci
         self.registers['a'] &= 255
-        self.registers['f'] = (self.registers['f'] & 0xEF) + co
+        self.registers['f'] = co
         self.registers['m'] = 1
 
     def _scf(self):
         """Set carry flag."""
+        self.registers['f'] &= FLAG['zero']
         self.registers['f'] |= FLAG['carry']
         self.registers['m'] = 1
 
