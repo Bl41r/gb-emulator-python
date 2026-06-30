@@ -57,7 +57,12 @@ class GbGpu(object):
             2: self._oam_read_mode,
             3: self._vram_read_mode,
         }
-        self.screen_data = [255 for i in range(160 * 144 * 4)]
+        self.screen_data = bytearray([255] * (160 * 144 * 4))
+        self.screen_buffer = np.frombuffer(
+            self.screen_data,
+            dtype=np.uint8,
+        ).reshape((144, 160, 4))
+        self.screen_rgb = self.screen_buffer[:, :, :3]
         self.tile_set = self._create_tile_set()
         self.sys_interface = None    # Set after interface instantiated
         self.register_map = {
@@ -81,7 +86,9 @@ class GbGpu(object):
         ]
 
         self.screen = {
-            'data': [255 for i in range(160 * 144 * 4)],
+            'data': self.screen_data,
+            'buffer': self.screen_buffer,
+            'rgb': self.screen_rgb,
             'width': 160,
             'heaight': 144
         }
@@ -168,7 +175,7 @@ class GbGpu(object):
 
     def reset_screen(self):
         """Reset screen to white."""
-        self.screen_data = [255 for i in range(160 * 144 * 4)]
+        self.screen_buffer.fill(255)
 
     def set_system_interface(self, sys_interface):
         """Set the system interface."""
@@ -185,7 +192,8 @@ class GbGpu(object):
 
     def _update_stat_register(self):
         """Use whenever linemode is set"""
-        stat = self.read_reg('stat') & 0b11111000  # Clear mode + coincidence flag
+        memory = self.sys_interface.raw_memory
+        stat = memory[self.register_map['stat']] & 0b11111000  # Clear mode + coincidence flag
 
         # Set current mode (bits 0–1)
         stat |= self.linemode & 0b11
@@ -194,21 +202,22 @@ class GbGpu(object):
         stat |= 0b100
 
         # Coincidence flag (bit 3)
-        if self.read_reg('curr_line') == self.read_reg('raster'):
+        if memory[self.register_map['curr_line']] == memory[self.register_map['raster']]:
             stat |= 0b1000  # Bit 3: coincidence match
 
-        self.write_reg('stat', stat)
+        memory[self.register_map['stat']] = stat
 
     def _h_blank_render_screen(self):
         if self._mode_clock >= 204:
+            memory = self.sys_interface.raw_memory
             self._mode_clock -= 204
-            curr_line = self.read_reg('curr_line')
-            self.write_reg('curr_line', (curr_line + 1) & 0xFF)
+            curr_line = memory[self.register_map['curr_line']]
+            memory[self.register_map['curr_line']] = (curr_line + 1) & 0xFF
 
             if curr_line == 143:
                 self.linemode = 1  # enter V-Blank
                 self.frame_ready = True
-                self.sys_interface.write_byte(0xFF0F, self.sys_interface.read_byte(0xFF0F) | 0x01)  # Set V-Blank flag
+                memory[0xFF0F] |= 0x01  # Set V-Blank flag
             else:
                 self.linemode = 2
 
@@ -217,11 +226,14 @@ class GbGpu(object):
     def _v_blank(self):
         """."""
         if self._mode_clock >= 456:
+            memory = self.sys_interface.raw_memory
             self._mode_clock -= 456
-            self.write_reg('curr_line', (self.read_reg('curr_line') + 1) & 0xFF)
+            memory[self.register_map['curr_line']] = (
+                memory[self.register_map['curr_line']] + 1
+            ) & 0xFF
 
-            if self.read_reg('curr_line') > 153:
-                self.write_reg('curr_line', 0)  # reset LY
+            if memory[self.register_map['curr_line']] > 153:
+                memory[self.register_map['curr_line']] = 0  # reset LY
                 self.linemode = 2   # Switch to OAM mode
                 self._curscan = 0   # Reset scanline render state
 
@@ -243,38 +255,40 @@ class GbGpu(object):
             self._renderscan()
 
     def _renderscan(self):
-        line = self.read_reg('curr_line')
+        memory = self.sys_interface.raw_memory
+        line = memory[self.register_map['curr_line']]
+        lcdc = memory[self.register_map['lcd_gpu_ctrl']]
 
-        if line >= 144 or not self.is_display_enabled():
+        if line >= 144 or not (lcdc & 0x80):
             return
 
-        if self.is_background_enabled():
-            self._render_background_scanline(line)
+        if lcdc & 0x01:
+            self._render_background_scanline(line, lcdc)
         else:
             self._scanrow = [0 for _ in range(160)]
             for x in range(160):
                 self._write_pixel(line, x, 255)
 
-        if self.get_gpu_ctrl_reg('sprites'):
-            self._render_sprite_scanline(line)
+        if lcdc & 0x02:
+            self._render_sprite_scanline(line, lcdc)
 
-    def _render_background_scanline(self, line):
+    def _render_background_scanline(self, line, lcdc):
         """Render the background and retain its color IDs for OBJ priority."""
-        memory = self.sys_interface.memory.memory
+        memory = self.sys_interface.raw_memory
         scroll_y = memory[self.register_map['scroll_y']]
         scroll_x = memory[self.register_map['scroll_x']]
         y = (line + scroll_y) & 0xFF
         tile_row = y >> 3
         tile_pixel_row = y & 7
-        map_base = self.get_tile_map_base()
-        tileset_base = self.get_tile_data_base()
-        signed_addressing = tileset_base == 0x8800
+        map_base = 0x9C00 if (lcdc & 0x08) else 0x9800
+        signed_addressing = not (lcdc & 0x10)
         palette = self._palette_lookup(memory[self.register_map['bgrnd_palette']])
-        screen_data = self.screen['data']
+        screen_data = self.screen_data
         screen_offset = line * 160 * 4
         scanrow = self._scanrow
 
-        for x in range(160):
+        x = 0
+        while x < 160:
             x_scrolled = (x + scroll_x) & 0xFF
             tile_col = x_scrolled >> 3
             tile_pixel_col = x_scrolled & 7
@@ -288,19 +302,25 @@ class GbGpu(object):
             else:
                 tile_index = tile_id
 
-            color_index = self.tile_set[tile_index][tile_pixel_row][tile_pixel_col]
-            scanrow[x] = color_index
-            color = palette[color_index]
+            tile_pixels = self.tile_set[tile_index][tile_pixel_row]
+            run = min(8 - tile_pixel_col, 160 - x)
             offset = screen_offset + x * 4
-            screen_data[offset] = color
-            screen_data[offset + 1] = color
-            screen_data[offset + 2] = color
-            screen_data[offset + 3] = 255
 
-    def _render_sprite_scanline(self, line):
+            for tile_x in range(tile_pixel_col, tile_pixel_col + run):
+                color_index = tile_pixels[tile_x]
+                scanrow[x] = color_index
+                color = palette[color_index]
+                screen_data[offset] = color
+                screen_data[offset + 1] = color
+                screen_data[offset + 2] = color
+                screen_data[offset + 3] = 255
+                x += 1
+                offset += 4
+
+    def _render_sprite_scanline(self, line, lcdc):
         """Composite the DMG's first ten eligible objects onto one scanline."""
-        memory = self.sys_interface.memory.memory
-        height = 16 if self.get_gpu_ctrl_reg('sprites_size') else 8
+        memory = self.sys_interface.raw_memory
+        height = 16 if (lcdc & 0x04) else 8
         objects = []
 
         for index in range(40):
@@ -320,7 +340,7 @@ class GbGpu(object):
         # On DMG, smaller X wins; equal X uses the earlier OAM entry.
         objects.sort(key=lambda obj: (obj[0], obj[1]))
         claimed = [False for _ in range(160)]
-        screen_data = self.screen['data']
+        screen_data = self.screen_data
         screen_offset = line * 160 * 4
         obj0_palette = self._palette_lookup(memory[0xFF48])
         obj1_palette = self._palette_lookup(memory[0xFF49])
@@ -372,7 +392,10 @@ class GbGpu(object):
 
     def _write_pixel(self, line, x, color):
         offset = (line * 160 + x) * 4
-        self.screen['data'][offset:offset + 4] = [color, color, color, 255]
+        self.screen_data[offset] = color
+        self.screen_data[offset + 1] = color
+        self.screen_data[offset + 2] = color
+        self.screen_data[offset + 3] = 255
 
     def _get_mapbase(self):
         """Get mapbase."""

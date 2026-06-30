@@ -160,16 +160,10 @@ def print_run_stats(stats, no_display):
 
 def draw_screen(gpu, screen):
     """Draw the GPU buffer to the Pygame window using fast blitting."""
-    # Convert 160x144x4 flat list into 3D NumPy array
-    buffer = np.array(gpu.screen['data'], dtype=np.uint8).reshape((144, 160, 4))
-
-    # Remove alpha channel (RGB only)
-    rgb_buffer = buffer[:, :, :3]
-
-    # print("Sample pixel RGB:", rgb_buffer[0, 0])
-
-    # Create surface from array
-    surface = pygame.surfarray.make_surface(np.transpose(rgb_buffer, (1, 0, 2)))  # Transpose to (width, height, 3)
+    # Create surface from the GPU's persistent RGB framebuffer.
+    surface = pygame.surfarray.make_surface(
+        np.transpose(gpu.screen['rgb'], (1, 0, 2))
+    )
 
     # Scale it
     surface = pygame.transform.scale(surface, (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))

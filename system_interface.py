@@ -102,19 +102,27 @@ class GbSystemInterface(object):
     def step(self, m_cycles):
         """Advance the divider and programmable timer by CPU M-cycles."""
         memory = self.raw_memory
+        divider_counter = self.divider_counter
         tac = memory[0xFF07]
         if not (tac & 0x04):
-            self.divider_counter = (self.divider_counter + m_cycles) & 0x3FFF
-            memory[0xFF04] = (self.divider_counter >> 6) & 0xFF
+            divider_counter = (divider_counter + m_cycles) & 0x3FFF
+            self.divider_counter = divider_counter
+            memory[0xFF04] = (divider_counter >> 6) & 0xFF
             return
 
         bit = self.TIMER_BITS[tac & 0x03]
         for _ in range(m_cycles):
-            old_signal = (self.divider_counter >> bit) & 1
-            self.divider_counter = (self.divider_counter + 1) & 0x3FFF
-            memory[0xFF04] = (self.divider_counter >> 6) & 0xFF
-            if old_signal and not ((self.divider_counter >> bit) & 1):
-                self._increment_tima()
+            old_signal = (divider_counter >> bit) & 1
+            divider_counter = (divider_counter + 1) & 0x3FFF
+            memory[0xFF04] = (divider_counter >> 6) & 0xFF
+            if old_signal and not ((divider_counter >> bit) & 1):
+                tima = memory[0xFF05]
+                if tima == 0xFF:
+                    memory[0xFF05] = memory[0xFF06]
+                    memory[0xFF0F] |= 0x04
+                else:
+                    memory[0xFF05] = tima + 1
+        self.divider_counter = divider_counter
 
     def _timer_signal(self):
         """Return the timer input selected by TAC."""
