@@ -31,8 +31,18 @@ python main.py roms/tetris.gb --max-frames 60 --profile profile.stats
 python main.py roms/tetris.gb --no-display --max-frames 60 --profile profile-headless.stats
 ```
 
+If rendering is the bottleneck, skip displayed frames while still emulating
+every frame:
+
+```powershell
+python main.py roms/tetris.gb --frameskip 2
+```
+
+`--frameskip 1` draws every completed frame. `--frameskip 2` draws every other
+completed frame, `--frameskip 3` draws every third frame, and so on.
+
 When running with a window, the title bar updates about once per second with
-recent FPS and instruction throughput.
+recent emulated FPS, drawn FPS, and instruction throughput.
 
 Keyboard controls are the same on Windows, Linux, and macOS:
 

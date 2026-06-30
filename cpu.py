@@ -742,8 +742,11 @@ class GbZ80Cpu(object):
         # Interrupts are accepted at the next instruction boundary. The
         # boundary state is logged above, then execution continues at the
         # interrupt vector instead of the interrupted PC.
-        if self.handle_interrupts():
-            self._inc_clock()
+        if registers['ime']:
+            memory = sys_interface.raw_memory
+            if memory[0xFFFF] & memory[0xFF0F] & 0x1F:
+                if self.handle_interrupts():
+                    self._inc_clock()
 
         pc = registers['pc']
         cartridge = sys_interface.cartridge
@@ -887,13 +890,12 @@ class GbZ80Cpu(object):
 
         self.clock['m'] += m_cycles
         sys_interface = self.sys_interface
-        if sys_interface:
-            sys_interface.step(m_cycles)
+        if sys_interface is None:
+            return
+
+        sys_interface.step(m_cycles)
         # print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
-        gpu = sys_interface.gpu if sys_interface else None
-        if gpu:
-            # print(f"[GPU STEP] stepping {self.registers['m']*4} cycles")
-            gpu.step(m_cycles * 4)  # 1 m = 4 cycles
+        sys_interface.gpu.step(m_cycles * 4)  # 1 m = 4 cycles
 
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value

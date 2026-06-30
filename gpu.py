@@ -42,6 +42,17 @@ held in one byte, and the high bit in the other byte.
 """
 import numpy as np
 
+DMG_SHADES = (255, 192, 96, 0)
+DMG_PALETTES = tuple(
+    tuple(DMG_SHADES[(palette >> (index * 2)) & 0x03] for index in range(4))
+    for palette in range(256)
+)
+TILE_ROW_PIXELS = tuple(
+    bytes((code >> shift) & 0x03 for shift in range(14, -1, -2))
+    for code in range(0x10000)
+)
+
+
 class GbGpu(object):
     """GPU unit for the gameboy."""
 
@@ -51,12 +62,6 @@ class GbGpu(object):
         self._curscan = 0
         self._mode_clock = 0
         self.frame_ready = False
-        self._mode_funcs = {
-            0: self._h_blank_render_screen,
-            1: self._v_blank,
-            2: self._oam_read_mode,
-            3: self._vram_read_mode,
-        }
         self.screen_data = bytearray([255] * (160 * 144 * 4))
         self.screen_buffer = np.frombuffer(
             self.screen_data,
@@ -64,6 +69,8 @@ class GbGpu(object):
         ).reshape((144, 160, 4))
         self.screen_rgb = self.screen_buffer[:, :, :3]
         self.tile_set = self._create_tile_set()
+        self.tile_row_codes = self._create_tile_row_codes()
+        self._tile_row_rgba_cache = {}
         self.sys_interface = None    # Set after interface instantiated
         self.register_map = {
             'lcd_gpu_ctrl': 0xFF40,
@@ -76,7 +83,9 @@ class GbGpu(object):
             'bgrnd_palette': 0xFF47
         }
         self.linemode = 0
-        self._scanrow = [0 for i in range(160)]
+        self._scanrow = bytearray(160)
+        self._empty_scanrow = bytes(160)
+        self._white_scanline = bytes([255] * (160 * 4))
         self._palette = {'obj0': [], 'obj1': []}
         self._palette['bg'] = [
             255,  # white
@@ -97,7 +106,15 @@ class GbGpu(object):
         """Perform one step."""
         self._mode_clock += m
         # print(f"GPU Mode: {self.linemode}, Clock: {self._mode_clock}, Line: {self.read_reg('curr_line')}")
-        self._mode_funcs[self.linemode]()
+        linemode = self.linemode
+        if linemode == 0:
+            self._h_blank_render_screen()
+        elif linemode == 1:
+            self._v_blank()
+        elif linemode == 2:
+            self._oam_read_mode()
+        else:
+            self._vram_read_mode()
 
     def consume_frame_ready(self):
         """Return whether a frame completed, clearing the notification."""
@@ -121,11 +138,16 @@ class GbGpu(object):
         byte1 = memory[base_addr]
         byte2 = memory[base_addr + 1]
 
+        row_pixels = self.tile_set[tile_index][row]
+        row_code = 0
         for x in range(8):
             bit = 1 << (7 - x)
             lo = 1 if byte1 & bit else 0
             hi = 2 if byte2 & bit else 0
-            self.tile_set[tile_index][row][x] = lo + hi
+            color_id = lo + hi
+            row_pixels[x] = color_id
+            row_code = (row_code << 2) | color_id
+        self.tile_row_codes[tile_index][row] = row_code
 
         # print(f"Tile update: tile={tile_index}, row={row}, data={self.tile_set[tile_index][row]}")
 
@@ -168,10 +190,14 @@ class GbGpu(object):
     def _create_tile_set():
         return [
             [
-                [0] * 8, [0] * 8, [0] * 8, [0] * 8,
-                [0] * 8, [0] * 8, [0] * 8, [0] * 8
+                bytearray(8), bytearray(8), bytearray(8), bytearray(8),
+                bytearray(8), bytearray(8), bytearray(8), bytearray(8)
             ] for i in range(512)
         ]
+
+    @staticmethod
+    def _create_tile_row_codes():
+        return [[0] * 8 for i in range(512)]
 
     def reset_screen(self):
         """Reset screen to white."""
@@ -265,9 +291,9 @@ class GbGpu(object):
         if lcdc & 0x01:
             self._render_background_scanline(line, lcdc)
         else:
-            self._scanrow = [0 for _ in range(160)]
-            for x in range(160):
-                self._write_pixel(line, x, 255)
+            self._scanrow[:] = self._empty_scanrow
+            offset = line * 160 * 4
+            self.screen_data[offset:offset + 160 * 4] = self._white_scanline
 
         if lcdc & 0x02:
             self._render_sprite_scanline(line, lcdc)
@@ -282,10 +308,12 @@ class GbGpu(object):
         tile_pixel_row = y & 7
         map_base = 0x9C00 if (lcdc & 0x08) else 0x9800
         signed_addressing = not (lcdc & 0x10)
-        palette = self._palette_lookup(memory[self.register_map['bgrnd_palette']])
+        palette_value = memory[self.register_map['bgrnd_palette']]
         screen_data = self.screen_data
         screen_offset = line * 160 * 4
         scanrow = self._scanrow
+        tile_row_codes = self.tile_row_codes
+        row_rgba_cache = self._tile_row_rgba_cache
 
         x = 0
         while x < 160:
@@ -302,20 +330,30 @@ class GbGpu(object):
             else:
                 tile_index = tile_id
 
-            tile_pixels = self.tile_set[tile_index][tile_pixel_row]
+            row_code = tile_row_codes[tile_index][tile_pixel_row]
             run = min(8 - tile_pixel_col, 160 - x)
-            offset = screen_offset + x * 4
+            end = tile_pixel_col + run
+            pixels = TILE_ROW_PIXELS[row_code]
+            key = (palette_value, row_code)
+            rgba = row_rgba_cache.get(key)
+            if rgba is None:
+                palette = DMG_PALETTES[palette_value]
+                row = bytearray(8 * 4)
+                rgba_offset = 0
+                for color_index in pixels:
+                    color = palette[color_index]
+                    row[rgba_offset] = color
+                    row[rgba_offset + 1] = color
+                    row[rgba_offset + 2] = color
+                    row[rgba_offset + 3] = 255
+                    rgba_offset += 4
+                rgba = bytes(row)
+                row_rgba_cache[key] = rgba
 
-            for tile_x in range(tile_pixel_col, tile_pixel_col + run):
-                color_index = tile_pixels[tile_x]
-                scanrow[x] = color_index
-                color = palette[color_index]
-                screen_data[offset] = color
-                screen_data[offset + 1] = color
-                screen_data[offset + 2] = color
-                screen_data[offset + 3] = 255
-                x += 1
-                offset += 4
+            scanrow[x:x + run] = pixels[tile_pixel_col:end]
+            offset = screen_offset + x * 4
+            screen_data[offset:offset + run * 4] = rgba[tile_pixel_col * 4:end * 4]
+            x += run
 
     def _render_sprite_scanline(self, line, lcdc):
         """Composite the DMG's first ten eligible objects onto one scanline."""
@@ -339,11 +377,11 @@ class GbGpu(object):
 
         # On DMG, smaller X wins; equal X uses the earlier OAM entry.
         objects.sort(key=lambda obj: (obj[0], obj[1]))
-        claimed = [False for _ in range(160)]
+        claimed = bytearray(160)
         screen_data = self.screen_data
         screen_offset = line * 160 * 4
-        obj0_palette = self._palette_lookup(memory[0xFF48])
-        obj1_palette = self._palette_lookup(memory[0xFF49])
+        obj0_palette = DMG_PALETTES[memory[0xFF48]]
+        obj1_palette = DMG_PALETTES[memory[0xFF49]]
 
         for object_x, _, object_y, tile_index, attributes in objects:
             row = line - object_y
@@ -381,14 +419,12 @@ class GbGpu(object):
     @staticmethod
     def _palette_lookup(palette):
         """Return the four grayscale shades selected by a DMG palette."""
-        shades = (255, 192, 96, 0)
-        return tuple(shades[(palette >> (index * 2)) & 0x03] for index in range(4))
+        return DMG_PALETTES[palette]
 
     @staticmethod
     def _palette_color(palette, color_index):
         """Map a two-bit color ID through a DMG palette register."""
-        shades = (255, 192, 96, 0)
-        return shades[(palette >> (color_index * 2)) & 0x03]
+        return DMG_SHADES[(palette >> (color_index * 2)) & 0x03]
 
     def _write_pixel(self, line, x, color):
         offset = (line * 160 + x) * 4

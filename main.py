@@ -33,7 +33,7 @@ KEY_BINDINGS = {
 }
 
 
-def main(filename, trace=False, max_frames=None, no_display=False):
+def main(filename, trace=False, max_frames=None, no_display=False, frameskip=1):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
         GB_DR_LOG_DUMP,
@@ -65,10 +65,12 @@ def main(filename, trace=False, max_frames=None, no_display=False):
     stats = {
         'instructions': 0,
         'frames': 0,
+        'drawn_frames': 0,
         'draw_seconds': 0.0,
         'start_seconds': time.perf_counter(),
         'last_caption_seconds': time.perf_counter(),
         'last_caption_frames': 0,
+        'last_caption_drawn_frames': 0,
         'last_caption_instructions': 0,
     }
 
@@ -77,13 +79,16 @@ def main(filename, trace=False, max_frames=None, no_display=False):
             cpu.execute_next_operation()
             stats['instructions'] += 1
 
-            if gpu.consume_frame_ready():
+            if gpu.frame_ready:
+                gpu.frame_ready = False
                 stats['frames'] += 1
                 if not no_display:
                     handle_events(sys_interface)
-                    draw_start = time.perf_counter()
-                    draw_screen(gpu, window)
-                    stats['draw_seconds'] += time.perf_counter() - draw_start
+                    if should_draw_frame(stats['frames'], frameskip):
+                        draw_start = time.perf_counter()
+                        draw_screen(gpu, window)
+                        stats['draw_seconds'] += time.perf_counter() - draw_start
+                        stats['drawn_frames'] += 1
                     update_caption(caption, stats)
 
                 if max_frames is not None and stats['frames'] >= max_frames:
@@ -115,6 +120,11 @@ def handle_events(sys_interface):
                 sys_interface.set_button(button, event.type == pygame.KEYDOWN)
 
 
+def should_draw_frame(frame_number, frameskip):
+    """Return True when this completed emulated frame should be displayed."""
+    return (frame_number - 1) % frameskip == 0
+
+
 def update_caption(base_caption, stats):
     """Refresh the window title with recent performance once per second."""
     now = time.perf_counter()
@@ -123,16 +133,19 @@ def update_caption(base_caption, stats):
         return
 
     frames = stats['frames'] - stats['last_caption_frames']
+    drawn_frames = stats['drawn_frames'] - stats['last_caption_drawn_frames']
     instructions = stats['instructions'] - stats['last_caption_instructions']
     fps = frames / elapsed
+    draw_fps = drawn_frames / elapsed
     instructions_per_second = instructions / elapsed
 
     pygame.display.set_caption(
-        f"{base_caption} - {fps:.1f} FPS - "
+        f"{base_caption} - {fps:.1f} emu FPS - {draw_fps:.1f} draw FPS - "
         f"{instructions_per_second:,.0f} instr/s"
     )
     stats['last_caption_seconds'] = now
     stats['last_caption_frames'] = stats['frames']
+    stats['last_caption_drawn_frames'] = stats['drawn_frames']
     stats['last_caption_instructions'] = stats['instructions']
 
 
@@ -152,6 +165,7 @@ def print_run_stats(stats, no_display):
     if not no_display:
         print(
             "Rendering: "
+            f"{stats['drawn_frames']} drawn frames, "
             f"{draw_seconds:.2f}s drawing "
             f"({draw_seconds / elapsed * 100:.1f}% of elapsed), "
             f"{emulation_seconds:.2f}s emulation/event loop"
@@ -213,10 +227,18 @@ if __name__ == '__main__':
         help="run without opening a pygame window or drawing frames",
     )
     parser.add_argument(
+        "--frameskip",
+        type=int,
+        default=1,
+        help="draw every Nth completed frame; 1 draws every frame",
+    )
+    parser.add_argument(
         "--profile",
         help="write cProfile stats to this file",
     )
     args = parser.parse_args()
+    if args.frameskip < 1:
+        parser.error("--frameskip must be 1 or greater")
 
     if args.profile:
         profiler = cProfile.Profile()
@@ -227,6 +249,7 @@ if __name__ == '__main__':
                 trace=args.trace,
                 max_frames=args.max_frames,
                 no_display=args.no_display,
+                frameskip=args.frameskip,
             )
         finally:
             profiler.disable()
@@ -240,4 +263,5 @@ if __name__ == '__main__':
             trace=args.trace,
             max_frames=args.max_frames,
             no_display=args.no_display,
+            frameskip=args.frameskip,
         )
