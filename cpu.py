@@ -206,7 +206,7 @@ class GbZ80Cpu(object):
             29: (self._dec_r, ('e',)),  # DECr_e
             30: (self._ld_rn, ('e',)),  # LDrn_e
             31: (self._rra, ()),  # RRA
-            32: (self._jr_cc_n, (FLAG['zero'], 0x00)),  # JRNZn
+            32: (self._jr_nz_n, ()),  # JRNZn
             33: (self._ld_r1r2_nn, ('h', 'l')),  # LDHLnn
             34: (self._ld_hlmi_a, ()),  # LDHLIA
             35: (self._inc_r_r, ('h', 'l')),  # INCHL
@@ -214,7 +214,7 @@ class GbZ80Cpu(object):
             37: (self._dec_r, ('h',)),  # DECr_h
             38: (self._ld_rn, ('h',)),  # LDrn_h
             39: (self._daa, ()),  # DAA
-            40: (self._jr_cc_n, (FLAG['zero'], FLAG['zero'])),  # JRZn
+            40: (self._jr_z_n, ()),  # JRZn
             41: (self._add_hl_n, ('h', 'l')),  # ADDHLHL
             42: (self._ld_a_hl_i, ()),  # LDAHLI
             43: (self._dec_r_r, ('h', 'l')),  # DECHL
@@ -341,7 +341,7 @@ class GbZ80Cpu(object):
             164: (self._and_n, ('h',)),  # ANDr_h
             165: (self._and_n, ('l',)),  # ANDr_l
             166: (self._and_n, ('hl',)),  # ANDHL
-            167: (self._and_n, ('a',)),  # ANDr_a
+            167: (self._and_a, ()),  # ANDr_a
             168: (self._xor_a_n, ('b',)),  # XORr_b
             169: (self._xor_a_n, ('c',)),  # XORr_c
             170: (self._xor_a_n, ('d',)),  # XORr_d
@@ -404,7 +404,7 @@ class GbZ80Cpu(object):
             227: (self._nop, ()),  # XX
             228: (self._nop, ()),  # XX
             229: (self._push_nn, ('h', 'l')),  # PUSHHL
-            230: (self._and_n, ('pc',)),  # ANDn
+            230: (self._and_pc, ()),  # ANDn
             231: (self._rst_n, (FLAG['half-carry'],)),  # RST20
             232: (self._add_sp_n, ()),  # ADDSPn
             233: (self._jp_hl, ()),  # JPHL
@@ -1054,6 +1054,7 @@ class GbZ80Cpu(object):
             n = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
         else:
             n = sys_interface.read_byte(pc)
+
         address = 0xFF00 + n
         if address == 0xFF00:
             registers['a'] = sys_interface.joypad.read()
@@ -1175,6 +1176,50 @@ class GbZ80Cpu(object):
         if (registers['f'] & and_val) == flag_check_value:
             registers['pc'] = (pc + i) & 0xFFFF
             registers['m'] = 3
+
+    def _jr_nz_n(self):
+        """JR NZ,n specialized for the hot CPU dispatch path."""
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+        else:
+            i = sys_interface.read_byte(pc)
+
+        pc += 1
+        if registers['f'] & FLAG['zero']:
+            registers['pc'] = pc
+            registers['m'] = 2
+            return
+
+        if i >= 0x80:
+            i -= 0x100
+        registers['pc'] = (pc + i) & 0xFFFF
+        registers['m'] = 3
+
+    def _jr_z_n(self):
+        """JR Z,n specialized for the hot CPU dispatch path."""
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+        else:
+            i = sys_interface.read_byte(pc)
+
+        pc += 1
+        if not (registers['f'] & FLAG['zero']):
+            registers['pc'] = pc
+            registers['m'] = 2
+            return
+
+        if i >= 0x80:
+            i -= 0x100
+        registers['pc'] = (pc + i) & 0xFFFF
+        registers['m'] = 3
 
     def _djnz_n(self):
         """Decrement B and jump if not zero."""
@@ -1676,6 +1721,30 @@ class GbZ80Cpu(object):
 
 
     # Boolean logic
+    def _and_a(self):
+        """AND A with itself; A is unchanged, flags are updated."""
+        registers = self.registers
+        a = registers['a']
+        registers['f'] = FLAG['half-carry'] | (FLAG['zero'] if a == 0 else 0)
+        registers['m'] = 1
+
+    def _and_pc(self):
+        """AND immediate byte with A, specialized for opcode 0xE6."""
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            value = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+        else:
+            value = sys_interface.read_byte(pc)
+
+        result = registers['a'] & value
+        registers['pc'] = pc + 1
+        registers['a'] = result
+        registers['f'] = FLAG['half-carry'] | (FLAG['zero'] if result == 0 else 0)
+        registers['m'] = 2
+
     def _and_n(self, n):
         """Logically AND n with A, result in A."""
         if n == 'pc':
