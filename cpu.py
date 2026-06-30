@@ -719,9 +719,14 @@ class GbZ80Cpu(object):
 
     def execute_next_operation(self):
         global my_counter
-        my_counter += 1
         registers = self.registers
         sys_interface = self.sys_interface
+        gpu = sys_interface.gpu
+        clock = self.clock
+        trace_enabled = self.trace_enabled
+        gb_doctor_test_mode = self.gb_doctor_test_mode
+        if trace_enabled:
+            my_counter += 1
 
         # Handle HALT state
         if self.halted:
@@ -732,11 +737,13 @@ class GbZ80Cpu(object):
             )
             if not pending:
                 registers['m'] = 1
-                self._inc_clock()
+                clock['m'] += 1
+                sys_interface.step(1)
+                gpu.step(4)
                 return
             self.halted = False
 
-        if self.gb_doctor_test_mode:
+        if gb_doctor_test_mode:
             self.log_for_gameboy_dr(registers['pc'])
 
         # Interrupts are accepted at the next instruction boundary. The
@@ -746,12 +753,15 @@ class GbZ80Cpu(object):
             memory = sys_interface.raw_memory
             if memory[0xFFFF] & memory[0xFF0F] & 0x1F:
                 if self.handle_interrupts():
-                    self._inc_clock()
+                    m_cycles = registers['m']
+                    clock['m'] += m_cycles
+                    sys_interface.step(m_cycles)
+                    gpu.step(m_cycles * 4)
 
         pc = registers['pc']
-        cartridge = sys_interface.cartridge
-        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
-            op = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            op = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
         else:
             op = sys_interface.read_byte(pc)
         registers['pc'] = (pc + 1) & 0xFFFF
@@ -761,13 +771,18 @@ class GbZ80Cpu(object):
             opcode(*args)
         else:
             opcode()
-        if self.trace_enabled:
+        if trace_enabled:
             print(
                 f"[TRACE] Exec {opcode.__name__:<15} "
                 f"args: {str(args):<20} "
                 f"m={registers['m']}, instr: {my_counter}"
             )
-        self._inc_clock()
+        m_cycles = registers['m']
+        if m_cycles == 0:
+            raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
+        clock['m'] += m_cycles
+        sys_interface.step(m_cycles)
+        gpu.step(m_cycles * 4)
 
         # Handle delayed EI
         if self.enable_interrupts_next_cycle:
@@ -1034,9 +1049,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         sys_interface = self.sys_interface
         pc = registers['pc']
-        cartridge = sys_interface.cartridge
-        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
-            n = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            n = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
         else:
             n = sys_interface.read_byte(pc)
         address = 0xFF00 + n
@@ -1057,9 +1072,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         sys_interface = self.sys_interface
         pc = registers['pc']
-        cartridge = sys_interface.cartridge
-        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
-            n = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            n = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
         else:
             n = sys_interface.read_byte(pc)
         sys_interface.write_byte(0xFF00 + n, registers['a'])
@@ -1146,9 +1161,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         pc = registers['pc']
         sys_interface = self.sys_interface
-        cartridge = sys_interface.cartridge
-        if cartridge and cartridge.is_rom_only_type and pc < 0x8000:
-            i = cartridge.rom[pc] if pc < len(cartridge.rom) else 0xFF
+        direct_rom = sys_interface.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
         else:
             i = sys_interface.read_byte(pc)
         if i >= 0x80:
@@ -1664,9 +1679,16 @@ class GbZ80Cpu(object):
     def _and_n(self, n):
         """Logically AND n with A, result in A."""
         if n == 'pc':
-            value = self.read8(self.registers['pc'])
-            self.registers['pc'] += 1
-            self.registers['m'] = 2
+            registers = self.registers
+            pc = registers['pc']
+            sys_interface = self.sys_interface
+            direct_rom = sys_interface.direct_rom
+            if direct_rom is not None and pc < 0x8000:
+                value = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            else:
+                value = sys_interface.read_byte(pc)
+            registers['pc'] = pc + 1
+            registers['m'] = 2
         elif n == 'hl':
             value = self.read8((self.registers['h'] << 8) + self.registers['l'])
             self.registers['m'] = 2

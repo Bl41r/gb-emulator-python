@@ -108,13 +108,45 @@ class GbGpu(object):
         # print(f"GPU Mode: {self.linemode}, Clock: {self._mode_clock}, Line: {self.read_reg('curr_line')}")
         linemode = self.linemode
         if linemode == 0:
-            self._h_blank_render_screen()
+            if self._mode_clock >= 204:
+                memory = self.sys_interface.raw_memory
+                self._mode_clock -= 204
+                curr_line = memory[self.register_map['curr_line']]
+                memory[self.register_map['curr_line']] = (curr_line + 1) & 0xFF
+
+                if curr_line == 143:
+                    self.linemode = 1  # enter V-Blank
+                    self.frame_ready = True
+                    memory[0xFF0F] |= 0x01  # Set V-Blank flag
+                else:
+                    self.linemode = 2
+
+                self._update_stat_register()
         elif linemode == 1:
-            self._v_blank()
+            if self._mode_clock >= 456:
+                memory = self.sys_interface.raw_memory
+                self._mode_clock -= 456
+                memory[self.register_map['curr_line']] = (
+                    memory[self.register_map['curr_line']] + 1
+                ) & 0xFF
+
+                if memory[self.register_map['curr_line']] > 153:
+                    memory[self.register_map['curr_line']] = 0  # reset LY
+                    self.linemode = 2   # Switch to OAM mode
+                    self._curscan = 0   # Reset scanline render state
+
+                self._update_stat_register()
         elif linemode == 2:
-            self._oam_read_mode()
+            if self._mode_clock >= 80:
+                self._mode_clock -= 80
+                self.linemode = 3   # Switch to VRAM mode
+                self._update_stat_register()
         else:
-            self._vram_read_mode()
+            if self._mode_clock >= 172:
+                self._mode_clock -= 172
+                self.linemode = 0   # Switch to H-Blank mode
+                self._update_stat_register()
+                self._renderscan()
 
     def consume_frame_ready(self):
         """Return whether a frame completed, clearing the notification."""

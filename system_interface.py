@@ -30,6 +30,11 @@ class GbSystemInterface(object):
         self.gpu = gpu
         self.divider_counter = 0
         self.cartridge = None
+        self.direct_rom = None
+        self.direct_rom_length = 0
+        self.timer_enabled = False
+        self.timer_bit = self.TIMER_BITS[0]
+        self.timer_period = 1 << (self.timer_bit + 1)
         self.joypad = Joypad()
 
     def load_rom_image(self, filename):
@@ -39,9 +44,16 @@ class GbSystemInterface(object):
         """
         self.memory.reset_memory()
         self.divider_counter = 0
+        self._set_timer_control(0)
         self.joypad = Joypad()
         rom_array = self._read_rom_file(filename)
         self.cartridge = Cartridge(rom_array)
+        if self.cartridge.is_rom_only_type:
+            self.direct_rom = self.cartridge.rom
+            self.direct_rom_length = len(self.direct_rom)
+        else:
+            self.direct_rom = None
+            self.direct_rom_length = 0
 
         self.cpu.registers['pc'] = 0x0100
 
@@ -90,7 +102,9 @@ class GbSystemInterface(object):
 
         if address == 0xFF07:
             old_signal = self._timer_signal()
-            self.memory.write_byte(address, value & 0x07)
+            value &= 0x07
+            self.memory.write_byte(address, value)
+            self._set_timer_control(value)
             if old_signal and not self._timer_signal():
                 self._increment_tima()
             return
@@ -103,34 +117,40 @@ class GbSystemInterface(object):
         """Advance the divider and programmable timer by CPU M-cycles."""
         memory = self.raw_memory
         divider_counter = self.divider_counter
-        tac = memory[0xFF07]
-        if not (tac & 0x04):
-            divider_counter = (divider_counter + m_cycles) & 0x3FFF
-            self.divider_counter = divider_counter
-            memory[0xFF04] = (divider_counter >> 6) & 0xFF
+        next_divider_counter = (divider_counter + m_cycles) & 0x3FFF
+        if not self.timer_enabled:
+            self.divider_counter = next_divider_counter
+            memory[0xFF04] = (next_divider_counter >> 6) & 0xFF
             return
 
-        bit = self.TIMER_BITS[tac & 0x03]
-        for _ in range(m_cycles):
-            old_signal = (divider_counter >> bit) & 1
-            divider_counter = (divider_counter + 1) & 0x3FFF
-            memory[0xFF04] = (divider_counter >> 6) & 0xFF
-            if old_signal and not ((divider_counter >> bit) & 1):
-                tima = memory[0xFF05]
+        period = self.timer_period
+        edge_count = (divider_counter + m_cycles) // period - divider_counter // period
+        if edge_count:
+            tima = memory[0xFF05]
+            tma = memory[0xFF06]
+            for _ in range(edge_count):
                 if tima == 0xFF:
-                    memory[0xFF05] = memory[0xFF06]
+                    tima = tma
                     memory[0xFF0F] |= 0x04
                 else:
-                    memory[0xFF05] = tima + 1
-        self.divider_counter = divider_counter
+                    tima += 1
+            memory[0xFF05] = tima
+
+        self.divider_counter = next_divider_counter
+        memory[0xFF04] = (next_divider_counter >> 6) & 0xFF
 
     def _timer_signal(self):
         """Return the timer input selected by TAC."""
-        tac = self.memory.read_byte(0xFF07)
-        if not (tac & 0x04):
+        if not self.timer_enabled:
             return 0
 
-        return (self.divider_counter >> self.TIMER_BITS[tac & 0x03]) & 1
+        return (self.divider_counter >> self.timer_bit) & 1
+
+    def _set_timer_control(self, tac):
+        """Cache decoded TAC timer settings for the instruction hot path."""
+        self.timer_enabled = bool(tac & 0x04)
+        self.timer_bit = self.TIMER_BITS[tac & 0x03]
+        self.timer_period = 1 << (self.timer_bit + 1)
 
     def _increment_tima(self):
         """Increment TIMA and request its interrupt on overflow."""
