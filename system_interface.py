@@ -54,6 +54,8 @@ class GbSystemInterface(object):
         else:
             self.direct_rom = None
             self.direct_rom_length = 0
+        self.cpu.direct_rom = self.direct_rom
+        self.cpu.direct_rom_length = self.direct_rom_length
 
         self.cpu.registers['pc'] = 0x0100
 

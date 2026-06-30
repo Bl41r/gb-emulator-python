@@ -149,6 +149,8 @@ class GbZ80Cpu(object):
         self.clock = {'m': 0}  # Time clock
         self.log_dump = log_dump
         self.sys_interface = None    # Set after interface instantiated.
+        self.direct_rom = None
+        self.direct_rom_length = 0
 
         # Register set
         self.registers = {
@@ -759,9 +761,9 @@ class GbZ80Cpu(object):
                     gpu.step(m_cycles * 4)
 
         pc = registers['pc']
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            op = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            op = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             op = sys_interface.read_byte(pc)
         registers['pc'] = (pc + 1) & 0xFFFF
@@ -1049,9 +1051,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         sys_interface = self.sys_interface
         pc = registers['pc']
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            n = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             n = sys_interface.read_byte(pc)
 
@@ -1074,9 +1076,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         sys_interface = self.sys_interface
         pc = registers['pc']
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            n = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             n = sys_interface.read_byte(pc)
         if n >= 0x80:
@@ -1166,9 +1168,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         pc = registers['pc']
         sys_interface = self.sys_interface
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            i = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             i = sys_interface.read_byte(pc)
         if i >= 0x80:
@@ -1186,9 +1188,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         pc = registers['pc']
         sys_interface = self.sys_interface
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            i = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             i = sys_interface.read_byte(pc)
 
@@ -1208,9 +1210,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         pc = registers['pc']
         sys_interface = self.sys_interface
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            i = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             i = sys_interface.read_byte(pc)
 
@@ -1737,9 +1739,9 @@ class GbZ80Cpu(object):
         registers = self.registers
         pc = registers['pc']
         sys_interface = self.sys_interface
-        direct_rom = sys_interface.direct_rom
+        direct_rom = self.direct_rom
         if direct_rom is not None and pc < 0x8000:
-            value = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+            value = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             value = sys_interface.read_byte(pc)
 
@@ -1755,9 +1757,9 @@ class GbZ80Cpu(object):
             registers = self.registers
             pc = registers['pc']
             sys_interface = self.sys_interface
-            direct_rom = sys_interface.direct_rom
+            direct_rom = self.direct_rom
             if direct_rom is not None and pc < 0x8000:
-                value = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
+                value = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
             else:
                 value = sys_interface.read_byte(pc)
             registers['pc'] = pc + 1
