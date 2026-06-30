@@ -34,7 +34,7 @@ class GbSystemInterface(object):
         self.direct_rom_length = 0
         self.timer_enabled = False
         self.timer_bit = self.TIMER_BITS[0]
-        self.timer_period = 1 << (self.timer_bit + 1)
+        self.timer_period_shift = self.timer_bit + 1
         self.joypad = Joypad()
 
     def load_rom_image(self, filename):
@@ -125,8 +125,9 @@ class GbSystemInterface(object):
                 memory[0xFF04] = div_value
             return
 
-        period = self.timer_period
-        edge_count = (divider_counter + m_cycles) // period - divider_counter // period
+        shift = self.timer_period_shift
+        edge_count = (divider_counter + m_cycles) >> shift
+        edge_count -= divider_counter >> shift
         if edge_count:
             tima = memory[0xFF05]
             tma = memory[0xFF06]
@@ -153,7 +154,7 @@ class GbSystemInterface(object):
         """Cache decoded TAC timer settings for the instruction hot path."""
         self.timer_enabled = bool(tac & 0x04)
         self.timer_bit = self.TIMER_BITS[tac & 0x03]
-        self.timer_period = 1 << (self.timer_bit + 1)
+        self.timer_period_shift = self.timer_bit + 1
 
     def _increment_tima(self):
         """Increment TIMA and request its interrupt on overflow."""
