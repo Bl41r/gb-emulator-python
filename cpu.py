@@ -1055,16 +1055,17 @@ class GbZ80Cpu(object):
         else:
             n = sys_interface.read_byte(pc)
 
-        address = 0xFF00 + n
-        if address == 0xFF00:
+        if n >= 0x80:
+            registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+        elif n == 0:
             registers['a'] = sys_interface.joypad.read()
         elif (
-            address == 0xFF44
+            n == 0x44
             and sys_interface.memory.gb_doctor_test_mode
         ):
             registers['a'] = 0x90
         else:
-            registers['a'] = sys_interface.raw_memory[address]
+            registers['a'] = sys_interface.raw_memory[0xFF00 + n]
         registers['pc'] = pc + 1
         registers['m'] = 3
 
@@ -1078,7 +1079,10 @@ class GbZ80Cpu(object):
             n = direct_rom[pc] if pc < sys_interface.direct_rom_length else 0xFF
         else:
             n = sys_interface.read_byte(pc)
-        sys_interface.write_byte(0xFF00 + n, registers['a'])
+        if n >= 0x80:
+            sys_interface.raw_memory[0xFF00 + n] = registers['a']
+        else:
+            sys_interface.write_byte(0xFF00 + n, registers['a'])
         registers['pc'] = pc + 1
         registers['m'] = 3
 

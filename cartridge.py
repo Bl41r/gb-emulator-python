@@ -3,6 +3,9 @@
 
 ROM_ONLY_TYPES = {0x00, 0x08, 0x09}
 MBC1_TYPES = {0x01, 0x02, 0x03}
+MBC5_TYPES = {0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E}
+MBC5_RUMBLE_TYPES = {0x1C, 0x1D, 0x1E}
+SUPPORTED_TYPES = ROM_ONLY_TYPES | MBC1_TYPES | MBC5_TYPES
 
 CARTRIDGE_TYPE_NAMES = {
     0x00: "ROM ONLY",
@@ -11,6 +14,12 @@ CARTRIDGE_TYPE_NAMES = {
     0x03: "MBC1+RAM+BATTERY",
     0x08: "ROM+RAM",
     0x09: "ROM+RAM+BATTERY",
+    0x19: "MBC5",
+    0x1A: "MBC5+RAM",
+    0x1B: "MBC5+RAM+BATTERY",
+    0x1C: "MBC5+RUMBLE",
+    0x1D: "MBC5+RUMBLE+RAM",
+    0x1E: "MBC5+RUMBLE+RAM+BATTERY",
 }
 
 RAM_SIZE_BYTES = {
@@ -24,7 +33,7 @@ RAM_SIZE_BYTES = {
 
 
 class Cartridge:
-    """A loaded cartridge with ROM-only or MBC1 address translation."""
+    """A loaded cartridge with ROM-only, MBC1, or MBC5 translation."""
 
     ROM_BANK_SIZE = 0x4000
     RAM_BANK_SIZE = 0x2000
@@ -38,9 +47,11 @@ class Cartridge:
         self.rom_size_code = self.rom[0x0148]
         self.ram_size_code = self.rom[0x0149]
         self.has_mbc1 = self.cartridge_type in MBC1_TYPES
+        self.has_mbc5 = self.cartridge_type in MBC5_TYPES
+        self.has_mbc5_rumble = self.cartridge_type in MBC5_RUMBLE_TYPES
         self.is_rom_only_type = self.cartridge_type in ROM_ONLY_TYPES
 
-        if self.cartridge_type not in ROM_ONLY_TYPES | MBC1_TYPES:
+        if self.cartridge_type not in SUPPORTED_TYPES:
             raise NotImplementedError(
                 "cartridge type 0x{:02X} is not supported".format(
                     self.cartridge_type
@@ -63,6 +74,7 @@ class Cartridge:
 
         self.ram_enabled = self.cartridge_type in {0x08, 0x09}
         self.rom_bank = 1
+        self.mbc5_rom_bank_high = 0
         self.secondary_bank = 0
         self.banking_mode = 0
 
@@ -78,6 +90,10 @@ class Cartridge:
     @property
     def is_mbc1(self):
         return self.has_mbc1
+
+    @property
+    def is_mbc5(self):
+        return self.has_mbc5
 
     def read(self, address):
         """Read a cartridge-mapped byte."""
@@ -107,15 +123,15 @@ class Cartridge:
             bank = self.rom_bank
             if self.has_mbc1:
                 bank |= self.secondary_bank << 5
+            elif self.has_mbc5:
+                bank |= self.mbc5_rom_bank_high << 8
             return self._read_rom_bank(bank, address - 0x4000)
 
         if 0xA000 <= address <= 0xBFFF:
             if not self.ram or not self.ram_enabled:
                 return 0xFF
             bank = (
-                self.secondary_bank
-                if self.has_mbc1 and self.banking_mode
-                else 0
+                self._active_ram_bank()
             )
             offset = bank * self.RAM_BANK_SIZE + (address - 0xA000)
             return self.ram[offset] if offset < len(self.ram) else 0xFF
@@ -132,19 +148,19 @@ class Cartridge:
             if not self.ram or not self.ram_enabled:
                 return
             bank = (
-                self.secondary_bank
-                if self.has_mbc1 and self.banking_mode
-                else 0
+                self._active_ram_bank()
             )
             offset = bank * self.RAM_BANK_SIZE + (address - 0xA000)
             if offset < len(self.ram):
                 self.ram[offset] = value
             return
 
-        if not self.has_mbc1:
+        if not (self.has_mbc1 or self.has_mbc5):
             return
 
-        if 0x0000 <= address <= 0x1FFF:
+        if self.has_mbc5:
+            self._write_mbc5_control(address, value)
+        elif 0x0000 <= address <= 0x1FFF:
             self.ram_enabled = (value & 0x0F) == 0x0A
         elif 0x2000 <= address <= 0x3FFF:
             self.rom_bank = value & 0x1F
@@ -154,6 +170,25 @@ class Cartridge:
             self.secondary_bank = value & 0x03
         elif 0x6000 <= address <= 0x7FFF:
             self.banking_mode = value & 0x01
+
+    def _active_ram_bank(self):
+        if self.has_mbc5:
+            if self.has_mbc5_rumble:
+                return self.secondary_bank & 0x07
+            return self.secondary_bank & 0x0F
+        if self.has_mbc1 and self.banking_mode:
+            return self.secondary_bank
+        return 0
+
+    def _write_mbc5_control(self, address, value):
+        if 0x0000 <= address <= 0x1FFF:
+            self.ram_enabled = (value & 0x0F) == 0x0A
+        elif 0x2000 <= address <= 0x2FFF:
+            self.rom_bank = value
+        elif 0x3000 <= address <= 0x3FFF:
+            self.mbc5_rom_bank_high = value & 0x01
+        elif 0x4000 <= address <= 0x5FFF:
+            self.secondary_bank = value & (0x07 if self.has_mbc5_rumble else 0x0F)
 
     def _read_rom_bank(self, bank, offset):
         bank %= self.rom_bank_count

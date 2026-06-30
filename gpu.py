@@ -70,7 +70,7 @@ class GbGpu(object):
         self.screen_rgb = self.screen_buffer[:, :, :3]
         self.tile_set = self._create_tile_set()
         self.tile_row_codes = self._create_tile_row_codes()
-        self._tile_row_rgba_cache = {}
+        self._tile_row_rgba_cache = [None] * 256
         self.sys_interface = None    # Set after interface instantiated
         self.register_map = {
             'lcd_gpu_ctrl': 0xFF40,
@@ -345,7 +345,11 @@ class GbGpu(object):
         screen_offset = line * 160 * 4
         scanrow = self._scanrow
         tile_row_codes = self.tile_row_codes
-        row_rgba_cache = self._tile_row_rgba_cache
+        row_rgba_cache = self._tile_row_rgba_cache[palette_value]
+        if row_rgba_cache is None:
+            row_rgba_cache = [None] * 0x10000
+            self._tile_row_rgba_cache[palette_value] = row_rgba_cache
+        palette = DMG_PALETTES[palette_value]
 
         x = 0
         while x < 160:
@@ -363,13 +367,14 @@ class GbGpu(object):
                 tile_index = tile_id
 
             row_code = tile_row_codes[tile_index][tile_pixel_row]
-            run = min(8 - tile_pixel_col, 160 - x)
+            run = 8 - tile_pixel_col
+            remaining = 160 - x
+            if run > remaining:
+                run = remaining
             end = tile_pixel_col + run
             pixels = TILE_ROW_PIXELS[row_code]
-            key = (palette_value, row_code)
-            rgba = row_rgba_cache.get(key)
+            rgba = row_rgba_cache[row_code]
             if rgba is None:
-                palette = DMG_PALETTES[palette_value]
                 row = bytearray(8 * 4)
                 rgba_offset = 0
                 for color_index in pixels:
@@ -380,7 +385,7 @@ class GbGpu(object):
                     row[rgba_offset + 3] = 255
                     rgba_offset += 4
                 rgba = bytes(row)
-                row_rgba_cache[key] = rgba
+                row_rgba_cache[row_code] = rgba
 
             scanrow[x:x + run] = pixels[tile_pixel_col:end]
             offset = screen_offset + x * 4

@@ -118,9 +118,11 @@ class GbSystemInterface(object):
         memory = self.raw_memory
         divider_counter = self.divider_counter
         next_divider_counter = (divider_counter + m_cycles) & 0x3FFF
+        div_value = next_divider_counter >> 6
         if not self.timer_enabled:
             self.divider_counter = next_divider_counter
-            memory[0xFF04] = (next_divider_counter >> 6) & 0xFF
+            if memory[0xFF04] != div_value:
+                memory[0xFF04] = div_value
             return
 
         period = self.timer_period
@@ -137,7 +139,8 @@ class GbSystemInterface(object):
             memory[0xFF05] = tima
 
         self.divider_counter = next_divider_counter
-        memory[0xFF04] = (next_divider_counter >> 6) & 0xFF
+        if memory[0xFF04] != div_value:
+            memory[0xFF04] = div_value
 
     def _timer_signal(self):
         """Return the timer input selected by TAC."""
