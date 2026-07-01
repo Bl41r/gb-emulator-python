@@ -5,6 +5,16 @@ This is a gameboy emulator written in Python.  I am following along loosely with
 http://imrannazar.com/GameBoy-Emulation-in-JavaScript with this guide as
 a reference.
 
+Python 3.12 is recommended. Create an isolated environment and install the
+runtime dependencies on Windows with:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
 Other references:
 - http://www.devrs.com/gb/files/opcodes.html
 - http://marc.rawer.de/Gameboy/Docs/GBCPUman.pdf
