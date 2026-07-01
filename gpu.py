@@ -309,14 +309,45 @@ class GbGpu(object):
             row_rgba_cache = [None] * 0x10000
             self._tile_row_rgba_cache[palette_value] = row_rgba_cache
         palette = DMG_PALETTES[palette_value]
+        map_row_base = map_base + tile_row * 32
+
+        if not (scroll_x & 7):
+            tile_col = scroll_x >> 3
+            for x in range(0, 160, 8):
+                tile_id = memory[map_row_base + tile_col]
+                if signed_addressing:
+                    tile_id = tile_id - 256 if tile_id > 127 else tile_id
+                    tile_index = 256 + tile_id
+                else:
+                    tile_index = tile_id
+
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                pixels = TILE_ROW_PIXELS[row_code]
+                rgba = row_rgba_cache[row_code]
+                if rgba is None:
+                    row = bytearray(8 * 4)
+                    rgba_offset = 0
+                    for color_index in pixels:
+                        color = palette[color_index]
+                        row[rgba_offset] = color
+                        row[rgba_offset + 1] = color
+                        row[rgba_offset + 2] = color
+                        row[rgba_offset + 3] = 255
+                        rgba_offset += 4
+                    rgba = bytes(row)
+                    row_rgba_cache[row_code] = rgba
+
+                scanrow[x:x + 8] = pixels
+                offset = screen_offset + x * 4
+                screen_data[offset:offset + 32] = rgba
+                tile_col = (tile_col + 1) & 31
+            return
 
         x = 0
+        tile_col = scroll_x >> 3
+        tile_pixel_col = scroll_x & 7
         while x < 160:
-            x_scrolled = (x + scroll_x) & 0xFF
-            tile_col = x_scrolled >> 3
-            tile_pixel_col = x_scrolled & 7
-
-            tile_addr = map_base + tile_row * 32 + tile_col
+            tile_addr = map_row_base + tile_col
             tile_id = memory[tile_addr]
 
             if signed_addressing:
@@ -350,6 +381,8 @@ class GbGpu(object):
             offset = screen_offset + x * 4
             screen_data[offset:offset + run * 4] = rgba[tile_pixel_col * 4:end * 4]
             x += run
+            tile_col = (tile_col + 1) & 31
+            tile_pixel_col = 0
 
     def _render_sprite_scanline(self, line, lcdc):
         """Composite the DMG's first ten eligible objects onto one scanline."""
