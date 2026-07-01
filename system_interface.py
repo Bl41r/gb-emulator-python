@@ -21,13 +21,14 @@ class GbSystemInterface(object):
     VERSION_BYTE = 0x14C
     TIMER_BITS = (7, 1, 3, 5)
 
-    def __init__(self, memory, cpu, gpu):
+    def __init__(self, memory, cpu, gpu, apu=None):
         """Init."""
         self.cartridge_type = None
         self.memory = memory
         self.raw_memory = memory.memory
         self.cpu = cpu
         self.gpu = gpu
+        self.apu = apu
         self.divider_counter = 0
         self.cartridge = None
         self.direct_rom = None
@@ -109,6 +110,15 @@ class GbSystemInterface(object):
             self._set_timer_control(value)
             if old_signal and not self._timer_signal():
                 self._increment_tima()
+            return
+
+        if 0xFF10 <= address <= 0xFF26 and self.apu is not None:
+            self.memory.write_byte(address, value)
+            self.apu.write_register(
+                address,
+                value,
+                cycle=self.cpu.clock['m'] * 4,
+            )
             return
 
         self.memory.write_byte(address, value)

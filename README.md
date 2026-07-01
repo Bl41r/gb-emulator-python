@@ -66,6 +66,15 @@ python main.py roms/tetris.gb --frameskip 2
 `--frameskip 1` draws every completed frame. `--frameskip 2` draws every other
 completed frame, `--frameskip 3` draws every third frame, and so on.
 
+Displayed gameplay is paced to the DMG's approximately 59.73 FPS by default.
+Disable pacing and audio for performance measurements with:
+
+```powershell
+python main.py roms/tetris.gb --uncapped
+```
+
+Use `--no-audio` to retain normal frame pacing without sound.
+
 When running with a window, the title bar updates about once per second with
 recent emulated FPS, drawn FPS, and instruction throughput.
 
@@ -89,6 +98,10 @@ Current DMG graphics support includes background tiles, OAM DMA, and 8x8 or
 8x16 sprites with palettes, flips, priority, transparency, and the 10-sprites-
 per-scanline limit. Window rendering is not implemented. OAM DMA currently
 copies immediately rather than modeling its 160 M-cycle CPU bus restriction.
+
+Audio support currently includes the two DMG square-wave channels, length and
+volume envelopes, and stereo routing. Frequency sweep, wave, and noise channels
+are not implemented yet.
 
 ## CPU regression suite
 

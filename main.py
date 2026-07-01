@@ -1,13 +1,23 @@
 import argparse
 import cProfile
+from collections import deque
 import json
 import os
 import pygame
 import numpy as np
 import pygame.surfarray
 import pstats
+from threading import Lock
 import time
 
+from pygame._sdl2 import INIT_AUDIO, init_subsystem
+from pygame._sdl2.audio import (
+    AUDIO_S16,
+    AudioDevice,
+    get_audio_device_names,
+)
+
+from apu import GbApu, SAMPLE_RATE
 from memory import GbMemory
 from cpu import GbZ80Cpu, ExecutionHalted
 from gpu import GbGpu
@@ -20,6 +30,9 @@ GB_DR_LOG_DUMP = []
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 144
 SCALE = 3
+DMG_CLOCK_HZ = 4_194_304
+DMG_CYCLES_PER_FRAME = 70_224
+DMG_FRAME_SECONDS = DMG_CYCLES_PER_FRAME / DMG_CLOCK_HZ
 
 KEY_BINDINGS = {
     pygame.K_RIGHT: "right",
@@ -42,6 +55,8 @@ def main(
     no_display=False,
     frameskip=1,
     input_script=None,
+    uncapped=False,
+    audio=True,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -50,6 +65,8 @@ def main(
         trace_enabled=trace,
     )
     gpu = GbGpu()
+    audio_enabled = audio and not no_display and not uncapped
+    apu = GbApu(gb_memory.memory) if audio_enabled else None
 
     if GB_DR_TEST_MODE:
         caption = f"GameBoy Emulator (TEST MODE) - {filename}"
@@ -57,7 +74,7 @@ def main(
     else:
         caption = f"GameBoy Emulator - {filename}"
 
-    sys_interface = GbSystemInterface(gb_memory, cpu, gpu)
+    sys_interface = GbSystemInterface(gb_memory, cpu, gpu, apu=apu)
 
     for component in [cpu, gpu]:
         component.sys_interface = sys_interface
@@ -66,17 +83,25 @@ def main(
     scripted_input = load_input_script(input_script) if input_script else {}
 
     window = None
+    audio_output = None
     if not no_display:
         # Setup Pygame
         pygame.init()
         window = pygame.display.set_mode((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
         pygame.display.set_caption(caption)
+        if audio_enabled:
+            try:
+                audio_output = PygameAudioOutput()
+            except pygame.error as error:
+                print(f"Audio disabled: {error}")
+                audio_enabled = False
 
     stats = {
         'instructions': 0,
         'frames': 0,
         'drawn_frames': 0,
         'draw_seconds': 0.0,
+        'sleep_seconds': 0.0,
         'start_seconds': time.perf_counter(),
         'last_caption_seconds': time.perf_counter(),
         'last_caption_frames': 0,
@@ -90,6 +115,8 @@ def main(
     )
     execute_next_operation = cpu.execute_next_operation
     instructions = 0
+    pace_frames = not no_display and not uncapped
+    next_frame_deadline = stats['start_seconds'] + DMG_FRAME_SECONDS
 
     try:
         while True:
@@ -103,11 +130,18 @@ def main(
                 apply_scripted_input(sys_interface, scripted_input, stats['frames'])
                 if not no_display:
                     handle_events(sys_interface)
+                    if audio_enabled:
+                        audio_output.queue(apu.generate_frame())
                     if should_draw_frame(stats['frames'], frameskip):
                         draw_start = time.perf_counter()
                         draw_screen(gpu, window)
                         stats['draw_seconds'] += time.perf_counter() - draw_start
                         stats['drawn_frames'] += 1
+                    if pace_frames:
+                        next_frame_deadline, slept = pace_frame(
+                            next_frame_deadline
+                        )
+                        stats['sleep_seconds'] += slept
                     update_caption(caption, stats)
 
                 if max_frames is not None and stats['frames'] >= max_frames:
@@ -126,6 +160,14 @@ def main(
         raise e
     finally:
         stats['instructions'] = instructions
+        if audio_output is not None:
+            print(
+                "Audio queue: "
+                f"{audio_output.underruns} underruns, "
+                f"{audio_output.callbacks} callbacks, "
+                f"{audio_output.queued_milliseconds():.1f} ms queued"
+            )
+            audio_output.close()
         if not no_display:
             pygame.quit()
         print_run_stats(stats, no_display)
@@ -164,9 +206,109 @@ def handle_events(sys_interface):
                 sys_interface.set_button(button, event.type == pygame.KEYDOWN)
 
 
+class PygameAudioOutput(object):
+    """Feed a continuous SDL audio stream from a thread-safe byte ring."""
+
+    def __init__(self):
+        pygame.mixer.quit()
+        init_subsystem(INIT_AUDIO)
+        device_names = get_audio_device_names(False)
+        device_name = device_names[0] if device_names else None
+        self.chunks = deque()
+        self.chunk_offset = 0
+        self.queued_bytes = 0
+        self.lock = Lock()
+        self.started = False
+        self.underruns = 0
+        self.callbacks = 0
+        self.prebuffer_bytes = int(
+            SAMPLE_RATE * DMG_FRAME_SECONDS * 8
+        ) * 4
+        self.device = AudioDevice(
+            devicename=device_name,
+            iscapture=False,
+            frequency=SAMPLE_RATE,
+            audioformat=AUDIO_S16,
+            numchannels=2,
+            chunksize=1024,
+            allowed_changes=0,
+            callback=self._callback,
+        )
+
+    def queue(self, samples):
+        chunk = np.ascontiguousarray(samples).tobytes()
+        should_start = False
+        with self.lock:
+            self.chunks.append(chunk)
+            self.queued_bytes += len(chunk)
+            if not self.started and self.queued_bytes >= self.prebuffer_bytes:
+                self.started = True
+                should_start = True
+        if should_start:
+            self.device.pause(0)
+
+    def _callback(self, device, output):
+        del device
+        output_offset = 0
+        output_length = len(output)
+        with self.lock:
+            self.callbacks += 1
+            while output_offset < output_length and self.chunks:
+                chunk = self.chunks[0]
+                available = len(chunk) - self.chunk_offset
+                take = min(available, output_length - output_offset)
+                end = self.chunk_offset + take
+                output[output_offset:output_offset + take] = chunk[
+                    self.chunk_offset:end
+                ]
+                output_offset += take
+                self.chunk_offset = end
+                self.queued_bytes -= take
+                if self.chunk_offset == len(chunk):
+                    self.chunks.popleft()
+                    self.chunk_offset = 0
+
+            if output_offset < output_length:
+                output[output_offset:output_length] = bytes(
+                    output_length - output_offset
+                )
+                if self.started:
+                    self.underruns += 1
+
+    def queued_milliseconds(self):
+        with self.lock:
+            queued_bytes = self.queued_bytes
+        return queued_bytes / (SAMPLE_RATE * 4) * 1000
+
+    def close(self):
+        if self.started:
+            self.device.pause(1)
+        self.device.close()
+
+
 def should_draw_frame(frame_number, frameskip):
     """Return True when this completed emulated frame should be displayed."""
     return (frame_number - 1) % frameskip == 0
+
+
+def pace_frame(deadline):
+    """Wait for the next DMG frame boundary without accumulating lag."""
+    now = time.perf_counter()
+    delay = deadline - now
+    waited = 0.0
+    if delay > 0:
+        wait_start = now
+        if delay > 0.002:
+            time.sleep(delay - 0.001)
+        now = time.perf_counter()
+        while now < deadline:
+            now = time.perf_counter()
+        waited = now - wait_start
+
+    deadline += DMG_FRAME_SECONDS
+    if now - deadline > DMG_FRAME_SECONDS * 4:
+        deadline = now + DMG_FRAME_SECONDS
+    return deadline, waited
 
 
 def update_caption(base_caption, stats):
@@ -197,7 +339,8 @@ def print_run_stats(stats, no_display):
     elapsed = time.perf_counter() - stats['start_seconds']
     elapsed = max(elapsed, 0.000001)
     draw_seconds = stats['draw_seconds']
-    emulation_seconds = elapsed - draw_seconds
+    sleep_seconds = stats['sleep_seconds']
+    emulation_seconds = elapsed - draw_seconds - sleep_seconds
     print(
         "Run stats: "
         f"{stats['frames']} frames, "
@@ -212,6 +355,7 @@ def print_run_stats(stats, no_display):
             f"{stats['drawn_frames']} drawn frames, "
             f"{draw_seconds:.2f}s drawing "
             f"({draw_seconds / elapsed * 100:.1f}% of elapsed), "
+            f"{sleep_seconds:.2f}s pacing, "
             f"{emulation_seconds:.2f}s emulation/event loop"
         )
 
@@ -282,6 +426,16 @@ if __name__ == '__main__':
         help="draw every Nth completed frame; 1 draws every frame",
     )
     parser.add_argument(
+        "--uncapped",
+        action="store_true",
+        help="run displayed gameplay without the normal 59.73 FPS speed limit",
+    )
+    parser.add_argument(
+        "--no-audio",
+        action="store_true",
+        help="disable sound output",
+    )
+    parser.add_argument(
         "--input-script",
         help="JSON file of frame-based button events for repeatable profiling",
     )
@@ -305,6 +459,8 @@ if __name__ == '__main__':
                 no_display=args.no_display,
                 frameskip=args.frameskip,
                 input_script=args.input_script,
+                uncapped=args.uncapped,
+                audio=not args.no_audio,
             )
         finally:
             profiler.disable()
@@ -321,4 +477,6 @@ if __name__ == '__main__':
             no_display=args.no_display,
             frameskip=args.frameskip,
             input_script=args.input_script,
+            uncapped=args.uncapped,
+            audio=not args.no_audio,
         )
