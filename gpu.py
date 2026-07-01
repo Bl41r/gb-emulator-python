@@ -51,6 +51,13 @@ TILE_ROW_PIXELS = tuple(
     bytes((code >> shift) & 0x03 for shift in range(14, -1, -2))
     for code in range(0x10000)
 )
+GPU_LCDC = 0xFF40
+GPU_STAT = 0xFF41
+GPU_SCY = 0xFF42
+GPU_SCX = 0xFF43
+GPU_LY = 0xFF44
+GPU_LYC = 0xFF45
+GPU_BGP = 0xFF47
 
 
 class GbGpu(object):
@@ -85,6 +92,8 @@ class GbGpu(object):
         self.linemode = 0
         self._scanrow = bytearray(160)
         self._empty_scanrow = bytes(160)
+        self._sprite_claimed = bytearray(160)
+        self._sprite_objects = []
         self._white_scanline = bytes([255] * (160 * 4))
         self._palette = {'obj0': [], 'obj1': []}
         self._palette['bg'] = [
@@ -105,14 +114,13 @@ class GbGpu(object):
     def step(self, m):
         """Perform one step."""
         self._mode_clock += m
-        # print(f"GPU Mode: {self.linemode}, Clock: {self._mode_clock}, Line: {self.read_reg('curr_line')}")
         linemode = self.linemode
         if linemode == 0:
             if self._mode_clock >= 204:
                 memory = self.sys_interface.raw_memory
                 self._mode_clock -= 204
-                curr_line = memory[self.register_map['curr_line']]
-                memory[self.register_map['curr_line']] = (curr_line + 1) & 0xFF
+                curr_line = memory[GPU_LY]
+                memory[GPU_LY] = (curr_line + 1) & 0xFF
 
                 if curr_line == 143:
                     self.linemode = 1  # enter V-Blank
@@ -126,12 +134,10 @@ class GbGpu(object):
             if self._mode_clock >= 456:
                 memory = self.sys_interface.raw_memory
                 self._mode_clock -= 456
-                memory[self.register_map['curr_line']] = (
-                    memory[self.register_map['curr_line']] + 1
-                ) & 0xFF
+                memory[GPU_LY] = (memory[GPU_LY] + 1) & 0xFF
 
-                if memory[self.register_map['curr_line']] > 153:
-                    memory[self.register_map['curr_line']] = 0  # reset LY
+                if memory[GPU_LY] > 153:
+                    memory[GPU_LY] = 0  # reset LY
                     self.linemode = 2   # Switch to OAM mode
                     self._curscan = 0   # Reset scanline render state
 
@@ -251,7 +257,7 @@ class GbGpu(object):
     def _update_stat_register(self):
         """Use whenever linemode is set"""
         memory = self.sys_interface.raw_memory
-        stat = memory[self.register_map['stat']] & 0b11111000  # Clear mode + coincidence flag
+        stat = memory[GPU_STAT] & 0b11111000  # Clear mode + coincidence flag
 
         # Set current mode (bits 0–1)
         stat |= self.linemode & 0b11
@@ -260,62 +266,15 @@ class GbGpu(object):
         stat |= 0b100
 
         # Coincidence flag (bit 3)
-        if memory[self.register_map['curr_line']] == memory[self.register_map['raster']]:
+        if memory[GPU_LY] == memory[GPU_LYC]:
             stat |= 0b1000  # Bit 3: coincidence match
 
-        memory[self.register_map['stat']] = stat
-
-    def _h_blank_render_screen(self):
-        if self._mode_clock >= 204:
-            memory = self.sys_interface.raw_memory
-            self._mode_clock -= 204
-            curr_line = memory[self.register_map['curr_line']]
-            memory[self.register_map['curr_line']] = (curr_line + 1) & 0xFF
-
-            if curr_line == 143:
-                self.linemode = 1  # enter V-Blank
-                self.frame_ready = True
-                memory[0xFF0F] |= 0x01  # Set V-Blank flag
-            else:
-                self.linemode = 2
-
-            self._update_stat_register()
-
-    def _v_blank(self):
-        """."""
-        if self._mode_clock >= 456:
-            memory = self.sys_interface.raw_memory
-            self._mode_clock -= 456
-            memory[self.register_map['curr_line']] = (
-                memory[self.register_map['curr_line']] + 1
-            ) & 0xFF
-
-            if memory[self.register_map['curr_line']] > 153:
-                memory[self.register_map['curr_line']] = 0  # reset LY
-                self.linemode = 2   # Switch to OAM mode
-                self._curscan = 0   # Reset scanline render state
-
-            self._update_stat_register()
-
-    def _oam_read_mode(self):
-        """OAM read."""
-        if self._mode_clock >= 80:
-            self._mode_clock -= 80
-            self.linemode = 3   # Switch to VRAM mode
-            self._update_stat_register()
-
-    def _vram_read_mode(self):
-        """VRAM read."""
-        if self._mode_clock >= 172:
-            self._mode_clock -= 172
-            self.linemode = 0   # Switch to H-Blank mode
-            self._update_stat_register()
-            self._renderscan()
+        memory[GPU_STAT] = stat
 
     def _renderscan(self):
         memory = self.sys_interface.raw_memory
-        line = memory[self.register_map['curr_line']]
-        lcdc = memory[self.register_map['lcd_gpu_ctrl']]
+        line = memory[GPU_LY]
+        lcdc = memory[GPU_LCDC]
 
         if line >= 144 or not (lcdc & 0x80):
             return
@@ -333,14 +292,14 @@ class GbGpu(object):
     def _render_background_scanline(self, line, lcdc):
         """Render the background and retain its color IDs for OBJ priority."""
         memory = self.sys_interface.raw_memory
-        scroll_y = memory[self.register_map['scroll_y']]
-        scroll_x = memory[self.register_map['scroll_x']]
+        scroll_y = memory[GPU_SCY]
+        scroll_x = memory[GPU_SCX]
         y = (line + scroll_y) & 0xFF
         tile_row = y >> 3
         tile_pixel_row = y & 7
         map_base = 0x9C00 if (lcdc & 0x08) else 0x9800
         signed_addressing = not (lcdc & 0x10)
-        palette_value = memory[self.register_map['bgrnd_palette']]
+        palette_value = memory[GPU_BGP]
         screen_data = self.screen_data
         screen_offset = line * 160 * 4
         scanrow = self._scanrow
@@ -396,7 +355,8 @@ class GbGpu(object):
         """Composite the DMG's first ten eligible objects onto one scanline."""
         memory = self.sys_interface.raw_memory
         height = 16 if (lcdc & 0x04) else 8
-        objects = []
+        objects = self._sprite_objects
+        objects.clear()
 
         for index in range(40):
             base = 0xFE00 + index * 4
@@ -414,7 +374,8 @@ class GbGpu(object):
 
         # On DMG, smaller X wins; equal X uses the earlier OAM entry.
         objects.sort(key=lambda obj: (obj[0], obj[1]))
-        claimed = bytearray(160)
+        claimed = self._sprite_claimed
+        claimed[:] = self._empty_scanrow
         screen_data = self.screen_data
         screen_offset = line * 160 * 4
         obj0_palette = DMG_PALETTES[memory[0xFF48]]

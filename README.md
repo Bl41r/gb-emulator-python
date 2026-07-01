@@ -31,6 +31,21 @@ python main.py roms/tetris.gb --max-frames 60 --profile profile.stats
 python main.py roms/tetris.gb --no-display --max-frames 60 --profile profile-headless.stats
 ```
 
+Script repeatable button input for profiling gameplay instead of title screens:
+
+```powershell
+python main.py roms/tetris.gb --input-script input_scripts/tetris_start.json --max-frames 600 --profile profile-gameplay.stats
+```
+
+Input scripts are JSON arrays of frame-based button events:
+
+```json
+[
+  {"frame": 60, "button": "start", "pressed": true},
+  {"frame": 68, "button": "start", "pressed": false}
+]
+```
+
 If rendering is the bottleneck, skip displayed frames while still emulating
 every frame:
 

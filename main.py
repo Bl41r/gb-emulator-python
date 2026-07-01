@@ -1,5 +1,6 @@
 import argparse
 import cProfile
+import json
 import os
 import pygame
 import numpy as np
@@ -33,7 +34,15 @@ KEY_BINDINGS = {
 }
 
 
-def main(filename, trace=False, max_frames=None, no_display=False, frameskip=1):
+def main(
+    filename,
+    trace=False,
+    max_frames=None,
+    max_seconds=None,
+    no_display=False,
+    frameskip=1,
+    input_script=None,
+):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
         GB_DR_LOG_DUMP,
@@ -54,6 +63,7 @@ def main(filename, trace=False, max_frames=None, no_display=False, frameskip=1):
         component.sys_interface = sys_interface
 
     sys_interface.load_rom_image(filename)
+    scripted_input = load_input_script(input_script) if input_script else {}
 
     window = None
     if not no_display:
@@ -73,15 +83,24 @@ def main(filename, trace=False, max_frames=None, no_display=False, frameskip=1):
         'last_caption_drawn_frames': 0,
         'last_caption_instructions': 0,
     }
+    stop_seconds = (
+        stats['start_seconds'] + max_seconds
+        if max_seconds is not None
+        else None
+    )
+    execute_next_operation = cpu.execute_next_operation
+    instructions = 0
 
     try:
         while True:
-            cpu.execute_next_operation()
-            stats['instructions'] += 1
+            execute_next_operation()
+            instructions += 1
 
             if gpu.frame_ready:
                 gpu.frame_ready = False
                 stats['frames'] += 1
+                stats['instructions'] = instructions
+                apply_scripted_input(sys_interface, scripted_input, stats['frames'])
                 if not no_display:
                     handle_events(sys_interface)
                     if should_draw_frame(stats['frames'], frameskip):
@@ -92,6 +111,8 @@ def main(filename, trace=False, max_frames=None, no_display=False, frameskip=1):
                     update_caption(caption, stats)
 
                 if max_frames is not None and stats['frames'] >= max_frames:
+                    break
+                if stop_seconds is not None and time.perf_counter() >= stop_seconds:
                     break
 
     except ExecutionHalted:
@@ -104,9 +125,32 @@ def main(filename, trace=False, max_frames=None, no_display=False, frameskip=1):
             pygame.quit()
         raise e
     finally:
+        stats['instructions'] = instructions
         if not no_display:
             pygame.quit()
         print_run_stats(stats, no_display)
+
+
+def load_input_script(filename):
+    """Load scripted button events keyed by frame number."""
+    with open(filename, "r", encoding="utf-8") as f:
+        events = json.load(f)
+
+    by_frame = {}
+    for event in events:
+        frame = int(event["frame"])
+        button = event["button"]
+        pressed = bool(event["pressed"])
+        if button not in {"right", "left", "up", "down", "a", "b", "select", "start"}:
+            raise ValueError(f"unknown input script button: {button}")
+        by_frame.setdefault(frame, []).append((button, pressed))
+    return by_frame
+
+
+def apply_scripted_input(sys_interface, scripted_input, frame):
+    """Apply all scripted button changes scheduled for a completed frame."""
+    for button, pressed in scripted_input.get(frame, ()):
+        sys_interface.set_button(button, pressed)
 
 
 def handle_events(sys_interface):
@@ -222,6 +266,11 @@ if __name__ == '__main__':
         help="exit automatically after rendering this many frames",
     )
     parser.add_argument(
+        "--max-seconds",
+        type=float,
+        help="exit automatically after running for this many real-time seconds",
+    )
+    parser.add_argument(
         "--no-display",
         action="store_true",
         help="run without opening a pygame window or drawing frames",
@@ -231,6 +280,10 @@ if __name__ == '__main__':
         type=int,
         default=1,
         help="draw every Nth completed frame; 1 draws every frame",
+    )
+    parser.add_argument(
+        "--input-script",
+        help="JSON file of frame-based button events for repeatable profiling",
     )
     parser.add_argument(
         "--profile",
@@ -248,8 +301,10 @@ if __name__ == '__main__':
                 args.rom,
                 trace=args.trace,
                 max_frames=args.max_frames,
+                max_seconds=args.max_seconds,
                 no_display=args.no_display,
                 frameskip=args.frameskip,
+                input_script=args.input_script,
             )
         finally:
             profiler.disable()
@@ -262,6 +317,8 @@ if __name__ == '__main__':
             args.rom,
             trace=args.trace,
             max_frames=args.max_frames,
+            max_seconds=args.max_seconds,
             no_display=args.no_display,
             frameskip=args.frameskip,
+            input_script=args.input_script,
         )
