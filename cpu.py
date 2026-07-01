@@ -130,6 +130,8 @@ FLAG = {
     'half-carry': 0x20,     # H flag
     'carry': 0x10           # C flag
 }
+FLAG_ZERO = 0x80
+FLAG_HALF_CARRY = 0x20
 my_counter = 0
 
 class ExecutionHalted(Exception):
@@ -769,10 +771,7 @@ class GbZ80Cpu(object):
         registers['pc'] = (pc + 1) & 0xFFFF
 
         opcode, args = self.opcode_table[op]
-        if args:
-            opcode(*args)
-        else:
-            opcode()
+        opcode(*args)
         if trace_enabled:
             print(
                 f"[TRACE] Exec {opcode.__name__:<15} "
@@ -1057,14 +1056,9 @@ class GbZ80Cpu(object):
         else:
             n = sys_interface.read_byte(pc)
 
-        if n >= 0x80:
-            registers['a'] = sys_interface.raw_memory[0xFF00 + n]
-        elif n == 0:
+        if n == 0:
             registers['a'] = sys_interface.joypad.read()
-        elif (
-            n == 0x44
-            and sys_interface.memory.gb_doctor_test_mode
-        ):
+        elif self.gb_doctor_test_mode and n == 0x44:
             registers['a'] = 0x90
         else:
             registers['a'] = sys_interface.raw_memory[0xFF00 + n]
@@ -1195,7 +1189,7 @@ class GbZ80Cpu(object):
             i = sys_interface.read_byte(pc)
 
         pc += 1
-        if registers['f'] & FLAG['zero']:
+        if registers['f'] & FLAG_ZERO:
             registers['pc'] = pc
             registers['m'] = 2
             return
@@ -1217,7 +1211,7 @@ class GbZ80Cpu(object):
             i = sys_interface.read_byte(pc)
 
         pc += 1
-        if not (registers['f'] & FLAG['zero']):
+        if not (registers['f'] & FLAG_ZERO):
             registers['pc'] = pc
             registers['m'] = 2
             return
@@ -1731,7 +1725,7 @@ class GbZ80Cpu(object):
         """AND A with itself; A is unchanged, flags are updated."""
         registers = self.registers
         a = registers['a']
-        registers['f'] = FLAG['half-carry'] | (FLAG['zero'] if a == 0 else 0)
+        registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
         registers['m'] = 1
 
     def _and_pc(self):
@@ -1748,7 +1742,7 @@ class GbZ80Cpu(object):
         result = registers['a'] & value
         registers['pc'] = pc + 1
         registers['a'] = result
-        registers['f'] = FLAG['half-carry'] | (FLAG['zero'] if result == 0 else 0)
+        registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if result == 0 else 0)
         registers['m'] = 2
 
     def _and_n(self, n):
