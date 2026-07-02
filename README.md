@@ -99,9 +99,10 @@ Current DMG graphics support includes background tiles, OAM DMA, and 8x8 or
 per-scanline limit. Window rendering is not implemented. OAM DMA currently
 copies immediately rather than modeling its 160 M-cycle CPU bus restriction.
 
-Audio support currently includes the two DMG square-wave channels, length and
-volume envelopes, and stereo routing. Frequency sweep, wave, and noise channels
-are not implemented yet.
+Audio support includes all four DMG channels: two square waves, Channel 1
+frequency sweep, programmable wave RAM, and noise/percussion. Length counters,
+volume envelopes, stereo routing, cycle-timestamped register writes, and
+continuous SDL audio streaming are also implemented.
 
 ## CPU regression suite
 

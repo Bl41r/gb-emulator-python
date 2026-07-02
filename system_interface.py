@@ -112,7 +112,13 @@ class GbSystemInterface(object):
                 self._increment_tima()
             return
 
-        if 0xFF10 <= address <= 0xFF26 and self.apu is not None:
+        if (
+            self.apu is not None
+            and (
+                0xFF10 <= address <= 0xFF26
+                or 0xFF30 <= address <= 0xFF3F
+            )
+        ):
             self.memory.write_byte(address, value)
             self.apu.write_register(
                 address,
