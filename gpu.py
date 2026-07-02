@@ -60,6 +60,7 @@ GPU_LYC = 0xFF45
 GPU_BGP = 0xFF47
 GPU_WY = 0xFF4A
 GPU_WX = 0xFF4B
+GPU_MODE_CYCLES = (204, 456, 80, 172)
 
 
 class GbGpu(object):
@@ -71,6 +72,7 @@ class GbGpu(object):
         self._curscan = 0
         self._mode_clock = 0
         self._window_line = 0
+        self._stat_irq_line = False
         self.frame_ready = False
         self.screen_data = bytearray([255] * (160 * 144 * 4))
         self.screen_buffer = np.frombuffer(
@@ -165,6 +167,11 @@ class GbGpu(object):
         self.frame_ready = False
         return True
 
+    def m_cycles_until_mode_transition(self):
+        """Return M-cycles remaining before the current PPU mode ends."""
+        remaining = GPU_MODE_CYCLES[self.linemode] - self._mode_clock
+        return max(1, remaining // 4)
+
     def update_tile(self, addr, val):
         """Update a tile.
 
@@ -258,22 +265,40 @@ class GbGpu(object):
         """Read a register from mem."""
         return self.sys_interface.read_byte(self.register_map[register_name])
 
-    def _update_stat_register(self):
-        """Use whenever linemode is set"""
+    def write_stat(self, value):
+        """Update writable STAT interrupt-enable bits."""
         memory = self.sys_interface.raw_memory
-        stat = memory[GPU_STAT] & 0b11111000  # Clear mode + coincidence flag
+        memory[GPU_STAT] = (value & 0xF8) | (memory[GPU_STAT] & 0x07)
+        self._update_stat_register()
+
+    def write_lyc(self, value):
+        """Update LYC and immediately refresh coincidence state."""
+        self.sys_interface.raw_memory[GPU_LYC] = value
+        self._update_stat_register()
+
+    def _update_stat_register(self):
+        """Refresh mode/coincidence bits and raise STAT on a line edge."""
+        memory = self.sys_interface.raw_memory
+        stat = memory[GPU_STAT] & 0xF8
 
         # Set current mode (bits 0–1)
         stat |= self.linemode & 0b11
 
-        # Bit 2 is undocumented, usually set to 1
-        stat |= 0b100
-
-        # Coincidence flag (bit 3)
+        # Coincidence flag is read-only bit 2.
         if memory[GPU_LY] == memory[GPU_LYC]:
-            stat |= 0b1000  # Bit 3: coincidence match
+            stat |= 0x04
 
         memory[GPU_STAT] = stat
+        lcd_enabled = bool(memory[GPU_LCDC] & 0x80)
+        irq_line = lcd_enabled and bool(
+            (self.linemode == 0 and stat & 0x08)
+            or (self.linemode == 1 and stat & 0x10)
+            or (self.linemode == 2 and stat & 0x20)
+            or (stat & 0x04 and stat & 0x40)
+        )
+        if irq_line and not self._stat_irq_line:
+            memory[0xFF0F] |= 0x02
+        self._stat_irq_line = irq_line
 
     def _renderscan(self):
         memory = self.sys_interface.raw_memory

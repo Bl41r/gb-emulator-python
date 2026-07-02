@@ -41,6 +41,12 @@ python main.py roms/tetris.gb --max-frames 60 --profile profile.stats
 python main.py roms/tetris.gb --no-display --max-frames 60 --profile profile-headless.stats
 ```
 
+Count exact base and CB-prefixed opcodes without cProfile's larger overhead:
+
+```powershell
+python main.py roms/tetris.gb --uncapped --no-audio --opcode-stats --max-seconds 30
+```
+
 Script repeatable button input for profiling gameplay instead of title screens:
 
 ```powershell

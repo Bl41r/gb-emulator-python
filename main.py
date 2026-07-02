@@ -57,6 +57,7 @@ def main(
     input_script=None,
     uncapped=False,
     audio=True,
+    opcode_stats=False,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -65,6 +66,9 @@ def main(
         trace_enabled=trace,
     )
     gpu = GbGpu()
+    if opcode_stats:
+        cpu.opcode_counts = [0] * 256
+        cpu.cb_opcode_counts = [0] * 256
     audio_enabled = audio and not no_display and not uncapped
     apu = GbApu(gb_memory.memory) if audio_enabled else None
 
@@ -120,8 +124,7 @@ def main(
 
     try:
         while True:
-            execute_next_operation()
-            instructions += 1
+            instructions += execute_next_operation()
 
             if gpu.frame_ready:
                 gpu.frame_ready = False
@@ -172,6 +175,8 @@ def main(
         if not no_display:
             pygame.quit()
         print_run_stats(stats, no_display)
+        if opcode_stats:
+            print_opcode_stats(cpu)
 
 
 def load_input_script(filename):
@@ -361,6 +366,45 @@ def print_run_stats(stats, no_display):
         )
 
 
+def print_opcode_stats(cpu, limit=20):
+    """Print the most frequently executed base and CB-prefixed opcodes."""
+    total = sum(cpu.opcode_counts)
+    print(f"Top opcodes ({total:,} counted):")
+    print(f"  HALT idle time: {cpu.halt_m_cycles:,} M-cycles")
+    ranked = sorted(
+        enumerate(cpu.opcode_counts),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for opcode, count in ranked[:limit]:
+        if not count:
+            break
+        handler, args = cpu.opcode_map[opcode]
+        percent = count / total * 100 if total else 0
+        print(
+            f"  {opcode:02X} {handler.__name__:<18} "
+            f"{count:>10,}  {percent:>5.2f}%  {args}"
+        )
+
+    cb_total = sum(cpu.cb_opcode_counts)
+    if cb_total:
+        print(f"Top CB opcodes ({cb_total:,} counted):")
+        ranked_cb = sorted(
+            enumerate(cpu.cb_opcode_counts),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        for opcode, count in ranked_cb[:limit]:
+            if not count:
+                break
+            handler, args = cpu.cb_map[opcode]
+            percent = count / cb_total * 100
+            print(
+                f"  CB {opcode:02X} {handler.__name__:<15} "
+                f"{count:>10,}  {percent:>5.2f}%  {args}"
+            )
+
+
 def draw_screen(gpu, screen):
     """Draw the GPU buffer to the Pygame window using fast blitting."""
     # Create surface from the GPU's persistent RGB framebuffer.
@@ -444,6 +488,11 @@ if __name__ == '__main__':
         "--profile",
         help="write cProfile stats to this file",
     )
+    parser.add_argument(
+        "--opcode-stats",
+        action="store_true",
+        help="count and print the most frequently executed opcodes",
+    )
     args = parser.parse_args()
     if args.frameskip < 1:
         parser.error("--frameskip must be 1 or greater")
@@ -462,6 +511,7 @@ if __name__ == '__main__':
                 input_script=args.input_script,
                 uncapped=args.uncapped,
                 audio=not args.no_audio,
+                opcode_stats=args.opcode_stats,
             )
         finally:
             profiler.disable()
@@ -480,4 +530,5 @@ if __name__ == '__main__':
             input_script=args.input_script,
             uncapped=args.uncapped,
             audio=not args.no_audio,
+            opcode_stats=args.opcode_stats,
         )

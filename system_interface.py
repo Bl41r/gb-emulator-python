@@ -122,6 +122,14 @@ class GbSystemInterface(object):
                 self._increment_tima()
             return
 
+        if address == 0xFF41:
+            self.gpu.write_stat(value)
+            return
+
+        if address == 0xFF45:
+            self.gpu.write_lyc(value)
+            return
+
         if (
             self.apu is not None
             and (
@@ -177,6 +185,16 @@ class GbSystemInterface(object):
             return 0
 
         return (self.divider_counter >> self.timer_bit) & 1
+
+    def m_cycles_until_timer_interrupt(self):
+        """Return M-cycles until TIMA next overflows, or a large sentinel."""
+        if not self.timer_enabled:
+            return 0x10000
+
+        period = 1 << self.timer_period_shift
+        until_next_edge = period - (self.divider_counter & (period - 1))
+        edges_until_overflow = 0x100 - self.raw_memory[0xFF05]
+        return until_next_edge + (edges_until_overflow - 1) * period
 
     def _set_timer_control(self, tac):
         """Cache decoded TAC timer settings for the instruction hot path."""

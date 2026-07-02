@@ -153,6 +153,9 @@ class GbZ80Cpu(object):
         self.sys_interface = None    # Set after interface instantiated.
         self.direct_rom = None
         self.direct_rom_length = 0
+        self.opcode_counts = None
+        self.cb_opcode_counts = None
+        self.halt_m_cycles = 0
 
         # Register set
         self.registers = {
@@ -740,11 +743,16 @@ class GbZ80Cpu(object):
                 & 0x1F
             )
             if not pending:
-                registers['m'] = 1
-                clock['m'] += 1
-                sys_interface.step(1)
-                gpu.step(4)
-                return
+                m_cycles = min(
+                    gpu.m_cycles_until_mode_transition(),
+                    sys_interface.m_cycles_until_timer_interrupt(),
+                )
+                registers['m'] = m_cycles
+                clock['m'] += m_cycles
+                self.halt_m_cycles += m_cycles
+                sys_interface.step(m_cycles)
+                gpu.step(m_cycles * 4)
+                return 0
             self.halted = False
 
         if gb_doctor_test_mode:
@@ -768,6 +776,8 @@ class GbZ80Cpu(object):
             op = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             op = sys_interface.read_byte(pc)
+        if self.opcode_counts is not None:
+            self.opcode_counts[op] += 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
         opcode, args = self.opcode_table[op]
@@ -789,6 +799,7 @@ class GbZ80Cpu(object):
         if self.enable_interrupts_next_cycle:
             registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
+        return 1
 
     def log_for_gameboy_dr(self, pc):
         pcmem = [self.read8(pc + i) if (pc + i) < 0x10000 else 0 for i in range(4)]
@@ -858,6 +869,7 @@ class GbZ80Cpu(object):
 
     def reset(self):
         """Reset registers."""
+        self.halt_m_cycles = 0
         for k in self.clock.items():
             self.clock[k] = 0
         for k in self.registers.items():
@@ -888,6 +900,8 @@ class GbZ80Cpu(object):
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
         i = self.read8(self.registers['pc'])
+        if self.cb_opcode_counts is not None:
+            self.cb_opcode_counts[i] += 1
         # print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
         self.registers['pc'] += 1
         self.registers['pc'] &= 65535
