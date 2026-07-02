@@ -5,6 +5,8 @@ units.
 """
 
 import array
+import os
+from pathlib import Path
 import sys
 
 from cartridge import Cartridge
@@ -31,6 +33,8 @@ class GbSystemInterface(object):
         self.apu = apu
         self.divider_counter = 0
         self.cartridge = None
+        self.rom_path = None
+        self.save_path = None
         self.direct_rom = None
         self.direct_rom_length = 0
         self.timer_enabled = False
@@ -49,12 +53,18 @@ class GbSystemInterface(object):
         self.joypad = Joypad()
         rom_array = self._read_rom_file(filename)
         self.cartridge = Cartridge(rom_array)
+        self.rom_path = Path(filename)
+        self.save_path = (
+            self.rom_path.with_suffix(".sav")
+            if self.cartridge.has_battery and self.cartridge.ram
+            else None
+        )
+        self._load_save_ram()
         if self.cartridge.is_rom_only_type:
             self.direct_rom = self.cartridge.rom
-            self.direct_rom_length = len(self.direct_rom)
         else:
-            self.direct_rom = None
-            self.direct_rom_length = 0
+            self.direct_rom = self.cartridge.rom_window
+        self.direct_rom_length = len(self.direct_rom)
         self.cpu.direct_rom = self.direct_rom
         self.cpu.direct_rom_length = self.direct_rom_length
 
@@ -194,19 +204,23 @@ class GbSystemInterface(object):
         if 0x0000 <= address <= 0x7FFF:
             cartridge = self.cartridge
             if cartridge:
-                if cartridge.is_rom_only_type:
-                    return (
-                        cartridge.rom[address]
-                        if address < len(cartridge.rom)
-                        else 0xFF
-                    )
-                return cartridge.read(address)
+                return cartridge.rom_window[address]
             return self.raw_memory[address]
 
         if 0xA000 <= address <= 0xBFFF:
             cartridge = self.cartridge
             if cartridge:
-                return cartridge.read(address)
+                if not cartridge.ram or not cartridge.ram_enabled:
+                    return 0xFF
+                offset = (
+                    cartridge.active_ram_offset
+                    + address - 0xA000
+                )
+                return (
+                    cartridge.ram[offset]
+                    if offset < len(cartridge.ram)
+                    else 0xFF
+                )
             return self.raw_memory[address]
 
         if (
@@ -258,6 +272,46 @@ class GbSystemInterface(object):
     def get_cpu_clock(self):
         """For debugging."""
         return self.cpu.clock['m']
+
+    def flush_save_ram(self):
+        """Atomically persist dirty battery-backed cartridge RAM."""
+        cartridge = self.cartridge
+        save_path = self.save_path
+        if (
+            cartridge is None
+            or save_path is None
+            or not cartridge.ram_dirty
+        ):
+            return False
+
+        temporary_path = save_path.with_name(save_path.name + ".tmp")
+        try:
+            temporary_path.write_bytes(bytes(cartridge.ram))
+            os.replace(str(temporary_path), str(save_path))
+        except OSError as error:
+            print(f"Could not write save RAM {save_path}: {error}")
+            return False
+
+        cartridge.ram_dirty = False
+        print(f"Saved battery RAM: {save_path}")
+        return True
+
+    def _load_save_ram(self):
+        cartridge = self.cartridge
+        save_path = self.save_path
+        if cartridge is None or save_path is None or not save_path.exists():
+            return
+        try:
+            data = save_path.read_bytes()
+        except OSError as error:
+            print(f"Could not read save RAM {save_path}: {error}")
+            return
+
+        cartridge.load_ram(data)
+        print(
+            f"Loaded battery RAM: {save_path} "
+            f"({len(data):,} bytes)"
+        )
 
     def _show_mem_around_addr(self, address):
         """Print mem around address for debugging."""

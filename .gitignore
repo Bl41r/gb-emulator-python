@@ -112,5 +112,6 @@ memdump.txt
 .idea/
 *.gb
 *.gbc
+*.sav
 *.stats
 *.txt

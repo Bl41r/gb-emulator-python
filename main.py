@@ -160,6 +160,7 @@ def main(
         raise e
     finally:
         stats['instructions'] = instructions
+        sys_interface.flush_save_ram()
         if audio_output is not None:
             print(
                 "Audio queue: "

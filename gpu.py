@@ -58,6 +58,8 @@ GPU_SCX = 0xFF43
 GPU_LY = 0xFF44
 GPU_LYC = 0xFF45
 GPU_BGP = 0xFF47
+GPU_WY = 0xFF4A
+GPU_WX = 0xFF4B
 
 
 class GbGpu(object):
@@ -68,6 +70,7 @@ class GbGpu(object):
         self._line = 0
         self._curscan = 0
         self._mode_clock = 0
+        self._window_line = 0
         self.frame_ready = False
         self.screen_data = bytearray([255] * (160 * 144 * 4))
         self.screen_buffer = np.frombuffer(
@@ -140,6 +143,7 @@ class GbGpu(object):
                     memory[GPU_LY] = 0  # reset LY
                     self.linemode = 2   # Switch to OAM mode
                     self._curscan = 0   # Reset scanline render state
+                    self._window_line = 0
 
                 self._update_stat_register()
         elif linemode == 2:
@@ -286,6 +290,18 @@ class GbGpu(object):
             offset = line * 160 * 4
             self.screen_data[offset:offset + 160 * 4] = self._white_scanline
 
+        if (
+            lcdc & 0x21 == 0x21
+            and line >= memory[GPU_WY]
+            and memory[GPU_WX] <= 166
+        ):
+            self._render_window_scanline(
+                line,
+                lcdc,
+                self._window_line,
+            )
+            self._window_line += 1
+
         if lcdc & 0x02:
             self._render_sprite_scanline(line, lcdc)
 
@@ -382,6 +398,65 @@ class GbGpu(object):
             screen_data[offset:offset + run * 4] = rgba[tile_pixel_col * 4:end * 4]
             x += run
             tile_col = (tile_col + 1) & 31
+            tile_pixel_col = 0
+
+    def _render_window_scanline(self, line, lcdc, window_line):
+        """Composite the LCD window over the background for one scanline."""
+        memory = self.sys_interface.raw_memory
+        window_start = memory[GPU_WX] - 7
+        x = max(0, window_start)
+        window_pixel_x = x - window_start
+        tile_col = window_pixel_x >> 3
+        tile_pixel_col = window_pixel_x & 7
+        tile_pixel_row = window_line & 7
+        map_base = 0x9C00 if (lcdc & 0x40) else 0x9800
+        map_row_base = map_base + (window_line >> 3) * 32
+        signed_addressing = not (lcdc & 0x10)
+        palette_value = memory[GPU_BGP]
+        palette = DMG_PALETTES[palette_value]
+        row_rgba_cache = self._tile_row_rgba_cache[palette_value]
+        if row_rgba_cache is None:
+            row_rgba_cache = [None] * 0x10000
+            self._tile_row_rgba_cache[palette_value] = row_rgba_cache
+
+        screen_data = self.screen_data
+        screen_offset = line * 160 * 4
+        scanrow = self._scanrow
+        tile_row_codes = self.tile_row_codes
+
+        while x < 160:
+            tile_id = memory[map_row_base + tile_col]
+            if signed_addressing:
+                tile_id = tile_id - 256 if tile_id > 127 else tile_id
+                tile_index = 256 + tile_id
+            else:
+                tile_index = tile_id
+
+            row_code = tile_row_codes[tile_index][tile_pixel_row]
+            pixels = TILE_ROW_PIXELS[row_code]
+            rgba = row_rgba_cache[row_code]
+            if rgba is None:
+                row = bytearray(8 * 4)
+                rgba_offset = 0
+                for color_index in pixels:
+                    color = palette[color_index]
+                    row[rgba_offset] = color
+                    row[rgba_offset + 1] = color
+                    row[rgba_offset + 2] = color
+                    row[rgba_offset + 3] = 255
+                    rgba_offset += 4
+                rgba = bytes(row)
+                row_rgba_cache[row_code] = rgba
+
+            run = min(8 - tile_pixel_col, 160 - x)
+            end = tile_pixel_col + run
+            scanrow[x:x + run] = pixels[tile_pixel_col:end]
+            offset = screen_offset + x * 4
+            screen_data[offset:offset + run * 4] = rgba[
+                tile_pixel_col * 4:end * 4
+            ]
+            x += run
+            tile_col += 1
             tile_pixel_col = 0
 
     def _render_sprite_scanline(self, line, lcdc):

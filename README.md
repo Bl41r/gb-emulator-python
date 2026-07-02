@@ -90,9 +90,10 @@ Supported cartridge hardware:
 - ROM-only cartridges (`0x00`, `0x08`, `0x09`)
 - MBC1 cartridges (`0x01`, `0x02`, `0x03`)
 - MBC1 ROM and external RAM banking modes
+- MBC5 cartridges (`0x19` through `0x1E`), including rumble bank masks
 
-Battery-backed RAM is currently kept in memory only; save-file persistence is
-not implemented yet.
+Battery-backed cartridge RAM is loaded from a `.sav` file beside the ROM and
+written atomically when the emulator exits normally.
 
 Current DMG graphics support includes background tiles, OAM DMA, and 8x8 or
 8x16 sprites with palettes, flips, priority, transparency, and the 10-sprites-

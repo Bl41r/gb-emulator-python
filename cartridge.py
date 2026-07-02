@@ -5,6 +5,7 @@ ROM_ONLY_TYPES = {0x00, 0x08, 0x09}
 MBC1_TYPES = {0x01, 0x02, 0x03}
 MBC5_TYPES = {0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E}
 MBC5_RUMBLE_TYPES = {0x1C, 0x1D, 0x1E}
+BATTERY_TYPES = {0x03, 0x09, 0x1B, 0x1E}
 SUPPORTED_TYPES = ROM_ONLY_TYPES | MBC1_TYPES | MBC5_TYPES
 
 CARTRIDGE_TYPE_NAMES = {
@@ -49,6 +50,7 @@ class Cartridge:
         self.has_mbc1 = self.cartridge_type in MBC1_TYPES
         self.has_mbc5 = self.cartridge_type in MBC5_TYPES
         self.has_mbc5_rumble = self.cartridge_type in MBC5_RUMBLE_TYPES
+        self.has_battery = self.cartridge_type in BATTERY_TYPES
         self.is_rom_only_type = self.cartridge_type in ROM_ONLY_TYPES
 
         if self.cartridge_type not in SUPPORTED_TYPES:
@@ -71,12 +73,16 @@ class Cartridge:
                 )
             )
         self.ram = bytearray(ram_size)
+        self.ram_dirty = False
 
         self.ram_enabled = self.cartridge_type in {0x08, 0x09}
         self.rom_bank = 1
         self.mbc5_rom_bank_high = 0
         self.secondary_bank = 0
         self.banking_mode = 0
+        self.rom_window = bytearray(0x8000)
+        self.active_ram_offset = 0
+        self._refresh_bank_cache()
 
     @property
     def type_name(self):
@@ -97,43 +103,13 @@ class Cartridge:
 
     def read(self, address):
         """Read a cartridge-mapped byte."""
-        if self.is_rom_only_type:
-            if 0x0000 <= address <= 0x7FFF:
-                return self.rom[address] if address < len(self.rom) else 0xFF
-
-            if 0xA000 <= address <= 0xBFFF:
-                if not self.ram or not self.ram_enabled:
-                    return 0xFF
-                offset = address - 0xA000
-                return self.ram[offset] if offset < len(self.ram) else 0xFF
-
-            raise ValueError(
-                "address 0x{:04X} is not cartridge-mapped".format(address)
-            )
-
-        if 0x0000 <= address <= 0x3FFF:
-            bank = (
-                self.secondary_bank << 5
-                if self.has_mbc1 and self.banking_mode
-                else 0
-            )
-            return self._read_rom_bank(bank, address)
-
-        if 0x4000 <= address <= 0x7FFF:
-            bank = self.rom_bank
-            if self.has_mbc1:
-                bank |= self.secondary_bank << 5
-            elif self.has_mbc5:
-                bank |= self.mbc5_rom_bank_high << 8
-            return self._read_rom_bank(bank, address - 0x4000)
+        if 0x0000 <= address <= 0x7FFF:
+            return self.rom_window[address]
 
         if 0xA000 <= address <= 0xBFFF:
             if not self.ram or not self.ram_enabled:
                 return 0xFF
-            bank = (
-                self._active_ram_bank()
-            )
-            offset = bank * self.RAM_BANK_SIZE + (address - 0xA000)
+            offset = self.active_ram_offset + (address - 0xA000)
             return self.ram[offset] if offset < len(self.ram) else 0xFF
 
         raise ValueError(
@@ -147,17 +123,18 @@ class Cartridge:
         if 0xA000 <= address <= 0xBFFF:
             if not self.ram or not self.ram_enabled:
                 return
-            bank = (
-                self._active_ram_bank()
-            )
-            offset = bank * self.RAM_BANK_SIZE + (address - 0xA000)
+            offset = self.active_ram_offset + (address - 0xA000)
             if offset < len(self.ram):
-                self.ram[offset] = value
+                if self.ram[offset] != value:
+                    self.ram[offset] = value
+                    self.ram_dirty = True
             return
 
         if not (self.has_mbc1 or self.has_mbc5):
             return
 
+        old_mapping = self._rom_mapping()
+        old_ram_offset = self.active_ram_offset
         if self.has_mbc5:
             self._write_mbc5_control(address, value)
         elif 0x0000 <= address <= 0x1FFF:
@@ -170,6 +147,11 @@ class Cartridge:
             self.secondary_bank = value & 0x03
         elif 0x6000 <= address <= 0x7FFF:
             self.banking_mode = value & 0x01
+        if (
+            self._rom_mapping() != old_mapping
+            or self._ram_bank_offset() != old_ram_offset
+        ):
+            self._refresh_bank_cache()
 
     def _active_ram_bank(self):
         if self.has_mbc5:
@@ -194,3 +176,44 @@ class Cartridge:
         bank %= self.rom_bank_count
         rom_offset = bank * self.ROM_BANK_SIZE + offset
         return self.rom[rom_offset] if rom_offset < len(self.rom) else 0xFF
+
+    def load_ram(self, data):
+        """Restore battery RAM, tolerating short or oversized save files."""
+        count = min(len(data), len(self.ram))
+        self.ram[:count] = data[:count]
+        if count < len(self.ram):
+            self.ram[count:] = bytes(len(self.ram) - count)
+        self.ram_dirty = False
+
+    def _rom_mapping(self):
+        fixed_bank = (
+            self.secondary_bank << 5
+            if self.has_mbc1 and self.banking_mode
+            else 0
+        )
+        switch_bank = self.rom_bank
+        if self.has_mbc1:
+            switch_bank |= self.secondary_bank << 5
+        elif self.has_mbc5:
+            switch_bank |= self.mbc5_rom_bank_high << 8
+        return fixed_bank, switch_bank
+
+    def _ram_bank_offset(self):
+        return self._active_ram_bank() * self.RAM_BANK_SIZE
+
+    def _refresh_bank_cache(self):
+        fixed_bank, switch_bank = self._rom_mapping()
+        self._copy_rom_bank(fixed_bank, 0)
+        self._copy_rom_bank(switch_bank, self.ROM_BANK_SIZE)
+        self.active_ram_offset = self._ram_bank_offset()
+
+    def _copy_rom_bank(self, bank, window_offset):
+        bank %= self.rom_bank_count
+        source = bank * self.ROM_BANK_SIZE
+        data = self.rom[source:source + self.ROM_BANK_SIZE]
+        end = window_offset + len(data)
+        self.rom_window[window_offset:end] = data
+        if len(data) < self.ROM_BANK_SIZE:
+            self.rom_window[end:window_offset + self.ROM_BANK_SIZE] = (
+                b"\xFF" * (self.ROM_BANK_SIZE - len(data))
+            )
