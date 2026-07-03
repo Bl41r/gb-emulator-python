@@ -158,11 +158,15 @@ class Cartridge:
             self.secondary_bank = value & 0x03
         elif 0x6000 <= address <= 0x7FFF:
             self.banking_mode = value & 0x01
-        if (
-            self._rom_mapping() != old_mapping
-            or self._ram_bank_offset() != old_ram_offset
-        ):
-            self._refresh_bank_cache()
+        new_mapping = self._rom_mapping()
+        if new_mapping[0] != old_mapping[0]:
+            self._copy_rom_bank(new_mapping[0], 0)
+        if new_mapping[1] != old_mapping[1]:
+            self._copy_rom_bank(new_mapping[1], self.ROM_BANK_SIZE)
+
+        new_ram_offset = self._ram_bank_offset()
+        if new_ram_offset != old_ram_offset:
+            self.active_ram_offset = new_ram_offset
 
     def _active_ram_bank(self):
         if self.has_mbc5:
@@ -219,7 +223,10 @@ class Cartridge:
             switch_bank |= self.secondary_bank << 5
         elif self.has_mbc5:
             switch_bank |= self.mbc5_rom_bank_high << 8
-        return fixed_bank, switch_bank
+        return (
+            fixed_bank % self.rom_bank_count,
+            switch_bank % self.rom_bank_count,
+        )
 
     def _ram_bank_offset(self):
         return self._active_ram_bank() * self.RAM_BANK_SIZE

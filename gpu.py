@@ -101,7 +101,9 @@ class GbGpu(object):
         self._scanrow = bytearray(160)
         self._empty_scanrow = bytes(160)
         self._sprite_claimed = bytearray(160)
-        self._sprite_objects = []
+        self._sprite_scanlines = [[] for _ in range(144)]
+        self._sprite_cache_dirty = True
+        self._sprite_cache_height = 0
         self._white_scanline = bytes([255] * (160 * 4))
         self._palette = {'obj0': [], 'obj1': []}
         self._palette['bg'] = [
@@ -275,6 +277,42 @@ class GbGpu(object):
         """Reset screen to white."""
         self.screen_buffer.fill(255)
 
+    def invalidate_sprite_cache(self):
+        """Mark cached per-scanline OAM selection for rebuilding."""
+        self._sprite_cache_dirty = True
+
+    def _rebuild_sprite_cache(self, height):
+        """Cache the first ten OAM objects eligible for each visible line."""
+        memory = self.sys_interface.raw_memory
+        scanlines = self._sprite_scanlines
+        for objects in scanlines:
+            objects.clear()
+
+        for index in range(40):
+            base = 0xFE00 + index * 4
+            object_y = memory[base] - 16
+            first_line = max(0, object_y)
+            end_line = min(144, object_y + height)
+            if first_line >= end_line:
+                continue
+
+            obj = (
+                memory[base + 1],
+                index,
+                object_y,
+                memory[base + 2],
+                memory[base + 3],
+            )
+            for line in range(first_line, end_line):
+                if len(scanlines[line]) < 10:
+                    scanlines[line].append(obj)
+
+        for objects in scanlines:
+            if len(objects) > 1:
+                objects.sort()
+        self._sprite_cache_dirty = False
+        self._sprite_cache_height = height
+
     def set_system_interface(self, sys_interface):
         """Set the system interface."""
         self.sys_interface = sys_interface
@@ -331,23 +369,26 @@ class GbGpu(object):
         if line >= 144 or not (lcdc & 0x80):
             return
 
-        if lcdc & 0x01:
+        window_visible = (
+            lcdc & 0x21 == 0x21
+            and line >= memory[GPU_WY]
+            and memory[GPU_WX] <= 166
+        )
+        window_covers_scanline = window_visible and memory[GPU_WX] <= 7
+
+        if lcdc & 0x01 and not window_covers_scanline:
             self._render_background_scanline(
                 line,
                 lcdc,
                 self._scanline_scroll_x,
                 self._scanline_scroll_y,
             )
-        else:
+        elif not window_covers_scanline:
             self._scanrow[:] = self._empty_scanrow
             offset = line * 160 * 4
             self.screen_data[offset:offset + 160 * 4] = self._white_scanline
 
-        if (
-            lcdc & 0x21 == 0x21
-            and line >= memory[GPU_WY]
-            and memory[GPU_WX] <= 166
-        ):
+        if window_visible:
             self._render_window_scanline(
                 line,
                 lcdc,
@@ -545,25 +586,9 @@ class GbGpu(object):
         """Composite the DMG's first ten eligible objects onto one scanline."""
         memory = self.sys_interface.raw_memory
         height = 16 if (lcdc & 0x04) else 8
-        objects = self._sprite_objects
-        objects.clear()
-
-        for index in range(40):
-            base = 0xFE00 + index * 4
-            object_y = memory[base] - 16
-            if object_y <= line < object_y + height:
-                objects.append((
-                    memory[base + 1],
-                    index,
-                    object_y,
-                    memory[base + 2],
-                    memory[base + 3],
-                ))
-                if len(objects) == 10:
-                    break
-
-        # On DMG, smaller X wins; equal X uses the earlier OAM entry.
-        objects.sort(key=lambda obj: (obj[0], obj[1]))
+        if self._sprite_cache_dirty or self._sprite_cache_height != height:
+            self._rebuild_sprite_cache(height)
+        objects = self._sprite_scanlines[line]
         claimed = self._sprite_claimed
         claimed[:] = self._empty_scanrow
         screen_data = self.screen_data

@@ -132,6 +132,8 @@ FLAG = {
 }
 FLAG_ZERO = 0x80
 FLAG_HALF_CARRY = 0x20
+FLAG_CARRY = 0x10
+CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
 my_counter = 0
 
 class ExecutionHalted(Exception):
@@ -899,12 +901,27 @@ class GbZ80Cpu(object):
 
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
-        i = self.read8(self.registers['pc'])
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            i = self.sys_interface.read_byte(pc)
         if self.cb_opcode_counts is not None:
             self.cb_opcode_counts[i] += 1
-        # print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
-        self.registers['pc'] += 1
-        self.registers['pc'] &= 65535
+        registers['pc'] = (pc + 1) & 0xFFFF
+
+        register_index = i & 0x07
+        if 0x40 <= i < 0x80 and register_index != 6:
+            value = registers[CB_REGISTER_NAMES[register_index]]
+            flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+            if not value & (1 << ((i >> 3) & 0x07)):
+                flags |= FLAG_ZERO
+            registers['f'] = flags
+            registers['m'] = 2
+            return
+
         op, args = self.cb_table[i]
         if args:
             op(*args)

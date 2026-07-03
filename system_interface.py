@@ -148,6 +148,8 @@ class GbSystemInterface(object):
         self.memory.write_byte(address, value)
         if 0x8000 <= address <= 0x97FF:     # VRAM tile area write
             self.gpu.update_tile(address, value)
+        elif 0xFE00 <= address <= 0xFE9F:
+            self.gpu.invalidate_sprite_cache()
 
     def step(self, m_cycles):
         """Advance the divider and programmable timer by CPU M-cycles."""
@@ -268,6 +270,7 @@ class GbSystemInterface(object):
         values = [self.read_byte(source + offset) for offset in range(0xA0)]
         for offset, value in enumerate(values):
             self.memory.write_byte(0xFE00 + offset, value)
+        self.gpu.invalidate_sprite_cache()
 
     def read_word(self, address):
         """Read a word from memory."""

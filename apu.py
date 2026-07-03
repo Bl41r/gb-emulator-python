@@ -402,6 +402,8 @@ class GbApu(object):
             bool(routing & 0x40),
             bool(routing & 0x80),
         )
+        all_routes = routing == 0xFF
+        shared_routes = (routing & 0x0F) == (routing >> 4)
 
         for index, sample_number in enumerate(
             range(start_sample, end_sample)
@@ -435,23 +437,35 @@ class GbApu(object):
                     bool(routing & 0x40),
                     bool(routing & 0x80),
                 )
+                all_routes = routing == 0xFF
+                shared_routes = (routing & 0x0F) == (routing >> 4)
 
             sample1 = sample_channel1()
             sample2 = sample_channel2()
             sample3 = sample_channel3(memory)
             sample4 = sample_channel4()
-            right = (
-                sample1 * right_routes[0]
-                + sample2 * right_routes[1]
-                + sample3 * right_routes[2]
-                + sample4 * right_routes[3]
-            )
-            left = (
-                sample1 * left_routes[0]
-                + sample2 * left_routes[1]
-                + sample3 * left_routes[2]
-                + sample4 * left_routes[3]
-            )
+            if all_routes:
+                right = left = sample1 + sample2 + sample3 + sample4
+            elif shared_routes:
+                right = left = (
+                    sample1 * right_routes[0]
+                    + sample2 * right_routes[1]
+                    + sample3 * right_routes[2]
+                    + sample4 * right_routes[3]
+                )
+            else:
+                right = (
+                    sample1 * right_routes[0]
+                    + sample2 * right_routes[1]
+                    + sample3 * right_routes[2]
+                    + sample4 * right_routes[3]
+                )
+                left = (
+                    sample1 * left_routes[0]
+                    + sample2 * left_routes[1]
+                    + sample3 * left_routes[2]
+                    + sample4 * left_routes[3]
+                )
             samples[index, 0] = left * left_scale
             samples[index, 1] = right * right_scale
             sequencer_remainder += FRAME_SEQUENCER_HZ
