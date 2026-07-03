@@ -1,5 +1,7 @@
 """DMG audio processing unit implementation."""
 
+from array import array
+
 import numpy as np
 
 
@@ -34,6 +36,31 @@ WAVE_RAM_END = 0xFF3F
 
 DUTY_RATIOS = (0.125, 0.25, 0.5, 0.75)
 NOISE_DIVISORS = (0.5, 1, 2, 3, 4, 5, 6, 7)
+
+
+def _create_noise_jump_tables(width_mode):
+    """Build compact LFSR lookup tables for jumps of 1, 2, 4, ... ticks."""
+    first = array('H')
+    append = first.append
+    for lfsr in range(0x8000):
+        feedback = (lfsr ^ (lfsr >> 1)) & 1
+        advanced = (lfsr >> 1) | (feedback << 14)
+        if width_mode:
+            advanced = (advanced & ~(1 << 6)) | (feedback << 6)
+        append(advanced)
+
+    tables = [first]
+    for _ in range(5):
+        previous = tables[-1]
+        tables.append(array(
+            'H',
+            (previous[previous[lfsr]] for lfsr in range(0x8000)),
+        ))
+    return tuple(tables)
+
+
+NOISE_JUMP_TABLES_15BIT = _create_noise_jump_tables(False)
+NOISE_JUMP_TABLES_7BIT = _create_noise_jump_tables(True)
 
 
 class SquareChannel(object):
@@ -249,18 +276,25 @@ class NoiseChannel(object):
 
         phase = self.phase + self.phase_step
         steps = int(phase)
+        if not steps:
+            self.phase = phase
+            if self.volume == 0:
+                return 0
+            return self.volume if not (self.lfsr & 1) else -self.volume
+
         phase -= steps
         lfsr = self.lfsr
-        if self.width_mode:
-            for _ in range(steps):
-                feedback = (lfsr ^ (lfsr >> 1)) & 1
-                lfsr = (
-                    ((lfsr >> 1) | (feedback << 14)) & ~(1 << 6)
-                ) | (feedback << 6)
-        else:
-            for _ in range(steps):
-                feedback = (lfsr ^ (lfsr >> 1)) & 1
-                lfsr = (lfsr >> 1) | (feedback << 14)
+        tables = (
+            NOISE_JUMP_TABLES_7BIT
+            if self.width_mode
+            else NOISE_JUMP_TABLES_15BIT
+        )
+        jump = 0
+        while steps:
+            if steps & 1:
+                lfsr = tables[jump][lfsr]
+            steps >>= 1
+            jump += 1
         self.phase = phase
         self.lfsr = lfsr
         if self.volume == 0:
@@ -345,7 +379,12 @@ class GbApu(object):
         sample_channel2 = self.channel2.sample
         sample_channel3 = self.channel3.sample
         sample_channel4 = self.channel4.sample
-        clock_frame_sequencer = self._clock_frame_sequencer
+        sequencer_remainder = self.frame_sequencer_remainder
+        sequencer_step = self.frame_sequencer_step
+        channel1 = self.channel1
+        channel2 = self.channel2
+        channel3 = self.channel3
+        channel4 = self.channel4
         memory = self.audio_memory
         routing = memory[NR51]
         volume = memory[NR50]
@@ -397,29 +436,45 @@ class GbApu(object):
                     bool(routing & 0x80),
                 )
 
-            channel1 = sample_channel1()
-            channel2 = sample_channel2()
-            channel3 = sample_channel3(memory)
-            channel4 = sample_channel4()
+            sample1 = sample_channel1()
+            sample2 = sample_channel2()
+            sample3 = sample_channel3(memory)
+            sample4 = sample_channel4()
             right = (
-                channel1 * right_routes[0]
-                + channel2 * right_routes[1]
-                + channel3 * right_routes[2]
-                + channel4 * right_routes[3]
+                sample1 * right_routes[0]
+                + sample2 * right_routes[1]
+                + sample3 * right_routes[2]
+                + sample4 * right_routes[3]
             )
             left = (
-                channel1 * left_routes[0]
-                + channel2 * left_routes[1]
-                + channel3 * left_routes[2]
-                + channel4 * left_routes[3]
+                sample1 * left_routes[0]
+                + sample2 * left_routes[1]
+                + sample3 * left_routes[2]
+                + sample4 * left_routes[3]
             )
             samples[index, 0] = left * left_scale
             samples[index, 1] = right * right_scale
-            clock_frame_sequencer()
+            sequencer_remainder += FRAME_SEQUENCER_HZ
+            if sequencer_remainder >= SAMPLE_RATE:
+                sequencer_remainder -= SAMPLE_RATE
+                if sequencer_step in (0, 2, 4, 6):
+                    channel1.clock_length(memory)
+                    channel2.clock_length(memory)
+                    channel3.clock_length(memory)
+                    channel4.clock_length(memory)
+                if sequencer_step in (2, 6):
+                    self._clock_sweep()
+                if sequencer_step == 7:
+                    channel1.clock_envelope()
+                    channel2.clock_envelope()
+                    channel4.clock_envelope()
+                sequencer_step = (sequencer_step + 1) & 7
 
         if event_index:
             del events[:event_index]
         self.frame_start_cycle = frame_end
+        self.frame_sequencer_remainder = sequencer_remainder
+        self.frame_sequencer_step = sequencer_step
 
         # Keep status reads useful after length/envelope processing. Any
         # writes queued just beyond this frame will update it on their own.

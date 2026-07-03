@@ -449,6 +449,37 @@ class GbGpu(object):
         scanrow = self._scanrow
         tile_row_codes = self.tile_row_codes
 
+        if not tile_pixel_col and not ((160 - x) & 7):
+            for screen_x in range(x, 160, 8):
+                tile_id = memory[map_row_base + tile_col]
+                if signed_addressing:
+                    tile_id = tile_id - 256 if tile_id > 127 else tile_id
+                    tile_index = 256 + tile_id
+                else:
+                    tile_index = tile_id
+
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                pixels = TILE_ROW_PIXELS[row_code]
+                rgba = row_rgba_cache[row_code]
+                if rgba is None:
+                    row = bytearray(8 * 4)
+                    rgba_offset = 0
+                    for color_index in pixels:
+                        color = palette[color_index]
+                        row[rgba_offset] = color
+                        row[rgba_offset + 1] = color
+                        row[rgba_offset + 2] = color
+                        row[rgba_offset + 3] = 255
+                        rgba_offset += 4
+                    rgba = bytes(row)
+                    row_rgba_cache[row_code] = rgba
+
+                scanrow[screen_x:screen_x + 8] = pixels
+                offset = screen_offset + screen_x * 4
+                screen_data[offset:offset + 32] = rgba
+                tile_col += 1
+            return
+
         while x < 160:
             tile_id = memory[map_row_base + tile_col]
             if signed_addressing:
