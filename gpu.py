@@ -73,6 +73,9 @@ class GbGpu(object):
         self._mode_clock = 0
         self._window_line = 0
         self._stat_irq_line = False
+        self._line153_ly_reset = False
+        self._scanline_scroll_x = 0
+        self._scanline_scroll_y = 0
         self.frame_ready = False
         self.screen_data = bytearray([255] * (160 * 144 * 4))
         self.screen_buffer = np.frombuffer(
@@ -136,21 +139,35 @@ class GbGpu(object):
 
                 self._update_stat_register()
         elif linemode == 1:
-            if self._mode_clock >= 456:
-                memory = self.sys_interface.raw_memory
-                self._mode_clock -= 456
-                memory[GPU_LY] = (memory[GPU_LY] + 1) & 0xFF
+            memory = self.sys_interface.raw_memory
+            if (
+                memory[GPU_LY] == 153
+                and not self._line153_ly_reset
+                and self._mode_clock >= 4
+            ):
+                # On DMG hardware LY reads as 0 after the first four dots of
+                # VBlank line 153, before mode 2 for scanline 0 begins.
+                memory[GPU_LY] = 0
+                self._line153_ly_reset = True
+                self._update_stat_register()
 
-                if memory[GPU_LY] > 153:
-                    memory[GPU_LY] = 0  # reset LY
+            if self._mode_clock >= 456:
+                self._mode_clock -= 456
+                if self._line153_ly_reset:
+                    self._line153_ly_reset = False
                     self.linemode = 2   # Switch to OAM mode
                     self._curscan = 0   # Reset scanline render state
                     self._window_line = 0
+                else:
+                    memory[GPU_LY] = (memory[GPU_LY] + 1) & 0xFF
 
                 self._update_stat_register()
         elif linemode == 2:
             if self._mode_clock >= 80:
                 self._mode_clock -= 80
+                memory = self.sys_interface.raw_memory
+                self._scanline_scroll_x = memory[GPU_SCX]
+                self._scanline_scroll_y = memory[GPU_SCY]
                 self.linemode = 3   # Switch to VRAM mode
                 self._update_stat_register()
         else:
@@ -170,6 +187,12 @@ class GbGpu(object):
     def m_cycles_until_mode_transition(self):
         """Return M-cycles remaining before the current PPU mode ends."""
         remaining = GPU_MODE_CYCLES[self.linemode] - self._mode_clock
+        if (
+            self.linemode == 1
+            and not self._line153_ly_reset
+            and self.sys_interface.raw_memory[GPU_LY] == 153
+        ):
+            remaining = min(remaining, 4 - self._mode_clock)
         return max(1, remaining // 4)
 
     def update_tile(self, addr, val):
@@ -309,7 +332,12 @@ class GbGpu(object):
             return
 
         if lcdc & 0x01:
-            self._render_background_scanline(line, lcdc)
+            self._render_background_scanline(
+                line,
+                lcdc,
+                self._scanline_scroll_x,
+                self._scanline_scroll_y,
+            )
         else:
             self._scanrow[:] = self._empty_scanrow
             offset = line * 160 * 4
@@ -330,11 +358,9 @@ class GbGpu(object):
         if lcdc & 0x02:
             self._render_sprite_scanline(line, lcdc)
 
-    def _render_background_scanline(self, line, lcdc):
+    def _render_background_scanline(self, line, lcdc, scroll_x, scroll_y):
         """Render the background and retain its color IDs for OBJ priority."""
         memory = self.sys_interface.raw_memory
-        scroll_y = memory[GPU_SCY]
-        scroll_x = memory[GPU_SCX]
         y = (line + scroll_y) & 0xFF
         tile_row = y >> 3
         tile_pixel_row = y & 7
