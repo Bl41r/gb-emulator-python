@@ -1,9 +1,23 @@
 # gb-emulator-python
-A gameboy emulator implementation written in Python - work in progress
+A Game Boy emulator implementation written in Python — work in progress.
 
-This is a gameboy emulator written in Python.  I am following along loosely with
-http://imrannazar.com/GameBoy-Emulation-in-JavaScript with this guide as
-a reference.
+This emulator began by loosely following
+[GameBoy Emulation in JavaScript](http://imrannazar.com/GameBoy-Emulation-in-JavaScript)
+and has since grown to support playable commercial DMG games, audio, battery
+saves, memory banking, input, and automated CPU regression testing.
+
+## Current status
+
+The following games have been tested through normal gameplay:
+
+| Game | Cartridge hardware | Status |
+| --- | --- | --- |
+| Tetris | ROM only | Playable with graphics, input, and audio |
+| Donkey Kong Land | MBC1 + RAM + battery | Playable; saving and audio work |
+| Pokémon Blue | MBC3 + RAM + battery | Playable; dialogs, saving, and audio work |
+| The Legend of Zelda: Link's Awakening | MBC5 + RAM + battery | Playable; window overlays, raster scrolling, saving, and audio work |
+
+ROM images are not included in this repository.
 
 Python 3.12 is recommended. Create an isolated environment and install the
 runtime dependencies on Windows with:
@@ -104,8 +118,10 @@ written atomically when the emulator exits normally.
 
 Current DMG graphics support includes background tiles, OAM DMA, and 8x8 or
 8x16 sprites with palettes, flips, priority, transparency, and the 10-sprites-
-per-scanline limit. Window rendering is not implemented. OAM DMA currently
-copies immediately rather than modeling its 160 M-cycle CPU bus restriction.
+per-scanline limit. Window rendering, scrolling, LCD STAT interrupts, and the
+line-153 `LY` timing behavior used by raster effects are implemented. OAM DMA
+currently copies immediately rather than modeling its 160 M-cycle CPU bus
+restriction.
 
 Audio support includes all four DMG channels: two square waves, Channel 1
 frequency sweep, programmable wave RAM, and noise/percussion. Length counters,
@@ -117,6 +133,8 @@ continuous SDL audio streaming are also implemented.
 `doctor_suite.py` runs Blargg's 11 individual `cpu_instrs` ROMs headlessly
 and compares every CPU state with Gameboy Doctor's reference traces. It stops
 each ROM automatically on success, the first mismatch, or an emulator error.
+Run this suite before and after CPU, memory, timer, interrupt, or PPU timing
+changes.
 
 Download the two upstream repositories into the ignored `test-roms` directory:
 
