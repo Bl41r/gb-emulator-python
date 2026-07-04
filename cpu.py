@@ -1456,19 +1456,20 @@ class GbZ80Cpu(object):
 
     def _cp_hl(self):
         """Compare A with the byte at HL."""
-        address = (self.registers['h'] << 8) | self.registers['l']
-        value = self.read8(address)
-        result = self.registers['a'] - value
-
-        self.registers['f'] = FLAG['sub']
-        if (result & 0xFF) == 0:
-            self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] & 0x0F) < (value & 0x0F):
-            self.registers['f'] |= FLAG['half-carry']
+        registers = self.registers
+        address = (registers['h'] << 8) | registers['l']
+        value = self.sys_interface.read_byte(address)
+        a = registers['a']
+        result = a - value
+        flags = FLAG['sub']
+        if result == 0:
+            flags |= FLAG_ZERO
+        if (a & 0x0F) < (value & 0x0F):
+            flags |= FLAG_HALF_CARRY
         if result < 0:
-            self.registers['f'] |= FLAG['carry']
-
-        self.registers['m'] = 2
+            flags |= FLAG_CARRY
+        registers['f'] = flags
+        registers['m'] = 2
 
     def _add_n(self):
         """Add immediate 8-bit value to A."""
