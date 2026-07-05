@@ -126,6 +126,10 @@ class GbSystemInterface(object):
             self.gpu.write_stat(value)
             return
 
+        if address == 0xFF40:
+            self.gpu.write_lcdc(value)
+            return
+
         if address == 0xFF45:
             self.gpu.write_lyc(value)
             return
@@ -230,6 +234,8 @@ class GbSystemInterface(object):
         if 0xA000 <= address <= 0xBFFF:
             cartridge = self.cartridge
             if cartridge:
+                if cartridge.has_mbc2:
+                    return cartridge.read(address)
                 if not cartridge.ram or not cartridge.ram_enabled:
                     return 0xFF
                 offset = (

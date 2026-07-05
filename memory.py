@@ -70,10 +70,12 @@ class GbMemory(object):
         self.write_byte(address + 1, high)
 
     def reset_memory(self):
-        """Reset all memory slots to 0."""
+        """Reset memory to the DMG state expected after the boot ROM."""
         for i in range(self.mem_size):
             self.memory[i] = 0
         self.cartridge_type = 0
+        if not self.gb_doctor_test_mode:
+            self.initialize_memory()
 
     def initialize_memory(self):
         initial_values = {

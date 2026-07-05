@@ -123,6 +123,9 @@ class GbGpu(object):
 
     def step(self, m):
         """Perform one step."""
+        if not (self.sys_interface.raw_memory[GPU_LCDC] & 0x80):
+            return
+
         self._mode_clock += m
         linemode = self.linemode
         if linemode == 0:
@@ -188,6 +191,9 @@ class GbGpu(object):
 
     def m_cycles_until_mode_transition(self):
         """Return M-cycles remaining before the current PPU mode ends."""
+        if not (self.sys_interface.raw_memory[GPU_LCDC] & 0x80):
+            return 0x10000
+
         remaining = GPU_MODE_CYCLES[self.linemode] - self._mode_clock
         if (
             self.linemode == 1
@@ -330,6 +336,29 @@ class GbGpu(object):
         """Update writable STAT interrupt-enable bits."""
         memory = self.sys_interface.raw_memory
         memory[GPU_STAT] = (value & 0xF8) | (memory[GPU_STAT] & 0x07)
+        self._update_stat_register()
+
+    def write_lcdc(self, value):
+        """Apply LCD enable and disable state transitions."""
+        memory = self.sys_interface.raw_memory
+        was_enabled = bool(memory[GPU_LCDC] & 0x80)
+        is_enabled = bool(value & 0x80)
+        memory[GPU_LCDC] = value
+
+        if was_enabled == is_enabled:
+            return
+
+        self._mode_clock = 0
+        self._curscan = 0
+        self._window_line = 0
+        self._line153_ly_reset = False
+        memory[GPU_LY] = 0
+
+        # Disabling the LCD immediately resets the PPU to mode 0. Enabling
+        # it begins a new frame in the OAM-search phase for scanline zero.
+        self.linemode = 2 if is_enabled else 0
+        if not is_enabled:
+            self.frame_ready = False
         self._update_stat_register()
 
     def write_lyc(self, value):

@@ -14,6 +14,8 @@ The following games have been tested through normal gameplay:
 | --- | --- | --- |
 | Tetris | ROM only | Playable with graphics, input, and audio |
 | Donkey Kong Land | MBC1 + RAM + battery | Playable; saving and audio work |
+| Final Fantasy Adventure | MBC2 + battery | Playable; MBC2 banking and saving work |
+| Kirby's Pinball Land | MBC2 + battery | Playable; graphics, banking, and saving work |
 | Pokémon Blue | MBC3 + RAM + battery | Playable; dialogs, saving, and audio work |
 | The Legend of Zelda: Link's Awakening | MBC5 + RAM + battery | Playable; window overlays, raster scrolling, saving, and audio work |
 
@@ -110,6 +112,7 @@ Supported cartridge hardware:
 - ROM-only cartridges (`0x00`, `0x08`, `0x09`)
 - MBC1 cartridges (`0x01`, `0x02`, `0x03`)
 - MBC1 ROM and external RAM banking modes
+- MBC2 cartridges (`0x05`, `0x06`) with mirrored 512×4-bit internal RAM
 - MBC3 cartridges without a real-time clock (`0x11`, `0x12`, `0x13`)
 - MBC5 cartridges (`0x19` through `0x1E`), including rumble bank masks
 
@@ -119,9 +122,10 @@ written atomically when the emulator exits normally.
 Current DMG graphics support includes background tiles, OAM DMA, and 8x8 or
 8x16 sprites with palettes, flips, priority, transparency, and the 10-sprites-
 per-scanline limit. Window rendering, scrolling, LCD STAT interrupts, and the
-line-153 `LY` timing behavior used by raster effects are implemented. OAM DMA
-currently copies immediately rather than modeling its 160 M-cycle CPU bus
-restriction.
+line-153 `LY` timing behavior used by raster effects are implemented. LCD
+enable and disable transitions reset the PPU state and suppress scanline and
+VBlank activity while the display is off. OAM DMA currently copies immediately
+rather than modeling its 160 M-cycle CPU bus restriction.
 
 Audio support includes all four DMG channels: two square waves, Channel 1
 frequency sweep, programmable wave RAM, and noise/percussion. Length counters,
@@ -154,4 +158,3 @@ Run selected ROM numbers:
 ```powershell
 python doctor_suite.py 1 5 10
 ```
-

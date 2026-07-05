@@ -3,17 +3,22 @@
 
 ROM_ONLY_TYPES = {0x00, 0x08, 0x09}
 MBC1_TYPES = {0x01, 0x02, 0x03}
+MBC2_TYPES = {0x05, 0x06}
 MBC3_TYPES = {0x11, 0x12, 0x13}
 MBC5_TYPES = {0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E}
 MBC5_RUMBLE_TYPES = {0x1C, 0x1D, 0x1E}
-BATTERY_TYPES = {0x03, 0x09, 0x13, 0x1B, 0x1E}
-SUPPORTED_TYPES = ROM_ONLY_TYPES | MBC1_TYPES | MBC3_TYPES | MBC5_TYPES
+BATTERY_TYPES = {0x03, 0x06, 0x09, 0x13, 0x1B, 0x1E}
+SUPPORTED_TYPES = (
+    ROM_ONLY_TYPES | MBC1_TYPES | MBC2_TYPES | MBC3_TYPES | MBC5_TYPES
+)
 
 CARTRIDGE_TYPE_NAMES = {
     0x00: "ROM ONLY",
     0x01: "MBC1",
     0x02: "MBC1+RAM",
     0x03: "MBC1+RAM+BATTERY",
+    0x05: "MBC2",
+    0x06: "MBC2+BATTERY",
     0x08: "ROM+RAM",
     0x09: "ROM+RAM+BATTERY",
     0x11: "MBC3",
@@ -38,7 +43,7 @@ RAM_SIZE_BYTES = {
 
 
 class Cartridge:
-    """A loaded ROM-only, MBC1, MBC3, or MBC5 cartridge."""
+    """A loaded ROM-only, MBC1, MBC2, MBC3, or MBC5 cartridge."""
 
     ROM_BANK_SIZE = 0x4000
     RAM_BANK_SIZE = 0x2000
@@ -52,6 +57,7 @@ class Cartridge:
         self.rom_size_code = self.rom[0x0148]
         self.ram_size_code = self.rom[0x0149]
         self.has_mbc1 = self.cartridge_type in MBC1_TYPES
+        self.has_mbc2 = self.cartridge_type in MBC2_TYPES
         self.has_mbc3 = self.cartridge_type in MBC3_TYPES
         self.has_mbc5 = self.cartridge_type in MBC5_TYPES
         self.has_mbc5_rumble = self.cartridge_type in MBC5_RUMBLE_TYPES
@@ -77,7 +83,7 @@ class Cartridge:
                     self.ram_size_code
                 )
             )
-        self.ram = bytearray(ram_size)
+        self.ram = bytearray(0x200 if self.has_mbc2 else ram_size)
         self.ram_dirty = False
 
         self.ram_enabled = self.cartridge_type in {0x08, 0x09}
@@ -107,6 +113,10 @@ class Cartridge:
         return self.has_mbc5
 
     @property
+    def is_mbc2(self):
+        return self.has_mbc2
+
+    @property
     def is_mbc3(self):
         return self.has_mbc3
 
@@ -118,6 +128,8 @@ class Cartridge:
         if 0xA000 <= address <= 0xBFFF:
             if not self.ram or not self.ram_enabled:
                 return 0xFF
+            if self.has_mbc2:
+                return 0xF0 | self.ram[(address - 0xA000) & 0x01FF]
             offset = self.active_ram_offset + (address - 0xA000)
             return self.ram[offset] if offset < len(self.ram) else 0xFF
 
@@ -132,6 +144,13 @@ class Cartridge:
         if 0xA000 <= address <= 0xBFFF:
             if not self.ram or not self.ram_enabled:
                 return
+            if self.has_mbc2:
+                offset = (address - 0xA000) & 0x01FF
+                value &= 0x0F
+                if self.ram[offset] != value:
+                    self.ram[offset] = value
+                    self.ram_dirty = True
+                return
             offset = self.active_ram_offset + (address - 0xA000)
             if offset < len(self.ram):
                 if self.ram[offset] != value:
@@ -139,7 +158,12 @@ class Cartridge:
                     self.ram_dirty = True
             return
 
-        if not (self.has_mbc1 or self.has_mbc3 or self.has_mbc5):
+        if not (
+            self.has_mbc1
+            or self.has_mbc2
+            or self.has_mbc3
+            or self.has_mbc5
+        ):
             return
 
         old_mapping = self._rom_mapping()
@@ -148,6 +172,8 @@ class Cartridge:
             self._write_mbc5_control(address, value)
         elif self.has_mbc3:
             self._write_mbc3_control(address, value)
+        elif self.has_mbc2:
+            self._write_mbc2_control(address, value)
         elif 0x0000 <= address <= 0x1FFF:
             self.ram_enabled = (value & 0x0F) == 0x0A
         elif 0x2000 <= address <= 0x3FFF:
@@ -189,6 +215,16 @@ class Cartridge:
         elif 0x4000 <= address <= 0x5FFF:
             self.secondary_bank = value
 
+    def _write_mbc2_control(self, address, value):
+        if not 0x0000 <= address <= 0x3FFF:
+            return
+        if address & 0x0100:
+            self.rom_bank = value & 0x0F
+            if self.rom_bank == 0:
+                self.rom_bank = 1
+        else:
+            self.ram_enabled = (value & 0x0F) == 0x0A
+
     def _write_mbc5_control(self, address, value):
         if 0x0000 <= address <= 0x1FFF:
             self.ram_enabled = (value & 0x0F) == 0x0A
@@ -210,6 +246,9 @@ class Cartridge:
         self.ram[:count] = data[:count]
         if count < len(self.ram):
             self.ram[count:] = bytes(len(self.ram) - count)
+        if self.has_mbc2:
+            for index, value in enumerate(self.ram):
+                self.ram[index] = value & 0x0F
         self.ram_dirty = False
 
     def _rom_mapping(self):
