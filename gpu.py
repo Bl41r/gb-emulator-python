@@ -203,6 +203,26 @@ class GbGpu(object):
             remaining = min(remaining, 4 - self._mode_clock)
         return max(1, remaining // 4)
 
+    def read_ly_at_cpu_bus(self):
+        """Return LY as sampled during the final cycle of an LDH read."""
+        memory = self.sys_interface.raw_memory
+        line = memory[GPU_LY]
+        if not (memory[GPU_LCDC] & 0x80):
+            return 0
+
+        # LDH A,(a8) fetches its opcode and operand before sampling the I/O
+        # register. Account for those first two M-cycles without advancing
+        # the PPU early or splitting every instruction into individual dots.
+        mode_clock = self._mode_clock + 8
+        if self.linemode == 0 and mode_clock >= 204:
+            return (line + 1) & 0xFF
+        if self.linemode == 1:
+            if line == 153 and not self._line153_ly_reset and mode_clock >= 4:
+                return 0
+            if mode_clock >= 456 and not self._line153_ly_reset:
+                return (line + 1) & 0xFF
+        return line
+
     def update_tile(self, addr, val):
         """Update a tile.
 

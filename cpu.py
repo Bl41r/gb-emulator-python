@@ -1091,6 +1091,8 @@ class GbZ80Cpu(object):
             registers['a'] = sys_interface.joypad.read()
         elif self.gb_doctor_test_mode and n == 0x44:
             registers['a'] = 0x90
+        elif n == 0x44:
+            registers['a'] = sys_interface.gpu.read_ly_at_cpu_bus()
         else:
             registers['a'] = sys_interface.raw_memory[0xFF00 + n]
         registers['pc'] = pc + 1
