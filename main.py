@@ -57,6 +57,7 @@ def main(
     input_script=None,
     uncapped=False,
     audio=True,
+    volume=10,
     opcode_stats=False,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
@@ -95,7 +96,7 @@ def main(
         pygame.display.set_caption(caption)
         if audio_enabled:
             try:
-                audio_output = PygameAudioOutput()
+                audio_output = PygameAudioOutput(volume / 100.0)
             except pygame.error as error:
                 print(f"Audio disabled: {error}")
                 audio_enabled = False
@@ -215,9 +216,10 @@ def handle_events(sys_interface):
 class PygameAudioOutput(object):
     """Feed a continuous SDL audio stream from a thread-safe byte ring."""
 
-    def __init__(self):
+    def __init__(self, volume=0.10):
         pygame.mixer.quit()
         init_subsystem(INIT_AUDIO)
+        self.volume = volume
         device_names = get_audio_device_names(False)
         device_name = device_names[0] if device_names else None
         self.chunks = deque()
@@ -242,7 +244,15 @@ class PygameAudioOutput(object):
         )
 
     def queue(self, samples):
-        chunk = np.ascontiguousarray(samples).tobytes()
+        samples = np.ascontiguousarray(samples)
+        if self.volume != 1.0:
+            np.multiply(
+                samples,
+                self.volume,
+                out=samples,
+                casting="unsafe",
+            )
+        chunk = samples.tobytes()
         should_start = False
         with self.lock:
             self.chunks.append(chunk)
@@ -481,6 +491,13 @@ if __name__ == '__main__':
         help="disable sound output",
     )
     parser.add_argument(
+        "--volume",
+        type=int,
+        default=10,
+        metavar="PERCENT",
+        help="set output volume from 0 to 100 (default: 10)",
+    )
+    parser.add_argument(
         "--input-script",
         help="JSON file of frame-based button events for repeatable profiling",
     )
@@ -496,6 +513,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.frameskip < 1:
         parser.error("--frameskip must be 1 or greater")
+    if not 0 <= args.volume <= 100:
+        parser.error("--volume must be between 0 and 100")
 
     if args.profile:
         profiler = cProfile.Profile()
@@ -511,6 +530,7 @@ if __name__ == '__main__':
                 input_script=args.input_script,
                 uncapped=args.uncapped,
                 audio=not args.no_audio,
+                volume=args.volume,
                 opcode_stats=args.opcode_stats,
             )
         finally:
@@ -530,5 +550,6 @@ if __name__ == '__main__':
             input_script=args.input_script,
             uncapped=args.uncapped,
             audio=not args.no_audio,
+            volume=args.volume,
             opcode_stats=args.opcode_stats,
         )

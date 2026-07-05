@@ -97,6 +97,12 @@ python main.py roms/tetris.gb --uncapped
 
 Use `--no-audio` to retain normal frame pacing without sound.
 
+Output volume defaults to 10 percent. Set it from 0 to 100 with:
+
+```powershell
+python main.py roms/tetris.gb --volume 25
+```
+
 When running with a window, the title bar updates about once per second with
 recent emulated FPS, drawn FPS, and instruction throughput.
 
