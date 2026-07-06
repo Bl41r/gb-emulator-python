@@ -879,20 +879,46 @@ class GbZ80Cpu(object):
 
     def read8(self, address):
         """Return a byte from memory at address."""
+        direct_rom = self.direct_rom
+        if direct_rom is not None and address < self.direct_rom_length:
+            return direct_rom[address]
+        if (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            return self.sys_interface.raw_memory[address]
         return self.sys_interface.read_byte(address)
 
     def write8(self, address, val):
         """Write a byte to memory at address."""
+        if (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            self.sys_interface.raw_memory[address] = val
+            return
         self.sys_interface.write_byte(address, val)
 
     def read16(self, address):
         """Return a word(16-bits) from memory."""
+        direct_rom = self.direct_rom
+        if (
+            direct_rom is not None
+            and address + 1 < self.direct_rom_length
+        ):
+            return direct_rom[address] | (direct_rom[address + 1] << 8)
+        if (
+            0xC000 <= address < 0xFDFF
+            or 0xFF80 <= address < 0xFFFE
+        ):
+            memory = self.sys_interface.raw_memory
+            return memory[address] | (memory[address + 1] << 8)
         return self.sys_interface.read_word(address)
 
     def write16(self, address, val):
         """Write a word to memory at address."""
-        self.sys_interface.write_byte(address, val & 0xFF)
-        self.sys_interface.write_byte(address + 1, (val >> 8) & 0xFF)
+        self.write8(address, val & 0xFF)
+        self.write8((address + 1) & 0xFFFF, (val >> 8) & 0xFF)
 
     @staticmethod
     def signed8(n):
@@ -970,9 +996,16 @@ class GbZ80Cpu(object):
 
     def _ld_rn(self, r):
         """Load mem @ pc into register r."""
-        self.registers[r] = self.read8(self.registers['pc'])
-        self.registers['pc'] += 1
-        self.registers['m'] = 2
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < self.direct_rom_length:
+            value = direct_rom[pc]
+        else:
+            value = self.sys_interface.read_byte(pc)
+        registers[r] = value
+        registers['pc'] = (pc + 1) & 0xFFFF
+        registers['m'] = 2
 
     def _ld_r_hlm(self, r):
         """Load mem @ HL into registers[r]."""
@@ -1005,10 +1038,16 @@ class GbZ80Cpu(object):
 
         address = mem (16-bit) @ registers[pc]
         """
-        address = self.read16(self.registers['pc'])
-        self.write8(address, self.registers['a'])
-        self.registers['pc'] += 2
-        self.registers['m'] = 4
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc + 1 < self.direct_rom_length:
+            address = direct_rom[pc] | (direct_rom[pc + 1] << 8)
+        else:
+            address = self.sys_interface.read_word(pc)
+        self.sys_interface.write_byte(address, registers['a'])
+        registers['pc'] = (pc + 2) & 0xFFFF
+        registers['m'] = 4
 
     def _ld_a_r1r2m(self, r1, r2):
         """Load mem @ r1r2 into registers[a]."""
@@ -1021,10 +1060,16 @@ class GbZ80Cpu(object):
 
         address = mem (16-bit) @ registers[pc]
         """
-        address = self.read16(self.registers['pc'])
-        self.registers['a'] = self.read8(address)
-        self.registers['pc'] += 2
-        self.registers['m'] = 4
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc + 1 < self.direct_rom_length:
+            address = direct_rom[pc] | (direct_rom[pc + 1] << 8)
+        else:
+            address = self.sys_interface.read_word(pc)
+        registers['a'] = self.sys_interface.read_byte(address)
+        registers['pc'] = (pc + 2) & 0xFFFF
+        registers['m'] = 4
 
     def _ld_r1r2_nn(self, r1, r2):
         """Load 16-bit immediate value into two 8-bit registers."""
@@ -1660,22 +1705,18 @@ class GbZ80Cpu(object):
 
     def _dec_r(self, r):
         """Decrement register with correct flags."""
-        val = self.registers[r]
+        registers = self.registers
+        val = registers[r]
         result = (val - 1) & 0xFF
-
-        self.registers[r] = result
-
-        # Preserve Carry flag
-        carry_flag = self.registers['f'] & FLAG['carry']
-        self.registers['f'] = carry_flag | FLAG['sub']  # Always set Subtract flag
-
+        flags = (registers['f'] & FLAG_CARRY) | FLAG['sub']
         if result == 0:
-            self.registers['f'] |= FLAG['zero']
+            flags |= FLAG_ZERO
         if (val & 0xF) == 0:
-            self.registers['f'] |= FLAG['half-carry']
+            flags |= FLAG_HALF_CARRY
 
-        self.registers['m'] = 1
-
+        registers[r] = result
+        registers['f'] = flags
+        registers['m'] = 1
 
     def _inc_r(self, r):
         """Increment register with correct flags."""
