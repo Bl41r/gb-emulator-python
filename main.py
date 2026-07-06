@@ -172,6 +172,7 @@ def main(
                 f"{audio_output.callbacks} callbacks, "
                 f"{audio_output.queued_milliseconds():.1f} ms queued"
             )
+            audio_output.print_underrun_diagnostics()
             audio_output.close()
         if not no_display:
             pygame.quit()
@@ -229,6 +230,14 @@ class PygameAudioOutput(object):
         self.started = False
         self.underruns = 0
         self.callbacks = 0
+        self.start_seconds = time.perf_counter()
+        self.underrun_events = 0
+        self.underrun_bytes = 0
+        self.largest_underrun_bytes = 0
+        self.consecutive_underruns = 0
+        self.longest_underrun_streak = 0
+        self.in_underrun = False
+        self.underrun_event_times = deque(maxlen=8)
         self.prebuffer_bytes = int(
             SAMPLE_RATE * DMG_FRAME_SECONDS * 8
         ) * 4
@@ -285,16 +294,57 @@ class PygameAudioOutput(object):
                     self.chunk_offset = 0
 
             if output_offset < output_length:
-                output[output_offset:output_length] = bytes(
-                    output_length - output_offset
-                )
+                missing_bytes = output_length - output_offset
+                output[output_offset:output_length] = bytes(missing_bytes)
                 if self.started:
                     self.underruns += 1
+                    self.underrun_bytes += missing_bytes
+                    self.largest_underrun_bytes = max(
+                        self.largest_underrun_bytes,
+                        missing_bytes,
+                    )
+                    self.consecutive_underruns += 1
+                    self.longest_underrun_streak = max(
+                        self.longest_underrun_streak,
+                        self.consecutive_underruns,
+                    )
+                    if not self.in_underrun:
+                        self.in_underrun = True
+                        self.underrun_events += 1
+                        self.underrun_event_times.append(
+                            time.perf_counter() - self.start_seconds
+                        )
+            else:
+                self.in_underrun = False
+                self.consecutive_underruns = 0
 
     def queued_milliseconds(self):
         with self.lock:
             queued_bytes = self.queued_bytes
         return queued_bytes / (SAMPLE_RATE * 4) * 1000
+
+    def print_underrun_diagnostics(self):
+        with self.lock:
+            events = self.underrun_events
+            underrun_bytes = self.underrun_bytes
+            largest_bytes = self.largest_underrun_bytes
+            longest_streak = self.longest_underrun_streak
+            event_times = tuple(self.underrun_event_times)
+
+        if not events:
+            print("Audio underrun diagnostics: no starvation detected")
+            return
+
+        bytes_per_millisecond = SAMPLE_RATE * 4 / 1000
+        event_text = ", ".join(f"{seconds:.2f}s" for seconds in event_times)
+        print(
+            "Audio underrun diagnostics: "
+            f"{events} events, "
+            f"{underrun_bytes / bytes_per_millisecond:.1f} ms silence, "
+            f"{largest_bytes / bytes_per_millisecond:.1f} ms largest callback, "
+            f"{longest_streak} callback max streak"
+        )
+        print(f"Recent underrun event times: {event_text}")
 
     def close(self):
         if self.started:

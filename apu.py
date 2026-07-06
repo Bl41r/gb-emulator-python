@@ -9,6 +9,8 @@ DMG_CLOCK_HZ = 4_194_304
 DMG_CYCLES_PER_FRAME = 70_224
 SAMPLE_RATE = 48_000
 FRAME_SEQUENCER_HZ = 512
+DMG_HIGH_PASS_CHARGE = 0.999958 ** (DMG_CLOCK_HZ / SAMPLE_RATE)
+HIGH_PASS_COEFFICIENTS = {}
 
 NR10 = 0xFF10
 NR11 = 0xFF11
@@ -63,6 +65,51 @@ NOISE_JUMP_TABLES_15BIT = _create_noise_jump_tables(False)
 NOISE_JUMP_TABLES_7BIT = _create_noise_jump_tables(True)
 
 
+def _high_pass_coefficients(sample_count):
+    """Return cached DMG capacitor coefficients for a block of samples."""
+    powers = HIGH_PASS_COEFFICIENTS.get(sample_count)
+    if powers is None:
+        indexes = np.arange(sample_count, dtype=np.float64)
+        powers = DMG_HIGH_PASS_CHARGE ** (indexes + 1.0)
+        HIGH_PASS_COEFFICIENTS[sample_count] = powers
+    return powers
+
+
+def _apply_high_pass(samples, enabled, left_capacitor, right_capacitor):
+    """Apply the DMG output capacitors, preserving state while disconnected."""
+    output = np.zeros(samples.shape, dtype=np.float64)
+    transitions = np.flatnonzero(enabled[1:] != enabled[:-1]) + 1
+    boundaries = (0, *transitions, len(enabled))
+    capacitors = [left_capacitor, right_capacitor]
+
+    for boundary_index in range(len(boundaries) - 1):
+        start = boundaries[boundary_index]
+        end = boundaries[boundary_index + 1]
+        if not enabled[start]:
+            continue
+
+        sample_count = end - start
+        powers = _high_pass_coefficients(sample_count)
+        for channel in (0, 1):
+            channel_input = samples[start:end, channel].astype(
+                np.float64,
+                copy=False,
+            )
+            capacitor_values = powers * (
+                capacitors[channel]
+                + (1.0 - DMG_HIGH_PASS_CHARGE)
+                * np.cumsum(channel_input / powers)
+            )
+            channel_output = output[start:end, channel]
+            channel_output[:] = channel_input
+            channel_output[0] -= capacitors[channel]
+            channel_output[1:] -= capacitor_values[:-1]
+            capacitors[channel] = capacitor_values[-1]
+
+    np.clip(output, -32768, 32767, out=output)
+    return output.astype(np.int16), capacitors[0], capacitors[1]
+
+
 class SquareChannel(object):
     """One DMG pulse channel."""
 
@@ -72,6 +119,7 @@ class SquareChannel(object):
         self.frequency_low = frequency_low
         self.control = control
         self.enabled = False
+        self.dac_enabled = False
         self.phase = 0.0
         self.phase_step = 0.0
         self.length_counter = 0
@@ -99,7 +147,8 @@ class SquareChannel(object):
     def trigger(self, memory):
         """Restart the channel from its current register settings."""
         envelope = memory[self.envelope_address]
-        if not envelope & 0xF8:
+        self.dac_enabled = bool(envelope & 0xF8)
+        if not self.dac_enabled:
             self.enabled = False
             return
 
@@ -139,14 +188,16 @@ class SquareChannel(object):
             self.volume -= 1
 
     def sample(self):
-        if not self.enabled or self.volume == 0:
+        if not self.dac_enabled:
             return 0
 
-        value = self.volume if self.phase < self.duty_ratio else -self.volume
-        self.phase += self.phase_step
-        if self.phase >= 1.0:
-            self.phase -= int(self.phase)
-        return value
+        digital = 0
+        if self.enabled:
+            digital = self.volume if self.phase < self.duty_ratio else 0
+            self.phase += self.phase_step
+            if self.phase >= 1.0:
+                self.phase -= int(self.phase)
+        return 15 - digital * 2
 
 
 class WaveChannel(object):
@@ -154,6 +205,7 @@ class WaveChannel(object):
 
     def __init__(self):
         self.enabled = False
+        self.dac_enabled = False
         self.phase = 0.0
         self.phase_step = 0.0
         self.length_counter = 0
@@ -168,7 +220,8 @@ class WaveChannel(object):
         )
 
     def trigger(self, memory):
-        if not memory[NR30] & 0x80:
+        self.dac_enabled = bool(memory[NR30] & 0x80)
+        if not self.dac_enabled:
             self.enabled = False
             return
         self.enabled = True
@@ -189,22 +242,27 @@ class WaveChannel(object):
                 self.enabled = False
 
     def sample(self, memory):
-        if not self.enabled:
+        if not self.dac_enabled:
             return 0
 
-        phase = self.phase
-        sample_index = int(phase) & 31
-        packed = memory[WAVE_RAM_START + (sample_index >> 1)]
-        sample = packed >> 4 if not (sample_index & 1) else packed & 0x0F
-        phase += self.phase_step
-        if phase >= 32.0:
-            phase %= 32.0
-        self.phase = phase
+        digital = 0
+        if self.enabled:
+            phase = self.phase
+            sample_index = int(phase) & 31
+            packed = memory[WAVE_RAM_START + (sample_index >> 1)]
+            digital = (
+                packed >> 4
+                if not (sample_index & 1)
+                else packed & 0x0F
+            )
+            phase += self.phase_step
+            if phase >= 32.0:
+                phase %= 32.0
+            self.phase = phase
 
-        level = (memory[NR32] >> 5) & 0x03
-        if level == 0:
-            return 0
-        return (sample * 2 - 15) >> (level - 1)
+            level = (memory[NR32] >> 5) & 0x03
+            digital = digital >> (level - 1) if level else 0
+        return 15 - digital * 2
 
 
 class NoiseChannel(object):
@@ -212,6 +270,7 @@ class NoiseChannel(object):
 
     def __init__(self):
         self.enabled = False
+        self.dac_enabled = False
         self.phase = 0.0
         self.phase_step = 0.0
         self.length_counter = 0
@@ -232,7 +291,8 @@ class NoiseChannel(object):
 
     def trigger(self, memory):
         envelope = memory[NR42]
-        if not envelope & 0xF8:
+        self.dac_enabled = bool(envelope & 0xF8)
+        if not self.dac_enabled:
             self.enabled = False
             return
 
@@ -271,16 +331,19 @@ class NoiseChannel(object):
             self.volume -= 1
 
     def sample(self):
-        if not self.enabled:
+        if not self.dac_enabled:
             return 0
 
+        digital = 0
+        if not self.enabled:
+            return 15
         phase = self.phase + self.phase_step
         steps = int(phase)
         if not steps:
             self.phase = phase
-            if self.volume == 0:
-                return 0
-            return self.volume if not (self.lfsr & 1) else -self.volume
+            if self.volume and not (self.lfsr & 1):
+                digital = self.volume
+            return 15 - digital * 2
 
         phase -= steps
         lfsr = self.lfsr
@@ -297,9 +360,9 @@ class NoiseChannel(object):
             jump += 1
         self.phase = phase
         self.lfsr = lfsr
-        if self.volume == 0:
-            return 0
-        return self.volume if not (lfsr & 1) else -self.volume
+        if self.volume and not (lfsr & 1):
+            digital = self.volume
+        return 15 - digital * 2
 
 
 class GbApu(object):
@@ -325,6 +388,8 @@ class GbApu(object):
         self.frame_start_cycle = 0
         self.frame_sequencer_remainder = 0
         self.frame_sequencer_step = 0
+        self.high_pass_left_capacitor = 0.0
+        self.high_pass_right_capacitor = 0.0
 
     def write_register(self, address, value, cycle=0):
         """Record a register write and update CPU-visible channel status."""
@@ -371,6 +436,7 @@ class GbApu(object):
         end_sample = frame_end * SAMPLE_RATE // DMG_CLOCK_HZ
         sample_count = end_sample - start_sample
         samples = np.zeros((sample_count, 2), dtype=np.int16)
+        dac_enabled_data = bytearray(sample_count)
         events = self.events
         event_index = 0
         event_count = len(events)
@@ -388,6 +454,14 @@ class GbApu(object):
         memory = self.audio_memory
         routing = memory[NR51]
         volume = memory[NR50]
+        dacs_enabled = (
+            channel1.dac_enabled
+            or channel2.dac_enabled
+            or channel3.dac_enabled
+            or channel4.dac_enabled
+        )
+        high_pass_left_capacitor = self.high_pass_left_capacitor
+        high_pass_right_capacitor = self.high_pass_right_capacitor
         right_scale = ((volume & 0x07) + 1) * 64
         left_scale = (((volume >> 4) & 0x07) + 1) * 64
         right_routes = (
@@ -409,6 +483,7 @@ class GbApu(object):
             range(start_sample, end_sample)
         ):
             mixer_changed = False
+            dac_changed = False
             if event_index < event_count:
                 sample_cycle_scaled = sample_number * DMG_CLOCK_HZ
                 while (
@@ -419,6 +494,13 @@ class GbApu(object):
                     _, address, value = events[event_index]
                     apply_register(address, value)
                     mixer_changed |= address in (NR50, NR51)
+                    dac_changed |= address in (
+                        NR12,
+                        NR22,
+                        NR30,
+                        NR42,
+                        NR52,
+                    )
                     event_index += 1
             if mixer_changed:
                 routing = memory[NR51]
@@ -439,6 +521,13 @@ class GbApu(object):
                 )
                 all_routes = routing == 0xFF
                 shared_routes = (routing & 0x0F) == (routing >> 4)
+            if dac_changed:
+                dacs_enabled = (
+                    channel1.dac_enabled
+                    or channel2.dac_enabled
+                    or channel3.dac_enabled
+                    or channel4.dac_enabled
+                )
 
             sample1 = sample_channel1()
             sample2 = sample_channel2()
@@ -468,6 +557,7 @@ class GbApu(object):
                 )
             samples[index, 0] = left * left_scale
             samples[index, 1] = right * right_scale
+            dac_enabled_data[index] = dacs_enabled
             sequencer_remainder += FRAME_SEQUENCER_HZ
             if sequencer_remainder >= SAMPLE_RATE:
                 sequencer_remainder -= SAMPLE_RATE
@@ -489,6 +579,18 @@ class GbApu(object):
         self.frame_start_cycle = frame_end
         self.frame_sequencer_remainder = sequencer_remainder
         self.frame_sequencer_step = sequencer_step
+        (
+            samples,
+            high_pass_left_capacitor,
+            high_pass_right_capacitor,
+        ) = _apply_high_pass(
+            samples,
+            np.frombuffer(dac_enabled_data, dtype=np.uint8) != 0,
+            high_pass_left_capacitor,
+            high_pass_right_capacitor,
+        )
+        self.high_pass_left_capacitor = high_pass_left_capacitor
+        self.high_pass_right_capacitor = high_pass_right_capacitor
 
         # Keep status reads useful after length/envelope processing. Any
         # writes queued just beyond this frame will update it on their own.
@@ -511,6 +613,10 @@ class GbApu(object):
                 self.channel2.enabled = False
                 self.channel3.enabled = False
                 self.channel4.enabled = False
+                self.channel1.dac_enabled = False
+                self.channel2.dac_enabled = False
+                self.channel3.dac_enabled = False
+                self.channel4.dac_enabled = False
                 self.sweep_enabled = False
                 for register in range(NR10, NR52):
                     memory[register] = 0
@@ -522,7 +628,8 @@ class GbApu(object):
         if address in (NR11, NR13):
             self.channel1.refresh(memory)
         elif address == NR12:
-            if not value & 0xF8:
+            self.channel1.dac_enabled = bool(value & 0xF8)
+            if not self.channel1.dac_enabled:
                 self.channel1.enabled = False
         elif address == NR14:
             if value & 0x80:
@@ -533,7 +640,8 @@ class GbApu(object):
         elif address in (NR21, NR23):
             self.channel2.refresh(memory)
         elif address == NR22:
-            if not value & 0xF8:
+            self.channel2.dac_enabled = bool(value & 0xF8)
+            if not self.channel2.dac_enabled:
                 self.channel2.enabled = False
         elif address == NR24:
             if value & 0x80:
@@ -541,8 +649,10 @@ class GbApu(object):
             else:
                 self.channel2.refresh(memory)
         elif address in (NR30, NR31, NR32, NR33):
-            if address == NR30 and not value & 0x80:
-                self.channel3.enabled = False
+            if address == NR30:
+                self.channel3.dac_enabled = bool(value & 0x80)
+                if not self.channel3.dac_enabled:
+                    self.channel3.enabled = False
             if address == NR33:
                 self.channel3.refresh(memory)
         elif address == NR34:
@@ -551,8 +661,10 @@ class GbApu(object):
             else:
                 self.channel3.refresh(memory)
         elif address in (NR41, NR42, NR43):
-            if address == NR42 and not value & 0xF8:
-                self.channel4.enabled = False
+            if address == NR42:
+                self.channel4.dac_enabled = bool(value & 0xF8)
+                if not self.channel4.dac_enabled:
+                    self.channel4.enabled = False
             if address == NR43:
                 self.channel4.refresh(memory)
         elif address == NR44:
