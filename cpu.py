@@ -136,6 +136,28 @@ FLAG_CARRY = 0x10
 CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
 my_counter = 0
 
+
+def _build_cp_flag_table():
+    """Return flags for CP A,value indexed by ``(A << 8) | value``."""
+    table = bytearray(0x10000)
+    for a in range(0x100):
+        base = a << 8
+        for value in range(0x100):
+            result = a - value
+            flags = FLAG['sub']
+            if result == 0:
+                flags |= FLAG_ZERO
+            if (a & 0x0F) < (value & 0x0F):
+                flags |= FLAG_HALF_CARRY
+            if result < 0:
+                flags |= FLAG_CARRY
+            table[base | value] = flags
+    return table
+
+
+CP_FLAG_TABLE = _build_cp_flag_table()
+
+
 class ExecutionHalted(Exception):
     """Raised when execution should stop."""
     pass
@@ -1483,23 +1505,15 @@ class GbZ80Cpu(object):
 
     def _cp_n(self, n):
         """Compare register A with n."""
+        registers = self.registers
         if n == 'pc':
-            value = self.read8(self.registers['pc'])
-            self.registers['pc'] += 1
+            value = self.read8(registers['pc'])
+            registers['pc'] += 1
         else:
-            value = self.registers[n]
+            value = registers[n]
 
-        result = self.registers['a'] - value
-        self.registers['f'] = FLAG['sub']
-
-        if (result & 0xFF) == 0:
-            self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] & 0xF) < (value & 0xF):
-            self.registers['f'] |= FLAG['half-carry']
-        if result < 0:
-            self.registers['f'] |= FLAG['carry']
-
-        self.registers['m'] = 2
+        registers['f'] = CP_FLAG_TABLE[(registers['a'] << 8) | value]
+        registers['m'] = 2
 
     def _cp_hl(self):
         """Compare A with the byte at HL."""
@@ -1507,15 +1521,7 @@ class GbZ80Cpu(object):
         address = (registers['h'] << 8) | registers['l']
         value = self.sys_interface.read_byte(address)
         a = registers['a']
-        result = a - value
-        flags = FLAG['sub']
-        if result == 0:
-            flags |= FLAG_ZERO
-        if (a & 0x0F) < (value & 0x0F):
-            flags |= FLAG_HALF_CARRY
-        if result < 0:
-            flags |= FLAG_CARRY
-        registers['f'] = flags
+        registers['f'] = CP_FLAG_TABLE[(a << 8) | value]
         registers['m'] = 2
 
     def _add_n(self):
