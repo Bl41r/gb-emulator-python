@@ -122,6 +122,7 @@ def main(
     instructions = 0
     pace_frames = not no_display and not uncapped
     next_frame_deadline = stats['start_seconds'] + DMG_FRAME_SECONDS
+    next_audio_cycle = DMG_CYCLES_PER_FRAME
 
     try:
         while True:
@@ -131,11 +132,29 @@ def main(
                 gpu.frame_ready = False
                 stats['frames'] += 1
                 stats['instructions'] = instructions
-                apply_scripted_input(sys_interface, scripted_input, stats['frames'])
+                pressed_buttons = apply_scripted_input(
+                    sys_interface,
+                    scripted_input,
+                    stats['frames'],
+                )
                 if not no_display:
-                    handle_events(sys_interface)
-                    if audio_enabled:
-                        audio_output.queue(apu.generate_frame())
+                    pressed_buttons.extend(handle_events(sys_interface))
+                    if pressed_buttons and audio_output is not None:
+                        audio_output.start_latency_tracking()
+                    if audio_enabled and audio_output is not None:
+                        cpu_cycle = cpu.clock['m'] * 4
+                        frames_due = (
+                            (cpu_cycle - next_audio_cycle)
+                            // DMG_CYCLES_PER_FRAME
+                            + 1
+                        )
+                        frames_to_drop = max(0, frames_due - 3)
+                        for _ in range(frames_to_drop):
+                            apu.generate_frame()
+                            next_audio_cycle += DMG_CYCLES_PER_FRAME
+                        while cpu_cycle >= next_audio_cycle:
+                            audio_output.queue(apu.generate_frame())
+                            next_audio_cycle += DMG_CYCLES_PER_FRAME
                     if should_draw_frame(stats['frames'], frameskip):
                         draw_start = time.perf_counter()
                         draw_screen(gpu, window)
@@ -172,6 +191,7 @@ def main(
                 f"{audio_output.callbacks} callbacks, "
                 f"{audio_output.queued_milliseconds():.1f} ms queued"
             )
+            audio_output.print_latency_diagnostics()
             audio_output.print_underrun_diagnostics()
             audio_output.close()
         if not no_display:
@@ -199,19 +219,28 @@ def load_input_script(filename):
 
 def apply_scripted_input(sys_interface, scripted_input, frame):
     """Apply all scripted button changes scheduled for a completed frame."""
+    pressed_buttons = []
     for button, pressed in scripted_input.get(frame, ()):
         sys_interface.set_button(button, pressed)
+        if pressed:
+            pressed_buttons.append(button)
+    return pressed_buttons
 
 
 def handle_events(sys_interface):
     """Handle pending pygame events once per displayed frame."""
+    pressed_buttons = []
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             raise ExecutionHalted()
         if event.type in (pygame.KEYDOWN, pygame.KEYUP):
             button = KEY_BINDINGS.get(event.key)
             if button:
-                sys_interface.set_button(button, event.type == pygame.KEYDOWN)
+                pressed = event.type == pygame.KEYDOWN
+                sys_interface.set_button(button, pressed)
+                if pressed:
+                    pressed_buttons.append(button)
+    return pressed_buttons
 
 
 class PygameAudioOutput(object):
@@ -238,6 +267,9 @@ class PygameAudioOutput(object):
         self.longest_underrun_streak = 0
         self.in_underrun = False
         self.underrun_event_times = deque(maxlen=8)
+        self.latency_tracking_started = False
+        self.latency_tracking_start_seconds = None
+        self.max_tracked_queued_bytes = 0
         self.prebuffer_bytes = int(
             SAMPLE_RATE * DMG_FRAME_SECONDS * 8
         ) * 4
@@ -266,11 +298,27 @@ class PygameAudioOutput(object):
         with self.lock:
             self.chunks.append(chunk)
             self.queued_bytes += len(chunk)
+            if (
+                self.latency_tracking_started
+                and self.queued_bytes > self.max_tracked_queued_bytes
+            ):
+                self.max_tracked_queued_bytes = self.queued_bytes
             if not self.started and self.queued_bytes >= self.prebuffer_bytes:
                 self.started = True
                 should_start = True
         if should_start:
             self.device.pause(0)
+
+    def start_latency_tracking(self):
+        """Begin tracking maximum queued audio from gameplay input onward."""
+        with self.lock:
+            if self.latency_tracking_started:
+                return
+            self.latency_tracking_started = True
+            self.latency_tracking_start_seconds = (
+                time.perf_counter() - self.start_seconds
+            )
+            self.max_tracked_queued_bytes = self.queued_bytes
 
     def _callback(self, device, output):
         del device
@@ -345,6 +393,25 @@ class PygameAudioOutput(object):
             f"{longest_streak} callback max streak"
         )
         print(f"Recent underrun event times: {event_text}")
+
+    def print_latency_diagnostics(self):
+        with self.lock:
+            tracking_started = self.latency_tracking_started
+            tracking_start_seconds = self.latency_tracking_start_seconds
+            current_bytes = self.queued_bytes
+            max_bytes = self.max_tracked_queued_bytes
+
+        bytes_per_millisecond = SAMPLE_RATE * 4 / 1000
+        if not tracking_started:
+            print("Audio latency diagnostics: no gameplay input observed")
+            return
+
+        print(
+            "Audio latency diagnostics: "
+            f"tracking since {tracking_start_seconds:.2f}s, "
+            f"{current_bytes / bytes_per_millisecond:.1f} ms queued now, "
+            f"{max_bytes / bytes_per_millisecond:.1f} ms max queued"
+        )
 
     def close(self):
         if self.started:

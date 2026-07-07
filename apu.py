@@ -341,7 +341,7 @@ class NoiseChannel(object):
         steps = int(phase)
         if not steps:
             self.phase = phase
-            if self.volume and not (self.lfsr & 1):
+            if self.volume and self.lfsr & 1:
                 digital = self.volume
             return 15 - digital * 2
 
@@ -360,7 +360,7 @@ class NoiseChannel(object):
             jump += 1
         self.phase = phase
         self.lfsr = lfsr
-        if self.volume and not (lfsr & 1):
+        if self.volume and lfsr & 1:
             digital = self.volume
         return 15 - digital * 2
 
