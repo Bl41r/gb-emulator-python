@@ -215,7 +215,7 @@ class GbZ80Cpu(object):
             8: (self._ld_nn_sp, ()),  # LDnnSP
             9: (self._add_hl_n, ('b', 'c')),  # ADDHLBC
             10: (self._ld_a_r1r2m, ('b', 'c')),  # LDABCm
-            11: (self._dec_r_r, ('b', 'c')),  # DECBC
+            11: (self._dec_bc, ()),  # DECBC
             12: (self._inc_r, ('c',)),  # INCr_c
             13: (self._dec_r, ('c',)),  # DECr_c
             14: (self._ld_rn, ('c',)),  # LDrn_c
@@ -325,7 +325,7 @@ class GbZ80Cpu(object):
             117: (self._ld_hlm_r, ('l',)),  # LDHLmr_l
             118: (self._halt, ()),  # HALT
             119: (self._ld_hlm_r, ('a',)),  # LDHLmr_a
-            120: (self._ld_rr, ('a', 'b')),  # LDrr_ab
+            120: (self._ld_a_b, ()),  # LDrr_ab
             121: (self._ld_rr, ('a', 'c')),  # LDrr_ac
             122: (self._ld_rr, ('a', 'd')),  # LDrr_ad
             123: (self._ld_rr, ('a', 'e')),  # LDrr_ae
@@ -382,7 +382,7 @@ class GbZ80Cpu(object):
             174: (self._xor_hl, ()),  # XORHL
             175: (self._xor_a_n, ('a',)),  # XORr_a
             176: (self._or_n, ('b',)),  # ORr_b
-            177: (self._or_n, ('c',)),  # ORr_c
+            177: (self._or_c, ()),  # ORr_c
             178: (self._or_n, ('d',)),  # ORr_d
             179: (self._or_n, ('e',)),  # ORr_e
             180: (self._or_n, ('h',)),  # ORr_h
@@ -960,6 +960,23 @@ class GbZ80Cpu(object):
             self.cb_opcode_counts[i] += 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
+        if i == 0x46:
+            addr = (registers['h'] << 8) | registers['l']
+            if (
+                0x8000 <= addr <= 0x9FFF
+                or 0xC000 <= addr <= 0xFEFF
+                or 0xFF80 <= addr <= 0xFFFE
+            ):
+                value = self.sys_interface.raw_memory[addr]
+            else:
+                value = self.read8(addr)
+            flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+            if not (value & 0x01):
+                flags |= FLAG_ZERO
+            registers['f'] = flags
+            registers['m'] = 3
+            return
+
         register_index = i & 0x07
         if 0x40 <= i < 0x80 and register_index != 6:
             value = registers[CB_REGISTER_NAMES[register_index]]
@@ -1015,6 +1032,12 @@ class GbZ80Cpu(object):
         """Load value r2 into r1."""
         self.registers[r1] = self.registers[r2]
         self.registers['m'] = 1
+
+    def _ld_a_b(self):
+        """Load B into A, specialized for opcode 0x78."""
+        registers = self.registers
+        registers['a'] = registers['b']
+        registers['m'] = 1
 
     def _ld_rn(self, r):
         """Load mem @ pc into register r."""
@@ -1689,7 +1712,7 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
 
     # INC / DEC
-    def _inc_r_r(self, r1, r2, m=1):
+    def _inc_r_r(self, r1, r2, m=2):
         """Increment registers.
 
         INC HL, INC DE, INC BC
@@ -1699,7 +1722,7 @@ class GbZ80Cpu(object):
             self.registers[r1] = (self.registers[r1] + 1) & 255
         self.registers['m'] = m
 
-    def _dec_r_r(self, r1, r2, m=1):
+    def _dec_r_r(self, r1, r2, m=2):
         """Decrement registers.
 
         DEC HL, DEC DE, DEC BC
@@ -1708,6 +1731,15 @@ class GbZ80Cpu(object):
         if self.registers[r2] == 0xFF:
             self.registers[r1] = (self.registers[r1] - 1) & 255
         self.registers['m'] = m
+
+    def _dec_bc(self):
+        """Decrement BC, specialized for opcode 0x0B."""
+        registers = self.registers
+        c = (registers['c'] - 1) & 0xFF
+        registers['c'] = c
+        if c == 0xFF:
+            registers['b'] = (registers['b'] - 1) & 0xFF
+        registers['m'] = 2
 
     def _dec_r(self, r):
         """Decrement register with correct flags."""
@@ -1747,12 +1779,12 @@ class GbZ80Cpu(object):
     def _inc_sp(self):
         """Increment stack pointer."""
         self.registers['sp'] = (self.registers['sp'] + 1) & 65535
-        self.registers['m'] = 1
+        self.registers['m'] = 2
 
     def _dec_sp(self):
         """Decrement stack pointer."""
         self.registers['sp'] = (self.registers['sp'] - 1) & 65535
-        self.registers['m'] = 1
+        self.registers['m'] = 2
 
     def _inc_hlm(self):
         """Increment the value at memory[HL]."""
@@ -1866,6 +1898,14 @@ class GbZ80Cpu(object):
             self.registers['f'] |= FLAG['zero']
 
         self.registers['m'] = 1
+
+    def _or_c(self):
+        """Logical OR C with A, specialized for opcode 0xB1."""
+        registers = self.registers
+        a = registers['a'] | registers['c']
+        registers['a'] = a
+        registers['f'] = FLAG_ZERO if a == 0 else 0
+        registers['m'] = 1
 
     def _or_hl(self):
         """Logical OR between A and value at memory[HL]."""
@@ -2185,10 +2225,21 @@ class GbZ80Cpu(object):
 
     def _bit_test_hlm(self, bit):
         """Test bit `bit` in value at memory[HL]."""
-        addr = (self.registers['h'] << 8) | self.registers['l']
-        value = self.read8(addr)
-        self.__apply_bit_flags(value, bit)
-        self.registers['m'] = 3
+        registers = self.registers
+        addr = (registers['h'] << 8) | registers['l']
+        if (
+            0x8000 <= addr <= 0x9FFF
+            or 0xC000 <= addr <= 0xFEFF
+            or 0xFF80 <= addr <= 0xFFFE
+        ):
+            value = self.sys_interface.raw_memory[addr]
+        else:
+            value = self.read8(addr)
+        flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+        if not (value & (1 << bit)):
+            flags |= FLAG_ZERO
+        registers['f'] = flags
+        registers['m'] = 3
 
     def __apply_bit_flags(self, value, bit):
         """Apply flags for BIT b,r/m."""
