@@ -24,25 +24,32 @@ attributes.
 
 import array
 
+WATCH_ADDRESSES = {}
 
 class GbMemory(object):
     """Memory of the LC-3 VM."""
 
-    def __init__(self, skip_bios=False):
+    def __init__(self, skip_bios=False, gb_doctor_test_mode=False):
         """Init."""
         self.mem_size = 2**16
         self.memory = array.array('B', [0 for i in range(self.mem_size)])
         self.cartridge_type = 0
         if not skip_bios:
             self.initialize_memory()
+        self.gb_doctor_test_mode = gb_doctor_test_mode
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
+        # === DEBUG: Watch specific address ===
+        # if address in WATCH_ADDRESSES:
+        #     print(f"[MEMORY] WRITE to {address:04X}: {value:02X}")
+        # ======================================
         self.memory[address] = value
-        # self._show_mem_around_addr(address)
 
     def read_byte(self, address):
         """Return a byte from memory at an address."""
+        if address == 0xFF44 and self.gb_doctor_test_mode:
+            return 0x90
         return self.memory[address]
 
     def read_word(self, address):
@@ -51,14 +58,24 @@ class GbMemory(object):
 
     def write_word(self, address, value):
         """Write a word in mem @ address."""
-        self.write_byte(address, value & 255)
-        self.write_byte(address + 1, value >> 8)
+        low = value & 0xFF
+        high = (value >> 8) & 0xFF
+
+        if address in WATCH_ADDRESSES:
+            print(f"[MEMORY] WRITE (low) to {address:04X}: {low:02X}")
+        if (address + 1) in WATCH_ADDRESSES:
+            print(f"[MEMORY] WRITE (high) to {address + 1:04X}: {high:02X}")
+
+        self.write_byte(address, low)
+        self.write_byte(address + 1, high)
 
     def reset_memory(self):
-        """Reset all memory slots to 0."""
+        """Reset memory to the DMG state expected after the boot ROM."""
         for i in range(self.mem_size):
             self.memory[i] = 0
         self.cartridge_type = 0
+        if not self.gb_doctor_test_mode:
+            self.initialize_memory()
 
     def initialize_memory(self):
         initial_values = {

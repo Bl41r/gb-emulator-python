@@ -111,3 +111,8 @@ memdump.txt
 
 .idea/
 *.gb
+*.gbc
+*.sav
+*.stats
+*.txt
+input_scripts/tetris_start.json

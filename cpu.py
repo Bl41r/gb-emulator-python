@@ -5,7 +5,7 @@ The CPU in the original GameBoy is a modified Zilog Z80.
 http://www.devrs.com/gb/files/opcodes.html :
 The GameBoy has instructions & registers similiar to the 8080, 8085, & Z80
 microprocessors. The internal 8-bit registers are A, B, C, D, E, F, H, & L.
-Theses registers may be used in pairs for 16-bit operations as AF, BC, DE, &
+These registers may be used in pairs for 16-bit operations as AF, BC, DE, &
 HL. The two remaining 16-bit registers are the program counter (PC) and the
 stack pointer (SP).
 
@@ -123,7 +123,6 @@ RETI    Return then enable interrupts.  16
 """
 
 # import pdb
-import sys
 
 FLAG = {
     'zero': 0x80,           # Z flag
@@ -131,26 +130,56 @@ FLAG = {
     'half-carry': 0x20,     # H flag
     'carry': 0x10           # C flag
 }
-
+FLAG_ZERO = 0x80
+FLAG_HALF_CARRY = 0x20
+FLAG_CARRY = 0x10
+CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
 my_counter = 0
 
+
+def _build_cp_flag_table():
+    """Return flags for CP A,value indexed by ``(A << 8) | value``."""
+    table = bytearray(0x10000)
+    for a in range(0x100):
+        base = a << 8
+        for value in range(0x100):
+            result = a - value
+            flags = FLAG['sub']
+            if result == 0:
+                flags |= FLAG_ZERO
+            if (a & 0x0F) < (value & 0x0F):
+                flags |= FLAG_HALF_CARRY
+            if result < 0:
+                flags |= FLAG_CARRY
+            table[base | value] = flags
+    return table
+
+
+CP_FLAG_TABLE = _build_cp_flag_table()
 
 
 class ExecutionHalted(Exception):
     """Raised when execution should stop."""
-
     pass
 
 
 class GbZ80Cpu(object):
     """The Z80 CPU class."""
 
-    def __init__(self, log_dump):
+    def __init__(self, log_dump, gb_doctor_test_mode, trace_enabled=False):
         """Initialize an instance."""
+        self.gb_doctor_test_mode = gb_doctor_test_mode
+        self.trace_enabled = trace_enabled
+        self.enable_interrupts_next_cycle = False
+        self.halted = False
         self.clock = {'m': 0}  # Time clock
         self.log_dump = log_dump
-
         self.sys_interface = None    # Set after interface instantiated.
+        self.direct_rom = None
+        self.direct_rom_length = 0
+        self.opcode_counts = None
+        self.cb_opcode_counts = None
+        self.halt_m_cycles = 0
 
         # Register set
         self.registers = {
@@ -186,7 +215,7 @@ class GbZ80Cpu(object):
             8: (self._ld_nn_sp, ()),  # LDnnSP
             9: (self._add_hl_n, ('b', 'c')),  # ADDHLBC
             10: (self._ld_a_r1r2m, ('b', 'c')),  # LDABCm
-            11: (self._dec_r_r, ('b', 'c')),  # DECBC
+            11: (self._dec_bc, ()),  # DECBC
             12: (self._inc_r, ('c',)),  # INCr_c
             13: (self._dec_r, ('c',)),  # DECr_c
             14: (self._ld_rn, ('c',)),  # LDrn_c
@@ -199,7 +228,7 @@ class GbZ80Cpu(object):
             20: (self._inc_r, ('d',)),  # INCr_d
             21: (self._dec_r, ('d',)),  # DECr_d
             22: (self._ld_rn, ('d',)),  # LDrn_d
-            23: (self._raise_opcode_unimplemented, ()),  # RLA
+            23: (self._rla, ()),  # RLA
             24: (self._jr_n, ()),  # JRn
             25: (self._add_hl_n, ('d', 'e')),  # ADDHLDE
             26: (self._ld_a_r1r2m, ('d', 'e')),  # LDADEm
@@ -207,8 +236,8 @@ class GbZ80Cpu(object):
             28: (self._inc_r, ('e',)),  # INCr_e
             29: (self._dec_r, ('e',)),  # DECr_e
             30: (self._ld_rn, ('e',)),  # LDrn_e
-            31: (self._raise_opcode_unimplemented, ()),  # RRA
-            32: (self._jr_cc_n, (FLAG['zero'], 0x00)),  # JRNZn
+            31: (self._rra, ()),  # RRA
+            32: (self._jr_nz_n, ()),  # JRNZn
             33: (self._ld_r1r2_nn, ('h', 'l')),  # LDHLnn
             34: (self._ld_hlmi_a, ()),  # LDHLIA
             35: (self._inc_r_r, ('h', 'l')),  # INCHL
@@ -216,7 +245,7 @@ class GbZ80Cpu(object):
             37: (self._dec_r, ('h',)),  # DECr_h
             38: (self._ld_rn, ('h',)),  # LDrn_h
             39: (self._daa, ()),  # DAA
-            40: (self._jr_cc_n, (FLAG['zero'], FLAG['zero'])),  # JRZn
+            40: (self._jr_z_n, ()),  # JRZn
             41: (self._add_hl_n, ('h', 'l')),  # ADDHLHL
             42: (self._ld_a_hl_i, ()),  # LDAHLI
             43: (self._dec_r_r, ('h', 'l')),  # DECHL
@@ -228,8 +257,8 @@ class GbZ80Cpu(object):
             49: (self._ld_sp_nn, ()),  # LD SP nn
             50: (self._ld_hlmd_a, ()),  # LDHLDA
             51: (self._inc_sp, ()),  # INC SP
-            52: (self._raise_opcode_unimplemented, ()),  # INCHLm
-            53: (self._raise_opcode_unimplemented, ()),  # DECHLm
+            52: (self._inc_hlm, ()),  # INCHLm
+            53: (self._dec_hlm, ()),  # DECHLm
             54: (self._ld_hlm_n, ()),  # LDHLmn
             55: (self._scf, ()),  # SCF
             56: (self._jr_cc_n, (0x10, 0x10)),  # JRCn
@@ -296,7 +325,7 @@ class GbZ80Cpu(object):
             117: (self._ld_hlm_r, ('l',)),  # LDHLmr_l
             118: (self._halt, ()),  # HALT
             119: (self._ld_hlm_r, ('a',)),  # LDHLmr_a
-            120: (self._ld_rr, ('a', 'b')),  # LDrr_ab
+            120: (self._ld_a_b, ()),  # LDrr_ab
             121: (self._ld_rr, ('a', 'c')),  # LDrr_ac
             122: (self._ld_rr, ('a', 'd')),  # LDrr_ad
             123: (self._ld_rr, ('a', 'e')),  # LDrr_ae
@@ -310,7 +339,7 @@ class GbZ80Cpu(object):
             131: (self._add_a_n, ('e',)),  # ADDr_e
             132: (self._add_a_n, ('h',)),  # ADDr_h
             133: (self._add_a_n, ('l',)),  # ADDr_l
-            134: (self._raise_opcode_unimplemented, ()),  # ADDHL
+            134: (self._add_a_hl, ()),  # ADD A,(HL)
             135: (self._add_a_n, ('a',)),  # ADDr_a
             136: (self._adc_a_n, ('b',)),  # ADC A, B
             137: (self._adc_a_n, ('c',)),  # ADC A, C
@@ -334,7 +363,7 @@ class GbZ80Cpu(object):
             155: (self._sub_a_n, ('e',)),  # SBCr_e
             156: (self._sub_a_n, ('h',)),  # SBCr_h
             157: (self._sub_a_n, ('l',)),  # SBCr_l
-            158: (self._raise_opcode_unimplemented, ()),  # SBCHL
+            158: (self._sbc_a_hl, ()),  # SBC A,(HL)
             159: (self._sub_a_n, ('a',)),  # SBCr_a
             160: (self._and_n, ('b',)),  # ANDr_b
             161: (self._and_n, ('c',)),  # ANDr_c
@@ -343,7 +372,7 @@ class GbZ80Cpu(object):
             164: (self._and_n, ('h',)),  # ANDr_h
             165: (self._and_n, ('l',)),  # ANDr_l
             166: (self._and_n, ('hl',)),  # ANDHL
-            167: (self._and_n, ('a',)),  # ANDr_a
+            167: (self._and_a, ()),  # ANDr_a
             168: (self._xor_a_n, ('b',)),  # XORr_b
             169: (self._xor_a_n, ('c',)),  # XORr_c
             170: (self._xor_a_n, ('d',)),  # XORr_d
@@ -353,12 +382,12 @@ class GbZ80Cpu(object):
             174: (self._xor_hl, ()),  # XORHL
             175: (self._xor_a_n, ('a',)),  # XORr_a
             176: (self._or_n, ('b',)),  # ORr_b
-            177: (self._or_n, ('c',)),  # ORr_c
+            177: (self._or_c, ()),  # ORr_c
             178: (self._or_n, ('d',)),  # ORr_d
             179: (self._or_n, ('e',)),  # ORr_e
             180: (self._or_n, ('h',)),  # ORr_h
             181: (self._or_n, ('l',)),  # ORr_l
-            182: (self._raise_opcode_unimplemented, ()),  # ORHL
+            182: (self._or_hl, ()),  # ORHL
             183: (self._or_n, ('a',)),  # ORr_a
             184: (self._cp_n, ('b',)),  # CPr_b
             185: (self._cp_n, ('c',)),  # CPr_c
@@ -366,21 +395,21 @@ class GbZ80Cpu(object):
             187: (self._cp_n, ('e',)),  # CPr_e
             188: (self._cp_n, ('h',)),  # CPr_h
             189: (self._cp_n, ('l',)),  # CPr_l
-            190: (self._raise_opcode_unimplemented, ()),  # CPHL
+            190: (self._cp_hl, ()),  # CP (HL)
             191: (self._cp_n, ('a',)),  # CPr_a
             192: (self._ret_f, (FLAG['zero'], 0x00)),  # RETNZ
             193: (self._pop_nn, ('b', 'c')),  # POPBC
             194: (self._jp_cc_nn, (FLAG['zero'], 0x00)),  # JPNZnn
             195: (self._jp_nn, ()),  # JPnn
-            196: (self._raise_opcode_unimplemented, ()),  # CALLNZnn
+            196: (self._call_cc_nn, (FLAG['zero'], 0x00)),  # CALL NZ,nn
             197: (self._push_nn, ('b', 'c')),  # PUSHBC
-            198: (self._raise_opcode_unimplemented, ()),  # ADDn
+            198: (self._add_n, ()),  # ADDn
             199: (self._rst_n, (0x00,)),  # RST00
             200: (self._ret_f, (FLAG['zero'], FLAG['zero'])),  # RETZ
             201: (self._ret, ()),  # RET
             202: (self._jp_cc_nn, (FLAG['zero'], FLAG['zero'])),  # JPZnn
             203: (self._call_cb_op, ()),  # MAPcb
-            204: (self._raise_opcode_unimplemented, ()),  # CALLZnn
+            204: (self._call_cc_nn, (FLAG['zero'], FLAG['zero'])),  # CALL Z,nn
             205: (self._call_nn, ()),  # CALLnn
             206: (self._adc_n, ()),  # ADCn
             207: (self._rst_n, (0x08,)),  # RST08
@@ -388,17 +417,17 @@ class GbZ80Cpu(object):
             209: (self._pop_nn, ('d', 'e')),  # POPDE
             210: (self._jp_cc_nn, (FLAG['carry'], 0x00)),  # JPNCnn
             211: (self._nop, ()),  # XX
-            212: (self._raise_opcode_unimplemented, ()),  # CALLNCnn
+            212: (self._call_cc_nn, (FLAG['carry'], 0x00)), # CALL NC,nn
             213: (self._push_nn, ('d', 'e')),  # PUSHDE
-            214: (self._raise_opcode_unimplemented, ()),  # SUBn
+            214: (self._sub_n_imm, ()),  # SUBn
             215: (self._rst_n, (FLAG['carry'],)),  # RST10
             216: (self._ret_f, (FLAG['carry'], FLAG['carry'])),  # RETC
             217: (self._reti, ()),  # RETI
             218: (self._jp_cc_nn, (FLAG['carry'], FLAG['carry'])),  # JPCnn
             219: (self._nop, ()),  # XX
-            220: (self._raise_opcode_unimplemented, ()),  # CALLCnn
+            220: (self._call_cc_nn, (FLAG['carry'], FLAG['carry'])), # CALL C,nn
             221: (self._nop, ()),  # XX
-            222: (self._raise_opcode_unimplemented, ()),  # SBCn
+            222: (self._sbc_n, ()),  # SBC A,n
             223: (self._rst_n, (0x18,)),  # RST18
             224: (self._ldh_n_a, ()),  # LDIOnA
             225: (self._pop_nn, ('h', 'l')),  # POPHL
@@ -406,23 +435,23 @@ class GbZ80Cpu(object):
             227: (self._nop, ()),  # XX
             228: (self._nop, ()),  # XX
             229: (self._push_nn, ('h', 'l')),  # PUSHHL
-            230: (self._and_n, ('pc',)),  # ANDn
+            230: (self._and_pc, ()),  # ANDn
             231: (self._rst_n, (FLAG['half-carry'],)),  # RST20
             232: (self._add_sp_n, ()),  # ADDSPn
-            233: (self._raise_opcode_unimplemented, ()),  # JPHL
+            233: (self._jp_hl, ()),  # JPHL
             234: (self._ld_nn_a, ()),  # LD nn A
             235: (self._nop, ()),  # XX
             236: (self._nop, ()),  # XX
             237: (self._nop, ()),  # XX
-            238: (self._raise_opcode_unimplemented, ()),  # ORn
-            239: (self._rst_n, (0x28)),  # RST28
+            238: (self._xor_n_imm, ()),  # ORn
+            239: (self._rst_n, (0x28,)),  # RST28
             240: (self._ldh_a_n, ()),  # LD AIO n
             241: (self._pop_nn, ('a', 'f')),  # POPAF
             242: (self._ld_a_c, ()),  # LDAIOC
             243: (self._di, ()),  # DI
             244: (self._nop, ()),  # XX
             245: (self._push_nn, ('a', 'f')),  # PUSHAF
-            246: (self._xor_n, ()),  # XORn
+            246: (self._or_n_imm, ()),  # ORn
             247: (self._rst_n, (0x30,)),  # RST30
             248: (self._ld_hl_sp_n, ()),  # LD HL SP+n
             249: (self._ld_sp_hl, ()),  # LS SP HL
@@ -441,311 +470,410 @@ class GbZ80Cpu(object):
             3: (self._rlc_n, ['e']),  # RLCr_e
             4: (self._rlc_n, ['h']),  # RLCr_h
             5: (self._rlc_n, ['l']),  # RLCr_l
-            6: (self._raise_cb_op_unimplemented, ['rlchl']),  # RLCHL
+            6: (self._rlc_hlm, ()),  # RLC (HL)
             7: (self._rlc_n, ['a']),  # RLCr_a
-            8: (self._raise_cb_op_unimplemented, ['rrcr_b']),  # RRCr_b
-            9: (self._raise_cb_op_unimplemented, ['rrcr_c']),  # RRCr_c
-            10: (self._raise_cb_op_unimplemented, ['rrcr_d']),  # RRCr_d
-            11: (self._raise_cb_op_unimplemented, ['rrcr_e']),  # RRCr_e
-            12: (self._raise_cb_op_unimplemented, ['rrcr_h']),  # RRCr_h
-            13: (self._raise_cb_op_unimplemented, ['rrcr_l']),  # RRCr_l
-            14: (self._raise_cb_op_unimplemented, ['rrchl']),  # RRCHL
-            15: (self._raise_cb_op_unimplemented, ['rrcr_a']),  # RRCr_a
-            16: (self._raise_cb_op_unimplemented, ['rlr_b']),  # RLr_b
-            17: (self._raise_cb_op_unimplemented, ['rlr_c']),  # RLr_c
-            18: (self._raise_cb_op_unimplemented, ['rlr_d']),  # RLr_d
-            19: (self._raise_cb_op_unimplemented, ['rlr_e']),  # RLr_e
-            20: (self._raise_cb_op_unimplemented, ['rlr_h']),  # RLr_h
-            21: (self._raise_cb_op_unimplemented, ['rlr_l']),  # RLr_l
-            22: (self._raise_cb_op_unimplemented, ['rlhl']),  # RLHL
-            23: (self._raise_cb_op_unimplemented, ['rlr_a']),  # RLr_a
-            24: (self._raise_cb_op_unimplemented, ['rrr_b']),  # RRr_b
-            25: (self._raise_cb_op_unimplemented, ['rrr_c']),  # RRr_c
-            26: (self._raise_cb_op_unimplemented, ['rrr_d']),  # RRr_d
-            27: (self._raise_cb_op_unimplemented, ['rrr_e']),  # RRr_e
-            28: (self._raise_cb_op_unimplemented, ['rrr_h']),  # RRr_h
-            29: (self._raise_cb_op_unimplemented, ['rrr_l']),  # RRr_l
-            30: (self._raise_cb_op_unimplemented, ['rrhl']),  # RRHL
-            31: (self._raise_cb_op_unimplemented, ['rrr_a']),  # RRr_a
-            32: (self._raise_cb_op_unimplemented, ['slar_b']),  # SLAr_b
-            33: (self._raise_cb_op_unimplemented, ['slar_c']),  # SLAr_c
-            34: (self._raise_cb_op_unimplemented, ['slar_d']),  # SLAr_d
-            35: (self._raise_cb_op_unimplemented, ['slar_e']),  # SLAr_e
-            36: (self._raise_cb_op_unimplemented, ['slar_h']),  # SLAr_h
-            37: (self._raise_cb_op_unimplemented, ['slar_l']),  # SLAr_l
-            38: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            39: (self._raise_cb_op_unimplemented, ['slar_a']),  # SLAr_a
-            40: (self._raise_cb_op_unimplemented, ['srar_b']),  # SRAr_b
-            41: (self._raise_cb_op_unimplemented, ['srar_c']),  # SRAr_c
-            42: (self._raise_cb_op_unimplemented, ['srar_d']),  # SRAr_d
-            43: (self._raise_cb_op_unimplemented, ['srar_e']),  # SRAr_e
-            44: (self._raise_cb_op_unimplemented, ['srar_h']),  # SRAr_h
-            45: (self._raise_cb_op_unimplemented, ['srar_l']),  # SRAr_l
-            46: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            47: (self._raise_cb_op_unimplemented, ['srar_a']),  # SRAr_a
+            8: (self._rrc_n, ['b']),  # RRC B
+            9: (self._rrc_n, ['c']),  # RRC C
+            10: (self._rrc_n, ['d']),  # RRC D
+            11: (self._rrc_n, ['e']),  # RRC E
+            12: (self._rrc_n, ['h']),  # RRC H
+            13: (self._rrc_n, ['l']),  # RRC L
+            14: (self._rrc_hlm, ()),  # RRC (HL)
+            15: (self._rrc_n, ['a']),  # RRC A
+            16: (self._rl_n, ['b']),  # RL B
+            17: (self._rl_n, ['c']),  # RL C
+            18: (self._rl_n, ['d']),  # RL D
+            19: (self._rl_n, ['e']),  # RL E
+            20: (self._rl_n, ['h']),  # RL H
+            21: (self._rl_n, ['l']),  # RL L
+            22: (self._rl_hlm, ()),  # RL (HL)
+            23: (self._rl_n, ['a']),  # RL A
+            24: (self._rr_n, ['b']),  # RR B
+            25: (self._rr_n, ['c']),  # RR C
+            26: (self._rr_n, ['d']),  # RR D
+            27: (self._rr_n, ['e']),  # RR E
+            28: (self._rr_n, ['h']),  # RR H
+            29: (self._rr_n, ['l']),  # RR L
+            30: (self._rr_hlm, ()),  # RR (HL)
+            31: (self._rr_n, ['a']),  # RR A
+            32: (self._sla_n, ['b']),  # SLA B
+            33: (self._sla_n, ['c']),  # SLA C
+            34: (self._sla_n, ['d']),  # SLA D
+            35: (self._sla_n, ['e']),  # SLA E
+            36: (self._sla_n, ['h']),  # SLA H
+            37: (self._sla_n, ['l']),  # SLA L
+            38: (self._sla_hlm, ()),  # SLA (HL)
+            39: (self._sla_n, ['a']),  # SLA A
+            40: (self._sra_n, ['b']),  # SRA B
+            41: (self._sra_n, ['c']),  # SRA C
+            42: (self._sra_n, ['d']),  # SRA D
+            43: (self._sra_n, ['e']),  # SRA E
+            44: (self._sra_n, ['h']),  # SRA H
+            45: (self._sra_n, ['l']),  # SRA L
+            46: (self._sra_hlm, ()),  # SRA (HL)
+            47: (self._sra_n, ['a']),  # SRA A
             48: (self._swap_n, ['b']),  # SWAPr_b
             49: (self._swap_n, ['c']),  # SWAPr_c
             50: (self._swap_n, ['d']),  # SWAPr_d
             51: (self._swap_n, ['e']),  # SWAPr_e
             52: (self._swap_n, ['h']),  # SWAPr_h
             53: (self._swap_n, ['l']),  # SWAPr_l
-            54: (self._raise_cb_op_unimplemented, ['xx']),  # XX
+            54: (self._swap_hlm, ()),  # SWAP (HL)
             55: (self._swap_n, ['a']),  # SWAPr_a
-            56: (self._raise_cb_op_unimplemented, ['srlr_b']),  # SRLr_b
-            57: (self._raise_cb_op_unimplemented, ['srlr_c']),  # SRLr_c
-            58: (self._raise_cb_op_unimplemented, ['srlr_d']),  # SRLr_d
-            59: (self._raise_cb_op_unimplemented, ['srlr_e']),  # SRLr_e
-            60: (self._raise_cb_op_unimplemented, ['srlr_h']),  # SRLr_h
-            61: (self._raise_cb_op_unimplemented, ['srlr_l']),  # SRLr_l
-            62: (self._raise_cb_op_unimplemented, ['xx']),  # XX
-            63: (self._raise_cb_op_unimplemented, ['srlr_a']),  # SRLr_a
-            64: (self._raise_cb_op_unimplemented, ['bit0b']),  # BIT0b
-            65: (self._raise_cb_op_unimplemented, ['bit0c']),  # BIT0c
-            66: (self._raise_cb_op_unimplemented, ['bit0d']),  # BIT0d
-            67: (self._raise_cb_op_unimplemented, ['bit0e']),  # BIT0e
-            68: (self._raise_cb_op_unimplemented, ['bit0h']),  # BIT0h
-            69: (self._raise_cb_op_unimplemented, ['bit0l']),  # BIT0l
-            70: (self._raise_cb_op_unimplemented, ['bit0m']),  # BIT0m
-            71: (self._raise_cb_op_unimplemented, ['bit0a']),  # BIT0a
-            72: (self._raise_cb_op_unimplemented, ['bit1b']),  # BIT1b
-            73: (self._raise_cb_op_unimplemented, ['bit1c']),  # BIT1c
-            74: (self._raise_cb_op_unimplemented, ['bit1d']),  # BIT1d
-            75: (self._raise_cb_op_unimplemented, ['bit1e']),  # BIT1e
-            76: (self._raise_cb_op_unimplemented, ['bit1h']),  # BIT1h
-            77: (self._raise_cb_op_unimplemented, ['bit1l']),  # BIT1l
-            78: (self._raise_cb_op_unimplemented, ['bit1m']),  # BIT1m
-            79: (self._raise_cb_op_unimplemented, ['bit1a']),  # BIT1a
-            80: (self._raise_cb_op_unimplemented, ['bit2b']),  # BIT2b
-            81: (self._raise_cb_op_unimplemented, ['bit2c']),  # BIT2c
-            82: (self._raise_cb_op_unimplemented, ['bit2d']),  # BIT2d
-            83: (self._raise_cb_op_unimplemented, ['bit2e']),  # BIT2e
-            84: (self._raise_cb_op_unimplemented, ['bit2h']),  # BIT2h
-            85: (self._raise_cb_op_unimplemented, ['bit2l']),  # BIT2l
-            86: (self._raise_cb_op_unimplemented, ['bit2m']),  # BIT2m
-            87: (self._raise_cb_op_unimplemented, ['bit2a']),  # BIT2a
-            88: (self._raise_cb_op_unimplemented, ['bit3b']),  # BIT3b
-            89: (self._raise_cb_op_unimplemented, ['bit3c']),  # BIT3c
-            90: (self._raise_cb_op_unimplemented, ['bit3d']),  # BIT3d
-            91: (self._raise_cb_op_unimplemented, ['bit3e']),  # BIT3e
-            92: (self._raise_cb_op_unimplemented, ['bit3h']),  # BIT3h
-            93: (self._raise_cb_op_unimplemented, ['bit3l']),  # BIT3l
-            94: (self._raise_cb_op_unimplemented, ['bit3m']),  # BIT3m
-            95: (self._raise_cb_op_unimplemented, ['bit3a']),  # BIT3a
-            96: (self._raise_cb_op_unimplemented, ['bit4b']),  # BIT4b
-            97: (self._raise_cb_op_unimplemented, ['bit4c']),  # BIT4c
-            98: (self._raise_cb_op_unimplemented, ['bit4d']),  # BIT4d
-            99: (self._raise_cb_op_unimplemented, ['bit4e']),  # BIT4e
-            100: (self._raise_cb_op_unimplemented, ['bit4h']),  # BIT4h
-            101: (self._raise_cb_op_unimplemented, ['bit4l']),  # BIT4l
-            102: (self._raise_cb_op_unimplemented, ['bit4m']),  # BIT4m
-            103: (self._raise_cb_op_unimplemented, ['bit4a']),  # BIT4a
-            104: (self._raise_cb_op_unimplemented, ['bit5b']),  # BIT5b
-            105: (self._raise_cb_op_unimplemented, ['bit5c']),  # BIT5c
-            106: (self._raise_cb_op_unimplemented, ['bit5d']),  # BIT5d
-            107: (self._raise_cb_op_unimplemented, ['bit5e']),  # BIT5e
-            108: (self._raise_cb_op_unimplemented, ['bit5h']),  # BIT5h
-            109: (self._raise_cb_op_unimplemented, ['bit5l']),  # BIT5l
-            110: (self._raise_cb_op_unimplemented, ['bit5m']),  # BIT5m
-            111: (self._raise_cb_op_unimplemented, ['bit5a']),  # BIT5a
-            112: (self._raise_cb_op_unimplemented, ['bit6b']),  # BIT6b
-            113: (self._raise_cb_op_unimplemented, ['bit6c']),  # BIT6c
-            114: (self._raise_cb_op_unimplemented, ['bit6d']),  # BIT6d
-            115: (self._raise_cb_op_unimplemented, ['bit6e']),  # BIT6e
-            116: (self._raise_cb_op_unimplemented, ['bit6h']),  # BIT6h
-            117: (self._raise_cb_op_unimplemented, ['bit6l']),  # BIT6l
-            118: (self._raise_cb_op_unimplemented, ['bit6m']),  # BIT6m
-            119: (self._raise_cb_op_unimplemented, ['bit6a']),  # BIT6a
-            120: (self._raise_cb_op_unimplemented, ['bit7b']),  # BIT7b
-            121: (self._raise_cb_op_unimplemented, ['bit7c']),  # BIT7c
-            122: (self._raise_cb_op_unimplemented, ['bit7d']),  # BIT7d
-            123: (self._raise_cb_op_unimplemented, ['bit7e']),  # BIT7e
-            124: (self._raise_cb_op_unimplemented, ['bit7h']),  # BIT7h
-            125: (self._raise_cb_op_unimplemented, ['bit7l']),  # BIT7l
-            126: (self._raise_cb_op_unimplemented, ['bit7m']),  # BIT7m
-            127: (self._raise_cb_op_unimplemented, ['bit7a']),  # BIT7a
-            128: (self._raise_cb_op_unimplemented, ['res0b']),  # RES0b
-            129: (self._raise_cb_op_unimplemented, ['res0c']),  # RES0c
-            130: (self._raise_cb_op_unimplemented, ['res0d']),  # RES0d
-            131: (self._raise_cb_op_unimplemented, ['res0e']),  # RES0e
-            132: (self._raise_cb_op_unimplemented, ['res0h']),  # RES0h
-            133: (self._raise_cb_op_unimplemented, ['res0l']),  # RES0l
-            134: (self._raise_cb_op_unimplemented, ['res0m']),  # RES0m
-            135: (self._raise_cb_op_unimplemented, ['res0a']),  # RES0a
-            136: (self._raise_cb_op_unimplemented, ['res1b']),  # RES1b
-            137: (self._raise_cb_op_unimplemented, ['res1c']),  # RES1c
-            138: (self._raise_cb_op_unimplemented, ['res1d']),  # RES1d
-            139: (self._raise_cb_op_unimplemented, ['res1e']),  # RES1e
-            140: (self._raise_cb_op_unimplemented, ['res1h']),  # RES1h
-            141: (self._raise_cb_op_unimplemented, ['res1l']),  # RES1l
-            142: (self._raise_cb_op_unimplemented, ['res1m']),  # RES1m
-            143: (self._raise_cb_op_unimplemented, ['res1a']),  # RES1a
-            144: (self._raise_cb_op_unimplemented, ['res2b']),  # RES2b
-            145: (self._raise_cb_op_unimplemented, ['res2c']),  # RES2c
-            146: (self._raise_cb_op_unimplemented, ['res2d']),  # RES2d
-            147: (self._raise_cb_op_unimplemented, ['res2e']),  # RES2e
-            148: (self._raise_cb_op_unimplemented, ['res2h']),  # RES2h
-            149: (self._raise_cb_op_unimplemented, ['res2l']),  # RES2l
-            150: (self._raise_cb_op_unimplemented, ['res2m']),  # RES2m
-            151: (self._raise_cb_op_unimplemented, ['res2a']),  # RES2a
-            152: (self._raise_cb_op_unimplemented, ['res3b']),  # RES3b
-            153: (self._raise_cb_op_unimplemented, ['res3c']),  # RES3c
-            154: (self._raise_cb_op_unimplemented, ['res3d']),  # RES3d
-            155: (self._raise_cb_op_unimplemented, ['res3e']),  # RES3e
-            156: (self._raise_cb_op_unimplemented, ['res3h']),  # RES3h
-            157: (self._raise_cb_op_unimplemented, ['res3l']),  # RES3l
-            158: (self._raise_cb_op_unimplemented, ['res3m']),  # RES3m
-            159: (self._raise_cb_op_unimplemented, ['res3a']),  # RES3a
-            160: (self._raise_cb_op_unimplemented, ['res4b']),  # RES4b
-            161: (self._raise_cb_op_unimplemented, ['res4c']),  # RES4c
-            162: (self._raise_cb_op_unimplemented, ['res4d']),  # RES4d
-            163: (self._raise_cb_op_unimplemented, ['res4e']),  # RES4e
-            164: (self._raise_cb_op_unimplemented, ['res4h']),  # RES4h
-            165: (self._raise_cb_op_unimplemented, ['res4l']),  # RES4l
-            166: (self._raise_cb_op_unimplemented, ['res4m']),  # RES4m
-            167: (self._raise_cb_op_unimplemented, ['res4a']),  # RES4a
-            168: (self._raise_cb_op_unimplemented, ['res5b']),  # RES5b
-            169: (self._raise_cb_op_unimplemented, ['res5c']),  # RES5c
-            170: (self._raise_cb_op_unimplemented, ['res5d']),  # RES5d
-            171: (self._raise_cb_op_unimplemented, ['res5e']),  # RES5e
-            172: (self._raise_cb_op_unimplemented, ['res5h']),  # RES5h
-            173: (self._raise_cb_op_unimplemented, ['res5l']),  # RES5l
-            174: (self._raise_cb_op_unimplemented, ['res5m']),  # RES5m
-            175: (self._raise_cb_op_unimplemented, ['res5a']),  # RES5a
-            176: (self._raise_cb_op_unimplemented, ['res6b']),  # RES6b
-            177: (self._raise_cb_op_unimplemented, ['res6c']),  # RES6c
-            178: (self._raise_cb_op_unimplemented, ['res6d']),  # RES6d
-            179: (self._raise_cb_op_unimplemented, ['res6e']),  # RES6e
-            180: (self._raise_cb_op_unimplemented, ['res6h']),  # RES6h
-            181: (self._raise_cb_op_unimplemented, ['res6l']),  # RES6l
-            182: (self._raise_cb_op_unimplemented, ['res6m']),  # RES6m
-            183: (self._raise_cb_op_unimplemented, ['res6a']),  # RES6a
-            184: (self._raise_cb_op_unimplemented, ['res7b']),  # RES7b
-            185: (self._raise_cb_op_unimplemented, ['res7c']),  # RES7c
-            186: (self._raise_cb_op_unimplemented, ['res7d']),  # RES7d
-            187: (self._raise_cb_op_unimplemented, ['res7e']),  # RES7e
-            188: (self._raise_cb_op_unimplemented, ['res7h']),  # RES7h
-            189: (self._raise_cb_op_unimplemented, ['res7l']),  # RES7l
-            190: (self._raise_cb_op_unimplemented, ['res7m']),  # RES7m
-            191: (self._raise_cb_op_unimplemented, ['res7a']),  # RES7a
-            192: (self._raise_cb_op_unimplemented, ['set0b']),  # SET0b
-            193: (self._raise_cb_op_unimplemented, ['set0c']),  # SET0c
-            194: (self._raise_cb_op_unimplemented, ['set0d']),  # SET0d
-            195: (self._raise_cb_op_unimplemented, ['set0e']),  # SET0e
-            196: (self._raise_cb_op_unimplemented, ['set0h']),  # SET0h
-            197: (self._raise_cb_op_unimplemented, ['set0l']),  # SET0l
-            198: (self._raise_cb_op_unimplemented, ['set0m']),  # SET0m
-            199: (self._raise_cb_op_unimplemented, ['set0a']),  # SET0a
-            200: (self._raise_cb_op_unimplemented, ['set1b']),  # SET1b
-            201: (self._raise_cb_op_unimplemented, ['set1c']),  # SET1c
-            202: (self._raise_cb_op_unimplemented, ['set1d']),  # SET1d
-            203: (self._raise_cb_op_unimplemented, ['set1e']),  # SET1e
-            204: (self._raise_cb_op_unimplemented, ['set1h']),  # SET1h
-            205: (self._raise_cb_op_unimplemented, ['set1l']),  # SET1l
-            206: (self._raise_cb_op_unimplemented, ['set1m']),  # SET1m
-            207: (self._raise_cb_op_unimplemented, ['set1a']),  # SET1a
-            208: (self._raise_cb_op_unimplemented, ['set2b']),  # SET2b
-            209: (self._raise_cb_op_unimplemented, ['set2c']),  # SET2c
-            210: (self._raise_cb_op_unimplemented, ['set2d']),  # SET2d
-            211: (self._raise_cb_op_unimplemented, ['set2e']),  # SET2e
-            212: (self._raise_cb_op_unimplemented, ['set2h']),  # SET2h
-            213: (self._raise_cb_op_unimplemented, ['set2l']),  # SET2l
-            214: (self._raise_cb_op_unimplemented, ['set2m']),  # SET2m
-            215: (self._raise_cb_op_unimplemented, ['set2a']),  # SET2a
-            216: (self._raise_cb_op_unimplemented, ['set3b']),  # SET3b
-            217: (self._raise_cb_op_unimplemented, ['set3c']),  # SET3c
-            218: (self._raise_cb_op_unimplemented, ['set3d']),  # SET3d
-            219: (self._raise_cb_op_unimplemented, ['set3e']),  # SET3e
-            220: (self._raise_cb_op_unimplemented, ['set3h']),  # SET3h
-            221: (self._raise_cb_op_unimplemented, ['set3l']),  # SET3l
-            222: (self._raise_cb_op_unimplemented, ['set3m']),  # SET3m
-            223: (self._raise_cb_op_unimplemented, ['set3a']),  # SET3a
-            224: (self._raise_cb_op_unimplemented, ['set4b']),  # SET4b
-            225: (self._raise_cb_op_unimplemented, ['set4c']),  # SET4c
-            226: (self._raise_cb_op_unimplemented, ['set4d']),  # SET4d
-            227: (self._raise_cb_op_unimplemented, ['set4e']),  # SET4e
-            228: (self._raise_cb_op_unimplemented, ['set4h']),  # SET4h
-            229: (self._raise_cb_op_unimplemented, ['set4l']),  # SET4l
-            230: (self._raise_cb_op_unimplemented, ['set4m']),  # SET4m
-            231: (self._raise_cb_op_unimplemented, ['set4a']),  # SET4a
-            232: (self._raise_cb_op_unimplemented, ['set5b']),  # SET5b
-            233: (self._raise_cb_op_unimplemented, ['set5c']),  # SET5c
-            234: (self._raise_cb_op_unimplemented, ['set5d']),  # SET5d
-            235: (self._raise_cb_op_unimplemented, ['set5e']),  # SET5e
-            236: (self._raise_cb_op_unimplemented, ['set5h']),  # SET5h
-            237: (self._raise_cb_op_unimplemented, ['set5l']),  # SET5l
-            238: (self._raise_cb_op_unimplemented, ['set5m']),  # SET5m
-            239: (self._raise_cb_op_unimplemented, ['set5a']),  # SET5a
-            240: (self._raise_cb_op_unimplemented, ['set6b']),  # SET6b
-            241: (self._raise_cb_op_unimplemented, ['set6c']),  # SET6c
-            242: (self._raise_cb_op_unimplemented, ['set6d']),  # SET6d
-            243: (self._raise_cb_op_unimplemented, ['set6e']),  # SET6e
-            244: (self._raise_cb_op_unimplemented, ['set6h']),  # SET6h
-            245: (self._raise_cb_op_unimplemented, ['set6l']),  # SET6l
-            246: (self._raise_cb_op_unimplemented, ['set6m']),  # SET6m
-            247: (self._raise_cb_op_unimplemented, ['set6a']),  # SET6a
-            248: (self._raise_cb_op_unimplemented, ['set7b']),  # SET7b
-            249: (self._raise_cb_op_unimplemented, ['set7c']),  # SET7c
-            250: (self._raise_cb_op_unimplemented, ['set7d']),  # SET7d
-            251: (self._raise_cb_op_unimplemented, ['set7e']),  # SET7e
-            252: (self._raise_cb_op_unimplemented, ['set7h']),  # SET7h
-            253: (self._raise_cb_op_unimplemented, ['set7l']),  # SET7l
-            254: (self._raise_cb_op_unimplemented, ['set7m']),  # SET7m
-            255: (self._raise_cb_op_unimplemented, ['set7a']),  # SET7a
+            56: (self._srl_n, ['b']),  # SRL B
+            57: (self._srl_n, ['c']),  # SRL C
+            58: (self._srl_n, ['d']),  # SRL D
+            59: (self._srl_n, ['e']),  # SRL E
+            60: (self._srl_n, ['h']),  # SRL H
+            61: (self._srl_n, ['l']),  # SRL L
+            62: (self._srl_hlm, ()),  # SRL (HL)
+            63: (self._srl_n, ['a']),  # SRL A
+            # BIT 0
+            64: (self._bit_test_r, [0, 'b']),
+            65: (self._bit_test_r, [0, 'c']),
+            66: (self._bit_test_r, [0, 'd']),
+            67: (self._bit_test_r, [0, 'e']),
+            68: (self._bit_test_r, [0, 'h']),
+            69: (self._bit_test_r, [0, 'l']),
+            70: (self._bit_test_hlm, [0]),
+            71: (self._bit_test_r, [0, 'a']),
+            # BIT 1
+            72: (self._bit_test_r, [1, 'b']),
+            73: (self._bit_test_r, [1, 'c']),
+            74: (self._bit_test_r, [1, 'd']),
+            75: (self._bit_test_r, [1, 'e']),
+            76: (self._bit_test_r, [1, 'h']),
+            77: (self._bit_test_r, [1, 'l']),
+            78: (self._bit_test_hlm, [1]),
+            79: (self._bit_test_r, [1, 'a']),
+            # BIT 2
+            80: (self._bit_test_r, [2, 'b']),
+            81: (self._bit_test_r, [2, 'c']),
+            82: (self._bit_test_r, [2, 'd']),
+            83: (self._bit_test_r, [2, 'e']),
+            84: (self._bit_test_r, [2, 'h']),
+            85: (self._bit_test_r, [2, 'l']),
+            86: (self._bit_test_hlm, [2]),
+            87: (self._bit_test_r, [2, 'a']),
+            # BIT 3
+            88: (self._bit_test_r, [3, 'b']),
+            89: (self._bit_test_r, [3, 'c']),
+            90: (self._bit_test_r, [3, 'd']),
+            91: (self._bit_test_r, [3, 'e']),
+            92: (self._bit_test_r, [3, 'h']),
+            93: (self._bit_test_r, [3, 'l']),
+            94: (self._bit_test_hlm, [3]),
+            95: (self._bit_test_r, [3, 'a']),
+            # BIT 4
+            96: (self._bit_test_r, [4, 'b']),
+            97: (self._bit_test_r, [4, 'c']),
+            98: (self._bit_test_r, [4, 'd']),
+            99: (self._bit_test_r, [4, 'e']),
+            100: (self._bit_test_r, [4, 'h']),
+            101: (self._bit_test_r, [4, 'l']),
+            102: (self._bit_test_hlm, [4]),
+            103: (self._bit_test_r, [4, 'a']),
+            # BIT 5
+            104: (self._bit_test_r, [5, 'b']),
+            105: (self._bit_test_r, [5, 'c']),
+            106: (self._bit_test_r, [5, 'd']),
+            107: (self._bit_test_r, [5, 'e']),
+            108: (self._bit_test_r, [5, 'h']),
+            109: (self._bit_test_r, [5, 'l']),
+            110: (self._bit_test_hlm, [5]),
+            111: (self._bit_test_r, [5, 'a']),
+            # BIT 6
+            112: (self._bit_test_r, [6, 'b']),
+            113: (self._bit_test_r, [6, 'c']),
+            114: (self._bit_test_r, [6, 'd']),
+            115: (self._bit_test_r, [6, 'e']),
+            116: (self._bit_test_r, [6, 'h']),
+            117: (self._bit_test_r, [6, 'l']),
+            118: (self._bit_test_hlm, [6]),
+            119: (self._bit_test_r, [6, 'a']),
+            # BIT 7
+            120: (self._bit_test_r, [7, 'b']),
+            121: (self._bit_test_r, [7, 'c']),
+            122: (self._bit_test_r, [7, 'd']),
+            123: (self._bit_test_r, [7, 'e']),
+            124: (self._bit_test_r, [7, 'h']),
+            125: (self._bit_test_r, [7, 'l']),
+            126: (self._bit_test_hlm, [7]),
+            127: (self._bit_test_r, [7, 'a']),
+            # RES 0
+            128: (self._res_bit_r, [0, 'b']),
+            129: (self._res_bit_r, [0, 'c']),
+            130: (self._res_bit_r, [0, 'd']),
+            131: (self._res_bit_r, [0, 'e']),
+            132: (self._res_bit_r, [0, 'h']),
+            133: (self._res_bit_r, [0, 'l']),
+            134: (self._res_bit_hlm, [0]),
+            135: (self._res_bit_r, [0, 'a']),
+            # RES 1
+            136: (self._res_bit_r, [1, 'b']),
+            137: (self._res_bit_r, [1, 'c']),
+            138: (self._res_bit_r, [1, 'd']),
+            139: (self._res_bit_r, [1, 'e']),
+            140: (self._res_bit_r, [1, 'h']),
+            141: (self._res_bit_r, [1, 'l']),
+            142: (self._res_bit_hlm, [1]),
+            143: (self._res_bit_r, [1, 'a']),
+            # RES 2
+            144: (self._res_bit_r, [2, 'b']),
+            145: (self._res_bit_r, [2, 'c']),
+            146: (self._res_bit_r, [2, 'd']),
+            147: (self._res_bit_r, [2, 'e']),
+            148: (self._res_bit_r, [2, 'h']),
+            149: (self._res_bit_r, [2, 'l']),
+            150: (self._res_bit_hlm, [2]),
+            151: (self._res_bit_r, [2, 'a']),
+            # RES 3
+            152: (self._res_bit_r, [3, 'b']),
+            153: (self._res_bit_r, [3, 'c']),
+            154: (self._res_bit_r, [3, 'd']),
+            155: (self._res_bit_r, [3, 'e']),
+            156: (self._res_bit_r, [3, 'h']),
+            157: (self._res_bit_r, [3, 'l']),
+            158: (self._res_bit_hlm, [3]),
+            159: (self._res_bit_r, [3, 'a']),
+            # RES 4
+            160: (self._res_bit_r, [4, 'b']),
+            161: (self._res_bit_r, [4, 'c']),
+            162: (self._res_bit_r, [4, 'd']),
+            163: (self._res_bit_r, [4, 'e']),
+            164: (self._res_bit_r, [4, 'h']),
+            165: (self._res_bit_r, [4, 'l']),
+            166: (self._res_bit_hlm, [4]),
+            167: (self._res_bit_r, [4, 'a']),
+            # RES 5
+            168: (self._res_bit_r, [5, 'b']),
+            169: (self._res_bit_r, [5, 'c']),
+            170: (self._res_bit_r, [5, 'd']),
+            171: (self._res_bit_r, [5, 'e']),
+            172: (self._res_bit_r, [5, 'h']),
+            173: (self._res_bit_r, [5, 'l']),
+            174: (self._res_bit_hlm, [5]),
+            175: (self._res_bit_r, [5, 'a']),
+            # RES 6
+            176: (self._res_bit_r, [6, 'b']),
+            177: (self._res_bit_r, [6, 'c']),
+            178: (self._res_bit_r, [6, 'd']),
+            179: (self._res_bit_r, [6, 'e']),
+            180: (self._res_bit_r, [6, 'h']),
+            181: (self._res_bit_r, [6, 'l']),
+            182: (self._res_bit_hlm, [6]),
+            183: (self._res_bit_r, [6, 'a']),
+            # RES 7
+            184: (self._res_bit_r, [7, 'b']),
+            185: (self._res_bit_r, [7, 'c']),
+            186: (self._res_bit_r, [7, 'd']),
+            187: (self._res_bit_r, [7, 'e']),
+            188: (self._res_bit_r, [7, 'h']),
+            189: (self._res_bit_r, [7, 'l']),
+            190: (self._res_bit_hlm, [7]),
+            191: (self._res_bit_r, [7, 'a']),
+            # SET 0
+            192: (self._set_bit_r, [0, 'b']),
+            193: (self._set_bit_r, [0, 'c']),
+            194: (self._set_bit_r, [0, 'd']),
+            195: (self._set_bit_r, [0, 'e']),
+            196: (self._set_bit_r, [0, 'h']),
+            197: (self._set_bit_r, [0, 'l']),
+            198: (self._set_bit_hlm, [0]),
+            199: (self._set_bit_r, [0, 'a']),
+            # SET 1
+            200: (self._set_bit_r, [1, 'b']),
+            201: (self._set_bit_r, [1, 'c']),
+            202: (self._set_bit_r, [1, 'd']),
+            203: (self._set_bit_r, [1, 'e']),
+            204: (self._set_bit_r, [1, 'h']),
+            205: (self._set_bit_r, [1, 'l']),
+            206: (self._set_bit_hlm, [1]),
+            207: (self._set_bit_r, [1, 'a']),
+            # SET 2
+            208: (self._set_bit_r, [2, 'b']),
+            209: (self._set_bit_r, [2, 'c']),
+            210: (self._set_bit_r, [2, 'd']),
+            211: (self._set_bit_r, [2, 'e']),
+            212: (self._set_bit_r, [2, 'h']),
+            213: (self._set_bit_r, [2, 'l']),
+            214: (self._set_bit_hlm, [2]),
+            215: (self._set_bit_r, [2, 'a']),
+            # SET 3
+            216: (self._set_bit_r, [3, 'b']),
+            217: (self._set_bit_r, [3, 'c']),
+            218: (self._set_bit_r, [3, 'd']),
+            219: (self._set_bit_r, [3, 'e']),
+            220: (self._set_bit_r, [3, 'h']),
+            221: (self._set_bit_r, [3, 'l']),
+            222: (self._set_bit_hlm, [3]),
+            223: (self._set_bit_r, [3, 'a']),
+            # SET 4
+            224: (self._set_bit_r, [4, 'b']),
+            225: (self._set_bit_r, [4, 'c']),
+            226: (self._set_bit_r, [4, 'd']),
+            227: (self._set_bit_r, [4, 'e']),
+            228: (self._set_bit_r, [4, 'h']),
+            229: (self._set_bit_r, [4, 'l']),
+            230: (self._set_bit_hlm, [4]),
+            231: (self._set_bit_r, [4, 'a']),
+            # SET 5
+            232: (self._set_bit_r, [5, 'b']),
+            233: (self._set_bit_r, [5, 'c']),
+            234: (self._set_bit_r, [5, 'd']),
+            235: (self._set_bit_r, [5, 'e']),
+            236: (self._set_bit_r, [5, 'h']),
+            237: (self._set_bit_r, [5, 'l']),
+            238: (self._set_bit_hlm, [5]),
+            239: (self._set_bit_r, [5, 'a']),
+            # SET 6
+            240: (self._set_bit_r, [6, 'b']),
+            241: (self._set_bit_r, [6, 'c']),
+            242: (self._set_bit_r, [6, 'd']),
+            243: (self._set_bit_r, [6, 'e']),
+            244: (self._set_bit_r, [6, 'h']),
+            245: (self._set_bit_r, [6, 'l']),
+            246: (self._set_bit_hlm, [6]),
+            247: (self._set_bit_r, [6, 'a']),
+            # SET 7
+            248: (self._set_bit_r, [7, 'b']),
+            249: (self._set_bit_r, [7, 'c']),
+            250: (self._set_bit_r, [7, 'd']),
+            251: (self._set_bit_r, [7, 'e']),
+            252: (self._set_bit_r, [7, 'h']),
+            253: (self._set_bit_r, [7, 'l']),
+            254: (self._set_bit_hlm, [7]),
+            255: (self._set_bit_r, [7, 'a']),
         }
+        self.opcode_table = [self.opcode_map[i] for i in range(256)]
+        self.cb_table = [self.cb_map[i] for i in range(256)]
 
     def execute_next_operation(self):
         global my_counter
-        my_counter += 1
+        registers = self.registers
+        sys_interface = self.sys_interface
+        gpu = sys_interface.gpu
+        clock = self.clock
+        trace_enabled = self.trace_enabled
+        gb_doctor_test_mode = self.gb_doctor_test_mode
+        if trace_enabled:
+            my_counter += 1
 
-        pc_before = self.registers['pc']
-        op = self.read8(pc_before)
+        # Handle HALT state
+        if self.halted:
+            pending = (
+                sys_interface.read_byte(0xFFFF)
+                & sys_interface.read_byte(0xFF0F)
+                & 0x1F
+            )
+            if not pending:
+                m_cycles = min(
+                    gpu.m_cycles_until_mode_transition(),
+                    sys_interface.m_cycles_until_timer_interrupt(),
+                )
+                registers['m'] = m_cycles
+                clock['m'] += m_cycles
+                self.halt_m_cycles += m_cycles
+                sys_interface.step(m_cycles)
+                gpu.step(m_cycles * 4)
+                return 0
+            self.halted = False
 
-        # -- LOGGING before doing anything else
-        pcmem = [self.read8(pc_before + i) if (pc_before + i) < 0x10000 else 0 for i in range(4)]
+        if gb_doctor_test_mode:
+            self.log_for_gameboy_dr(registers['pc'])
+
+        # Interrupts are accepted at the next instruction boundary. The
+        # boundary state is logged above, then execution continues at the
+        # interrupt vector instead of the interrupted PC.
+        if registers['ime']:
+            memory = sys_interface.raw_memory
+            if memory[0xFFFF] & memory[0xFF0F] & 0x1F:
+                if self.handle_interrupts():
+                    m_cycles = registers['m']
+                    clock['m'] += m_cycles
+                    sys_interface.step(m_cycles)
+                    gpu.step(m_cycles * 4)
+
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            op = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            op = sys_interface.read_byte(pc)
+        if self.opcode_counts is not None:
+            self.opcode_counts[op] += 1
+        registers['pc'] = (pc + 1) & 0xFFFF
+
+        opcode, args = self.opcode_table[op]
+        opcode(*args)
+        if trace_enabled:
+            print(
+                f"[TRACE] Exec {opcode.__name__:<15} "
+                f"args: {str(args):<20} "
+                f"m={registers['m']}, instr: {my_counter}"
+            )
+        m_cycles = registers['m']
+        if m_cycles == 0:
+            raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
+        clock['m'] += m_cycles
+        sys_interface.step(m_cycles)
+        gpu.step(m_cycles * 4)
+
+        # Handle delayed EI
+        if self.enable_interrupts_next_cycle:
+            registers['ime'] = 1
+            self.enable_interrupts_next_cycle = False
+        return 1
+
+    def log_for_gameboy_dr(self, pc):
+        pcmem = [self.read8(pc + i) if (pc + i) < 0x10000 else 0 for i in range(4)]
         log_line = (
             f"A:{self.registers['a']:02X} F:{self.registers['f']:02X} "
             f"B:{self.registers['b']:02X} C:{self.registers['c']:02X} "
             f"D:{self.registers['d']:02X} E:{self.registers['e']:02X} "
             f"H:{self.registers['h']:02X} L:{self.registers['l']:02X} "
-            f"SP:{self.registers['sp']:04X} PC:{pc_before:04X} "
+            f"SP:{self.registers['sp']:04X} PC:{pc:04X} "
             f"PCMEM:{','.join(f'{b:02X}' for b in pcmem)}"
         )
         self.log_dump.append(log_line)
 
-        # -- THEN execute the instruction
-        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
-        instruction = self.opcode_map[op]
-        opcode, args = instruction[0], instruction[1]
-
-        try:
-            opcode(*args)
-            self._inc_clock()
-        except Exception as e:
-            print("op:", op, 'clock:', self.clock['m'], 'instr_cnt', my_counter)
-            raise e
-
-        self.handle_interrupts()
-
     def execute_specific_instruction(self, op):
         """Execute an instruction (for testing)."""
         instruction = self.opcode_map[op]
-        print(instruction)
+        if self.trace_enabled:
+            print(instruction)
         opcode, args = instruction[0], instruction[1]
         opcode(*args)
         self._inc_clock()
 
     def handle_interrupts(self):
-        if not self.registers['ime']:
-            return  # interrupts globally disabled
+        registers = self.registers
+        if not registers['ime']:
+            return False  # interrupts globally disabled
 
-        interrupt_enable = self.sys_interface.read_byte(0xFFFF)
-        interrupt_flags = self.sys_interface.read_byte(0xFF0F)
+        memory = self.sys_interface.raw_memory
+        interrupt_enable = memory[0xFFFF]
+        interrupt_flags = memory[0xFF0F]
         triggered = interrupt_enable & interrupt_flags
         if triggered:
+            if self.trace_enabled:
+                print("[INTERRUPT] Interrupt triggered with flags: ", interrupt_flags)
+                print(
+                    f"[DEBUG PRE-INTERRUPT ] "
+                    f"PC={registers['pc']:04X}, "
+                    f"SP={registers['sp']:04X}"
+                )
             for bit, address in enumerate([0x40, 0x48, 0x50, 0x58, 0x60]):
                 if triggered & (1 << bit):
                     self._execute_interrupt(bit, address)
-                    break  # only handle one interrupt per cycle
+                    if self.trace_enabled:
+                        print(
+                            f"[DEBUG POST-INTERRUPT] "
+                            f"PC={registers['pc']:04X}, "
+                            f"SP={registers['sp']:04X}"
+                        )
+                    return True  # only handle one interrupt per boundary
+        return False
 
     def _execute_interrupt(self, bit, address):
         self.registers['ime'] = 0  # disable further interrupts
@@ -765,6 +893,7 @@ class GbZ80Cpu(object):
 
     def reset(self):
         """Reset registers."""
+        self.halt_m_cycles = 0
         for k in self.clock.items():
             self.clock[k] = 0
         for k in self.registers.items():
@@ -772,35 +901,113 @@ class GbZ80Cpu(object):
 
     def read8(self, address):
         """Return a byte from memory at address."""
+        direct_rom = self.direct_rom
+        if direct_rom is not None and address < self.direct_rom_length:
+            return direct_rom[address]
+        if (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            return self.sys_interface.raw_memory[address]
         return self.sys_interface.read_byte(address)
 
     def write8(self, address, val):
         """Write a byte to memory at address."""
+        if (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            self.sys_interface.raw_memory[address] = val
+            return
         self.sys_interface.write_byte(address, val)
 
     def read16(self, address):
         """Return a word(16-bits) from memory."""
+        direct_rom = self.direct_rom
+        if (
+            direct_rom is not None
+            and address + 1 < self.direct_rom_length
+        ):
+            return direct_rom[address] | (direct_rom[address + 1] << 8)
+        if (
+            0xC000 <= address < 0xFDFF
+            or 0xFF80 <= address < 0xFFFE
+        ):
+            memory = self.sys_interface.raw_memory
+            return memory[address] | (memory[address + 1] << 8)
         return self.sys_interface.read_word(address)
 
     def write16(self, address, val):
         """Write a word to memory at address."""
-        self.sys_interface.write_byte(address, val & 0xFF)
-        self.sys_interface.write_byte(address + 1, (val >> 8) & 0xFF)
+        self.write8(address, val & 0xFF)
+        self.write8((address + 1) & 0xFFFF, (val >> 8) & 0xFF)
+
+    @staticmethod
+    def signed8(n):
+        """Convert 8-bit unsigned value to signed integer."""
+        return n - 0x100 if n >= 0x80 else n
 
     def _call_cb_op(self):
         """Call an opcode in the cb map."""
-        i = self.read8(self.registers['pc'])
-        # print(f"CB Prefix Opcode {hex(i)} encountered at PC={hex(self.registers['pc'])}")
-        self.registers['pc'] += 1
-        self.registers['pc'] &= 65535
-        op, args = self.cb_map[i]
-        op(*args)
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            i = self.sys_interface.read_byte(pc)
+        if self.cb_opcode_counts is not None:
+            self.cb_opcode_counts[i] += 1
+        registers['pc'] = (pc + 1) & 0xFFFF
+
+        if i == 0x46:
+            addr = (registers['h'] << 8) | registers['l']
+            if (
+                0x8000 <= addr <= 0x9FFF
+                or 0xC000 <= addr <= 0xFEFF
+                or 0xFF80 <= addr <= 0xFFFE
+            ):
+                value = self.sys_interface.raw_memory[addr]
+            else:
+                value = self.read8(addr)
+            flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+            if not (value & 0x01):
+                flags |= FLAG_ZERO
+            registers['f'] = flags
+            registers['m'] = 4
+            return
+
+        register_index = i & 0x07
+        if 0x40 <= i < 0x80 and register_index != 6:
+            value = registers[CB_REGISTER_NAMES[register_index]]
+            flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+            if not value & (1 << ((i >> 3) & 0x07)):
+                flags |= FLAG_ZERO
+            registers['f'] = flags
+            registers['m'] = 2
+            return
+
+        op, args = self.cb_table[i]
+        if args:
+            op(*args)
+        else:
+            op()
 
     def _inc_clock(self):
         """Increment clock registers and step GPU."""
-        self.clock['m'] += self.registers['m']
-        if self.sys_interface and self.sys_interface.gpu:
-            self.sys_interface.gpu.step(self.registers['m'] * 4)  # 1 m = 4 cycles
+        registers = self.registers
+        m_cycles = registers['m']
+        if m_cycles == 0:
+            raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
+
+        self.clock['m'] += m_cycles
+        sys_interface = self.sys_interface
+        if sys_interface is None:
+            return
+
+        sys_interface.step(m_cycles)
+        # print(f"[CLOCK] +{self.registers['m']} m-cycles → total={self.clock['m']}")
+        sys_interface.gpu.step(m_cycles * 4)  # 1 m = 4 cycles
 
     def _toggle_flag(self, flag_value):
         self.registers['f'] |= flag_value
@@ -820,22 +1027,30 @@ class GbZ80Cpu(object):
         """NOP opcode."""
         self.registers['m'] = 1
 
-    def _halt(self):
-        """HALT CPU until interrupt."""
-        # print('halt called')
-        self.registers['m'] = 1
-
     # Loads
     def _ld_rr(self, r1, r2):
         """Load value r2 into r1."""
         self.registers[r1] = self.registers[r2]
         self.registers['m'] = 1
 
+    def _ld_a_b(self):
+        """Load B into A, specialized for opcode 0x78."""
+        registers = self.registers
+        registers['a'] = registers['b']
+        registers['m'] = 1
+
     def _ld_rn(self, r):
         """Load mem @ pc into register r."""
-        self.registers[r] = self.read8(self.registers['pc'])
-        self.registers['pc'] += 1
-        self.registers['m'] = 2
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < self.direct_rom_length:
+            value = direct_rom[pc]
+        else:
+            value = self.sys_interface.read_byte(pc)
+        registers[r] = value
+        registers['pc'] = (pc + 1) & 0xFFFF
+        registers['m'] = 2
 
     def _ld_r_hlm(self, r):
         """Load mem @ HL into registers[r]."""
@@ -868,10 +1083,16 @@ class GbZ80Cpu(object):
 
         address = mem (16-bit) @ registers[pc]
         """
-        address = self.read16(self.registers['pc'])
-        self.write8(address, self.registers['a'])
-        self.registers['pc'] += 2
-        self.registers['m'] = 4
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc + 1 < self.direct_rom_length:
+            address = direct_rom[pc] | (direct_rom[pc + 1] << 8)
+        else:
+            address = self.sys_interface.read_word(pc)
+        self.sys_interface.write_byte(address, registers['a'])
+        registers['pc'] = (pc + 2) & 0xFFFF
+        registers['m'] = 4
 
     def _ld_a_r1r2m(self, r1, r2):
         """Load mem @ r1r2 into registers[a]."""
@@ -884,10 +1105,16 @@ class GbZ80Cpu(object):
 
         address = mem (16-bit) @ registers[pc]
         """
-        address = self.read16(self.registers['pc'])
-        self.registers['a'] = self.read8(address)
-        self.registers['pc'] += 2
-        self.registers['m'] = 4
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc + 1 < self.direct_rom_length:
+            address = direct_rom[pc] | (direct_rom[pc + 1] << 8)
+        else:
+            address = self.sys_interface.read_word(pc)
+        registers['a'] = self.sys_interface.read_byte(address)
+        registers['pc'] = (pc + 2) & 0xFFFF
+        registers['m'] = 4
 
     def _ld_r1r2_nn(self, r1, r2):
         """Load 16-bit immediate value into two 8-bit registers."""
@@ -907,7 +1134,7 @@ class GbZ80Cpu(object):
         address = self.read16(self.registers['pc'])
         self.write16(address, self.registers['sp'])
         self.registers['pc'] += 2
-        self.registers['m'] = 4
+        self.registers['m'] = 5
 
     def _ld_hlmi_a(self):
         """Put A into memory address HL. Increment HL.
@@ -941,19 +1168,42 @@ class GbZ80Cpu(object):
 
     def _ldh_a_n(self):
         """Put mem @ address $FF00+n into register a."""
-        n = self.read8(self.registers['pc'])
-        addr = 0xFF00 + n
-        val = self.read8(addr)
-        self.registers['a'] = val
-        self.registers['pc'] += 1
-        self.registers['m'] = 3
+        registers = self.registers
+        sys_interface = self.sys_interface
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            n = sys_interface.read_byte(pc)
+
+        if n == 0:
+            registers['a'] = sys_interface.joypad.read()
+        elif self.gb_doctor_test_mode and n == 0x44:
+            registers['a'] = 0x90
+        elif n == 0x44:
+            registers['a'] = sys_interface.gpu.read_ly_at_cpu_bus()
+        else:
+            registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+        registers['pc'] = pc + 1
+        registers['m'] = 3
 
     def _ldh_n_a(self):
         """Put register A into mem @ address $FF00+n."""
-        n = self.read8(self.registers['pc'])
-        self.write8(0xFF00 + n, self.registers['a'])
-        self.registers['pc'] += 1
-        self.registers['m'] = 3
+        registers = self.registers
+        sys_interface = self.sys_interface
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            n = sys_interface.read_byte(pc)
+        if n >= 0x80:
+            sys_interface.raw_memory[0xFF00 + n] = registers['a']
+        else:
+            sys_interface.write_byte(0xFF00 + n, registers['a'])
+        registers['pc'] = pc + 1
+        registers['m'] = 3
 
     def _ld_a_c(self):
         """Put value @ address $FF00+C into register A."""
@@ -995,7 +1245,7 @@ class GbZ80Cpu(object):
     def _jp_nn(self):
         """Jump to two byte immediate value."""
         self.registers['pc'] = self.read16(self.registers['pc'])
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _jp_cc_nn(self, and_val, flag_check_value):
         """Jump to address n if condition is true.
@@ -1013,14 +1263,17 @@ class GbZ80Cpu(object):
         else:
             self.registers['pc'] += 2
 
+    def _jp_hl(self):
+        """Jump to address in HL."""
+        self.registers['pc'] = (self.registers['h'] << 8) | self.registers['l']
+        self.registers['m'] = 1
+
     def _jr_n(self):
         """Add signed immediate value to current address and jump to it."""
-        i = self.read8(self.registers['pc'])
-        i = i if i < 128 else i - 256
+        i = self.signed8(self.read8(self.registers['pc']))
         self.registers['pc'] += 1
-        self.registers['m'] = 2
         self.registers['pc'] += i
-        self.registers['m'] += 1
+        self.registers['m'] = 3
 
     def _jr_cc_n(self, and_val, flag_check_value):
         """Conditional relative jump
@@ -1028,24 +1281,73 @@ class GbZ80Cpu(object):
         If Z flag reset, add n to current address and jump to it.
         n = one byte signed immediate value
         """
-        i = self.read8(self.registers['pc'])
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            i = sys_interface.read_byte(pc)
         if i >= 0x80:
-            i -= 0x100  # Proper signed conversion
+            i -= 0x100
+        pc += 1
+        registers['pc'] = pc  # Advance PC past the immediate byte
+        registers['m'] = 2
 
-        self.registers['pc'] += 1  # Advance PC past the immediate byte
-        self.registers['m'] = 2
+        if (registers['f'] & and_val) == flag_check_value:
+            registers['pc'] = (pc + i) & 0xFFFF
+            registers['m'] = 3
 
-        if (self.registers['f'] & and_val) == flag_check_value:
-            self.registers['pc'] = (self.registers['pc'] + i) & 0xFFFF
-            self.registers['m'] += 1
+    def _jr_nz_n(self):
+        """JR NZ,n specialized for the hot CPU dispatch path."""
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            i = sys_interface.read_byte(pc)
+
+        pc += 1
+        if registers['f'] & FLAG_ZERO:
+            registers['pc'] = pc
+            registers['m'] = 2
+            return
+
+        if i >= 0x80:
+            i -= 0x100
+        registers['pc'] = (pc + i) & 0xFFFF
+        registers['m'] = 3
+
+    def _jr_z_n(self):
+        """JR Z,n specialized for the hot CPU dispatch path."""
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            i = sys_interface.read_byte(pc)
+
+        pc += 1
+        if not (registers['f'] & FLAG_ZERO):
+            registers['pc'] = pc
+            registers['m'] = 2
+            return
+
+        if i >= 0x80:
+            i -= 0x100
+        registers['pc'] = (pc + i) & 0xFFFF
+        registers['m'] = 3
 
     def _djnz_n(self):
         """Decrement B and jump if not zero."""
         self.registers['b'] = (self.registers['b'] - 1) & 0xFF
         if self.registers['b'] != 0:
-            n = self.read8(self.registers['pc'])
-            if n > 127:
-                n = -((~n + 1) & 0xFF)
+            n = self.signed8(self.read8(self.registers['pc']))
             self.registers['pc'] = (self.registers['pc'] + n + 1) & 0xFFFF
             self.registers['m'] = 3  # 12 cycles
         else:
@@ -1059,9 +1361,23 @@ class GbZ80Cpu(object):
         self.registers['m'] = 1
 
     def _ei(self):
-        """Enable interrupts."""
-        self.registers['ime'] = 1
+        """Enable interrupts next cycle."""
+        self.enable_interrupts_next_cycle = True
         self.registers['m'] = 1
+
+    def _halt(self):
+        """HALT CPU until interrupt occurs."""
+        self.halted = True
+        self.registers['m'] = 1
+
+    def _reti(self):
+        """Return from interrupt, enable interrupts immediately."""
+        lo = self.read8(self.registers['sp'])
+        hi = self.read8(self.registers['sp'] + 1)
+        self.registers['sp'] += 2
+        self.registers['pc'] = (hi << 8) | lo
+        self.registers['ime'] = 1
+        self.registers['m'] = 4  # RETI should consume 4 machine cycles
 
     # PUSH / POP
     def _push_nn(self, r1, r2):
@@ -1073,17 +1389,22 @@ class GbZ80Cpu(object):
         self.write8(self.registers['sp'], self.registers[r1])
         self.registers['sp'] -= 1
         self.write8(self.registers['sp'], self.registers[r2])
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _pop_nn(self, r1, r2):
         """Pop register pair nn onto stack.
 
         Increment Stack Pointer (SP) twice.
         """
-        self.registers[r2] = self.read8(self.registers['sp'])
+        lo = self.read8(self.registers['sp'])
         self.registers['sp'] += 1
-        self.registers[r1] = self.read8(self.registers['sp'])
+        hi = self.read8(self.registers['sp'])
         self.registers['sp'] += 1
+
+        if (r1, r2) == ('a', 'f'):
+            lo &= 0xF0  # Only keep upper nibble (Z, N, H, C)
+        self.registers[r2] = lo
+        self.registers[r1] = hi
         self.registers['m'] = 3
 
     # CALLs
@@ -1097,7 +1418,19 @@ class GbZ80Cpu(object):
         self.registers['sp'] -= 2
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = target
-        self.registers['m'] = 5
+        self.registers['m'] = 6
+
+    def _call_cc_nn(self, flag_mask, expected_value):
+        """Conditionally CALL nn if flag matches."""
+        address = self.read16(self.registers['pc'])
+        self.registers['pc'] += 2
+        self.registers['m'] = 3
+
+        if (self.registers['f'] & flag_mask) == expected_value:
+            self.registers['sp'] -= 2
+            self.write16(self.registers['sp'], self.registers['pc'])
+            self.registers['pc'] = address
+            self.registers['m'] += 3
 
     # SUB / ADD
     def _sub_n(self, r):
@@ -1118,21 +1451,59 @@ class GbZ80Cpu(object):
         self.registers['a'] = result & 0xFF
         self.registers['m'] = 1
 
+    def _sub_n_imm(self):
+        """Subtract immediate 8-bit value from A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
+        a = self.registers['a']
+        result = a - value
+
+        self.registers['f'] = FLAG['sub']  # always set subtract flag
+
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (a & 0xF) < (value & 0xF):
+            self.registers['f'] |= FLAG['half-carry']
+        if result < 0:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
+        self.registers['m'] = 2
+
     def _sub_a_n(self, n):
         """Subtract n + Carry flag from A."""
-        a = self.registers['a']
-        self.registers['a'] -= self.registers[n]
-        self.registers['a'] -= 1 \
-            if (self.registers['f'] & FLAG['carry']) else 0
-
-        self.registers['f'] = 0x50 if self.registers['a'] < 0 else FLAG['sub']
-        self.registers['a'] &= 255
-    
-        if not self.registers['a']:
-            self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] ^ self.registers[n] ^ a) & FLAG['carry']:
-            self.registers['f'] |= FLAG['half-carry']
+        self.__sbc_from_a(self.registers[n])
         self.registers['m'] = 1
+
+    def _sbc_a_hl(self):
+        """Subtract the byte at HL and Carry from A."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        self.__sbc_from_a(self.read8(address))
+        self.registers['m'] = 2
+
+    def _sbc_n(self):
+        """Subtract an immediate byte and Carry from A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] = (self.registers['pc'] + 1) & 0xFFFF
+        self.__sbc_from_a(value)
+        self.registers['m'] = 2
+
+    def __sbc_from_a(self, value):
+        """Shared SBC logic with Z, N, H, and C flag updates."""
+        a = self.registers['a']
+        carry = 1 if self.registers['f'] & FLAG['carry'] else 0
+        result = a - value - carry
+
+        self.registers['f'] = FLAG['sub']
+        if (result & 0xFF) == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (a & 0x0F) < ((value & 0x0F) + carry):
+            self.registers['f'] |= FLAG['half-carry']
+        if a < value + carry:
+            self.registers['f'] |= FLAG['carry']
+
+        self.registers['a'] = result & 0xFF
 
     def _sub_hl(self):
         """Subtract value at HL from A."""
@@ -1156,31 +1527,50 @@ class GbZ80Cpu(object):
 
     def _cp_n(self, n):
         """Compare register A with n."""
+        registers = self.registers
         if n == 'pc':
-            value = self.read8(self.registers['pc'])
-            self.registers['pc'] += 1
+            value = self.read8(registers['pc'])
+            registers['pc'] += 1
+            registers['m'] = 2
         else:
-            value = self.registers[n]
+            value = registers[n]
+            registers['m'] = 1
 
-        result = self.registers['a'] - value
-        self.registers['f'] = FLAG['sub']
+        registers['f'] = CP_FLAG_TABLE[(registers['a'] << 8) | value]
 
-        if (result & 0xFF) == 0:
-            self.registers['f'] |= FLAG['zero']
-        if (self.registers['a'] & 0xF) < (value & 0xF):
-            self.registers['f'] |= FLAG['half-carry']
-        if result < 0:
-            self.registers['f'] |= FLAG['carry']
+    def _cp_hl(self):
+        """Compare A with the byte at HL."""
+        registers = self.registers
+        address = (registers['h'] << 8) | registers['l']
+        value = self.sys_interface.read_byte(address)
+        a = registers['a']
+        registers['f'] = CP_FLAG_TABLE[(a << 8) | value]
+        registers['m'] = 2
 
+    def _add_n(self):
+        """Add immediate 8-bit value to A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+        self.__add_to_a(value)
         self.registers['m'] = 2
-
 
     def _add_a_n(self, n):
         """Add n to A."""
         value = self.registers[n]
-        result = self.registers['a'] + value
+        self.__add_to_a(value)
+        self.registers['m'] = 1
 
+    def _add_a_hl(self):
+        """Add the byte at HL to A."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        self.__add_to_a(self.read8(address))
+        self.registers['m'] = 2
+
+    def __add_to_a(self, value):
+        """Shared logic for adding value to A with flag updates."""
+        result = self.registers['a'] + value
         self.registers['f'] = 0
+
         if (result & 0xFF) == 0:
             self.registers['f'] |= FLAG['zero']
         if ((self.registers['a'] & 0xF) + (value & 0xF)) > 0xF:
@@ -1189,7 +1579,6 @@ class GbZ80Cpu(object):
             self.registers['f'] |= FLAG['carry']
 
         self.registers['a'] = result & 0xFF
-        self.registers['m'] = 1
 
     def _add_sp_n(self):
         """Add signed immediate value to SP."""
@@ -1258,7 +1647,13 @@ class GbZ80Cpu(object):
 
         # Set C flag if carry from bit 15 (full 16 bits overflow)
         if result > 0xFFFF:
-            self
+            self.registers['f'] |= FLAG['carry']
+        else:
+            self.registers['f'] &= ~FLAG['carry']
+
+        self.registers['h'] = (result >> 8) & 0xFF
+        self.registers['l'] = result & 0xFF
+        self.registers['m'] = 2
 
     def _adc_a_n(self, n):
         """Add register n + carry to register A."""
@@ -1317,7 +1712,7 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
 
     # INC / DEC
-    def _inc_r_r(self, r1, r2, m=1):
+    def _inc_r_r(self, r1, r2, m=2):
         """Increment registers.
 
         INC HL, INC DE, INC BC
@@ -1327,7 +1722,7 @@ class GbZ80Cpu(object):
             self.registers[r1] = (self.registers[r1] + 1) & 255
         self.registers['m'] = m
 
-    def _dec_r_r(self, r1, r2, m=1):
+    def _dec_r_r(self, r1, r2, m=2):
         """Decrement registers.
 
         DEC HL, DEC DE, DEC BC
@@ -1337,24 +1732,29 @@ class GbZ80Cpu(object):
             self.registers[r1] = (self.registers[r1] - 1) & 255
         self.registers['m'] = m
 
+    def _dec_bc(self):
+        """Decrement BC, specialized for opcode 0x0B."""
+        registers = self.registers
+        c = (registers['c'] - 1) & 0xFF
+        registers['c'] = c
+        if c == 0xFF:
+            registers['b'] = (registers['b'] - 1) & 0xFF
+        registers['m'] = 2
+
     def _dec_r(self, r):
         """Decrement register with correct flags."""
-        val = self.registers[r]
+        registers = self.registers
+        val = registers[r]
         result = (val - 1) & 0xFF
-
-        self.registers[r] = result
-
-        # Preserve Carry flag
-        carry_flag = self.registers['f'] & FLAG['carry']
-        self.registers['f'] = carry_flag | FLAG['sub']  # Always set Subtract flag
-
+        flags = (registers['f'] & FLAG_CARRY) | FLAG['sub']
         if result == 0:
-            self.registers['f'] |= FLAG['zero']
+            flags |= FLAG_ZERO
         if (val & 0xF) == 0:
-            self.registers['f'] |= FLAG['half-carry']
+            flags |= FLAG_HALF_CARRY
 
-        self.registers['m'] = 1
-
+        registers[r] = result
+        registers['f'] = flags
+        registers['m'] = 1
 
     def _inc_r(self, r):
         """Increment register with correct flags."""
@@ -1379,12 +1779,45 @@ class GbZ80Cpu(object):
     def _inc_sp(self):
         """Increment stack pointer."""
         self.registers['sp'] = (self.registers['sp'] + 1) & 65535
-        self.registers['m'] = 1
+        self.registers['m'] = 2
 
     def _dec_sp(self):
         """Decrement stack pointer."""
         self.registers['sp'] = (self.registers['sp'] - 1) & 65535
-        self.registers['m'] = 1
+        self.registers['m'] = 2
+
+    def _inc_hlm(self):
+        """Increment the value at memory[HL]."""
+        addr = (self.registers['h'] << 8) | self.registers['l']
+        val = self.read8(addr)
+        result = (val + 1) & 0xFF
+
+        self.write8(addr, result)
+        self.registers['f'] &= FLAG['carry']  # Preserve carry only
+
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (val & 0xF) + 1 > 0xF:
+            self.registers['f'] |= FLAG['half-carry']
+
+        self.registers['m'] = 3
+
+    def _dec_hlm(self):
+        """Decrement the value at memory[HL]."""
+        addr = (self.registers['h'] << 8) | self.registers['l']
+        val = self.read8(addr)
+        result = (val - 1) & 0xFF
+
+        self.write8(addr, result)
+        carry = self.registers['f'] & FLAG['carry']
+        self.registers['f'] = carry | FLAG['sub']
+
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+        if (val & 0xF) == 0:
+            self.registers['f'] |= FLAG['half-carry']
+
+        self.registers['m'] = 3
 
     def _swap_n(self, n):
         """Swap upper & lower nibbles of n."""
@@ -1401,12 +1834,43 @@ class GbZ80Cpu(object):
 
 
     # Boolean logic
+    def _and_a(self):
+        """AND A with itself; A is unchanged, flags are updated."""
+        registers = self.registers
+        a = registers['a']
+        registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+        registers['m'] = 1
+
+    def _and_pc(self):
+        """AND immediate byte with A, specialized for opcode 0xE6."""
+        registers = self.registers
+        pc = registers['pc']
+        sys_interface = self.sys_interface
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc < 0x8000:
+            value = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+        else:
+            value = sys_interface.read_byte(pc)
+
+        result = registers['a'] & value
+        registers['pc'] = pc + 1
+        registers['a'] = result
+        registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if result == 0 else 0)
+        registers['m'] = 2
+
     def _and_n(self, n):
         """Logically AND n with A, result in A."""
         if n == 'pc':
-            value = self.read8(self.registers['pc'])
-            self.registers['pc'] += 1
-            self.registers['m'] = 2
+            registers = self.registers
+            pc = registers['pc']
+            sys_interface = self.sys_interface
+            direct_rom = self.direct_rom
+            if direct_rom is not None and pc < 0x8000:
+                value = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+            else:
+                value = sys_interface.read_byte(pc)
+            registers['pc'] = pc + 1
+            registers['m'] = 2
         elif n == 'hl':
             value = self.read8((self.registers['h'] << 8) + self.registers['l'])
             self.registers['m'] = 2
@@ -1435,6 +1899,57 @@ class GbZ80Cpu(object):
 
         self.registers['m'] = 1
 
+    def _or_c(self):
+        """Logical OR C with A, specialized for opcode 0xB1."""
+        registers = self.registers
+        a = registers['a'] | registers['c']
+        registers['a'] = a
+        registers['f'] = FLAG_ZERO if a == 0 else 0
+        registers['m'] = 1
+
+    def _or_hl(self):
+        """Logical OR between A and value at memory[HL]."""
+        addr = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(addr)
+
+        self.registers['a'] |= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        self.registers['m'] = 2
+
+    def _or_n_imm(self):
+        """Logical OR immediate byte with register A, result in A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
+        self.registers['a'] |= value
+        self.registers['a'] &= 0xFF
+
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        self.registers['m'] = 2
+
+    def _xor_n_imm(self):
+        """Logical XOR immediate byte with register A, result in A."""
+        value = self.read8(self.registers['pc'])
+        self.registers['pc'] += 1
+
+        self.registers['a'] ^= value
+        self.registers['a'] &= 0xFF
+
+        # Set flags: Z if zero, others cleared
+        self.registers['f'] = 0
+        if self.registers['a'] == 0:
+            self.registers['f'] |= FLAG['zero']
+
+        self.registers['m'] = 2
 
     def _xor_a_n(self, n):
         """Logical XOR n with register A, result in A."""
@@ -1487,7 +2002,7 @@ class GbZ80Cpu(object):
         # print(f"RET to {target:04X} from SP={self.registers['sp']:04X}")
         self.registers['pc'] = target
         self.registers['sp'] += 2
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _rst_n(self, n):
         """Push present address onto stack and jump to address $0000 + n.
@@ -1498,26 +2013,15 @@ class GbZ80Cpu(object):
         self.registers['sp'] -= 2
         self.write16(self.registers['sp'], self.registers['pc'])
         self.registers['pc'] = n
-        self.registers['m'] = 3
-
-    def _reti(self):
-        """Pop two bytes from stack & jump to that address.
-
-        Also enable interrupts
-        """
-        self.registers['ime'] = 1
-        self._rrs()
-        self.registers['pc'] = self.read16(self.registers['sp'])
-        self.registers['sp'] += 2
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _ret_f(self, and_val, flag_check_value):
         """Return if condition is true."""
-        self.registers['m'] = 1
+        self.registers['m'] = 2
         if (self.registers['f'] & and_val) == flag_check_value:
             self.registers['pc'] = self.read16(self.registers['sp'])
             self.registers['sp'] += 2
-            self.registers['m'] += 2
+            self.registers['m'] = 5
 
     def _rsv(self):
         """Copy some values from registers into rsv."""
@@ -1529,11 +2033,266 @@ class GbZ80Cpu(object):
         for reg in ['a', 'b', 'c', 'd', 'e', 'f', 'h', 'l']:
             self.registers[reg] = self.rsv[reg]
 
-    # Misc
+    def _rra(self):
+        """Rotate A right through carry (RRA)."""
+        old_carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        bit0 = self.registers['a'] & 0x01
+        self.registers['a'] = (self.registers['a'] >> 1) | (old_carry << 7)
+        self.registers['a'] &= 0xFF
 
+        self.registers['f'] = 0
+        if bit0:
+            self.registers['f'] |= FLAG['carry']
+        self.registers['m'] = 1
+
+
+    def _rla(self):
+        """Rotate A left through carry (RLA)."""
+        old_carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        bit7 = (self.registers['a'] >> 7) & 0x01
+        self.registers['a'] = ((self.registers['a'] << 1) & 0xFF) | old_carry
+
+        self.registers['f'] = 0
+        if bit7:
+            self.registers['f'] |= FLAG['carry']
+        self.registers['m'] = 1
+
+
+    # CB opcodes
+    def __set_cb_flags(self, result, carry):
+        """Set flags shared by CB-prefixed rotate and shift operations."""
+        self.registers['f'] = 0
+        if result == 0:
+            self.registers['f'] |= FLAG['zero']
+        if carry:
+            self.registers['f'] |= FLAG['carry']
+
+    def _rlc_hlm(self):
+        """Rotate the byte at HL left circularly."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = (value >> 7) & 1
+        result = ((value << 1) & 0xFF) | carry
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _rrc_n(self, r):
+        """Rotate register r right circularly."""
+        value = self.registers[r]
+        carry = value & 1
+        result = (value >> 1) | (carry << 7)
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 2
+
+    def _rrc_hlm(self):
+        """Rotate the byte at HL right circularly."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = value & 1
+        result = (value >> 1) | (carry << 7)
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _rl_n(self, r):
+        """Rotate register r left through Carry."""
+        value = self.registers[r]
+        carry_in = 1 if self.registers['f'] & FLAG['carry'] else 0
+        carry_out = (value >> 7) & 1
+        result = ((value << 1) & 0xFF) | carry_in
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry_out)
+        self.registers['m'] = 2
+
+    def _rl_hlm(self):
+        """Rotate the byte at HL left through Carry."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry_in = 1 if self.registers['f'] & FLAG['carry'] else 0
+        carry_out = (value >> 7) & 1
+        result = ((value << 1) & 0xFF) | carry_in
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry_out)
+        self.registers['m'] = 4
+
+    def _srl_n(self, r):
+        """Shift register r right logically (SRL)."""
+        val = self.registers[r]
+        result = val >> 1
+
+        self.registers[r] = result
+        self.__set_cb_flags(result, val & 1)
+        self.registers['m'] = 2
+
+    def _srl_hlm(self):
+        """Shift the byte at HL right logically."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        result = value >> 1
+        self.write8(address, result)
+        self.__set_cb_flags(result, value & 1)
+        self.registers['m'] = 4
+
+    def _rr_n(self, r):
+        """Rotate register r right through carry (RR r)."""
+        old_val = self.registers[r]
+        old_carry = 1 if (self.registers['f'] & FLAG['carry']) else 0
+        new_carry = old_val & 0x01
+
+        result = (old_val >> 1) | (old_carry << 7)
+        self.registers[r] = result
+        self.__set_cb_flags(result, new_carry)
+        self.registers['m'] = 2
+
+    def _rr_hlm(self):
+        """Rotate the byte at HL right through Carry."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry_in = 1 if self.registers['f'] & FLAG['carry'] else 0
+        carry_out = value & 1
+        result = (value >> 1) | (carry_in << 7)
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry_out)
+        self.registers['m'] = 4
+
+    def _sla_n(self, r):
+        """Shift register r left arithmetically."""
+        value = self.registers[r]
+        carry = (value >> 7) & 1
+        result = (value << 1) & 0xFF
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 2
+
+    def _sla_hlm(self):
+        """Shift the byte at HL left arithmetically."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = (value >> 7) & 1
+        result = (value << 1) & 0xFF
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _sra_n(self, r):
+        """Shift register r right while retaining its sign bit."""
+        value = self.registers[r]
+        carry = value & 1
+        result = (value >> 1) | (value & 0x80)
+        self.registers[r] = result
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 2
+
+    def _sra_hlm(self):
+        """Shift the byte at HL right while retaining its sign bit."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        carry = value & 1
+        result = (value >> 1) | (value & 0x80)
+        self.write8(address, result)
+        self.__set_cb_flags(result, carry)
+        self.registers['m'] = 4
+
+    def _swap_hlm(self):
+        """Swap the upper and lower nibbles of the byte at HL."""
+        address = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(address)
+        result = ((value & 0x0F) << 4) | ((value & 0xF0) >> 4)
+        self.write8(address, result)
+        self.__set_cb_flags(result, 0)
+        self.registers['m'] = 4
+
+    def _res_bit_r(self, bit, reg):
+        """Reset bit `bit` in register `reg`."""
+        self.registers[reg] &= ~(1 << bit)
+        self.registers['m'] = 2
+
+    def _res_bit_hlm(self, bit):
+        """Reset bit `bit` at memory[HL]."""
+        addr = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(addr)
+        value &= ~(1 << bit)
+        self.write8(addr, value)
+        self.registers['m'] = 4
+
+    def _bit_test_r(self, bit, r):
+        """Test bit `bit` in register `r`."""
+        value = self.registers[r]
+        self.__apply_bit_flags(value, bit)
+        self.registers['m'] = 2
+
+    def _bit_test_hlm(self, bit):
+        """Test bit `bit` in value at memory[HL]."""
+        registers = self.registers
+        addr = (registers['h'] << 8) | registers['l']
+        if (
+            0x8000 <= addr <= 0x9FFF
+            or 0xC000 <= addr <= 0xFEFF
+            or 0xFF80 <= addr <= 0xFFFE
+        ):
+            value = self.sys_interface.raw_memory[addr]
+        else:
+            value = self.read8(addr)
+        flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+        if not (value & (1 << bit)):
+            flags |= FLAG_ZERO
+        registers['f'] = flags
+        registers['m'] = 4
+
+    def __apply_bit_flags(self, value, bit):
+        """Apply flags for BIT b,r/m."""
+        self.registers['f'] &= FLAG['carry']  # preserve carry
+        self.registers['f'] |= FLAG['half-carry']
+        if not (value & (1 << bit)):
+            self.registers['f'] |= FLAG['zero']
+
+    def _set_bit_r(self, bit, r):
+        """Set bit `bit` in register `r`."""
+        self.registers[r] |= (1 << bit)
+        self.registers['m'] = 2
+
+    def _set_bit_hlm(self, bit):
+        """Set bit `bit` at memory[HL]."""
+        addr = (self.registers['h'] << 8) | self.registers['l']
+        value = self.read8(addr)
+        value |= (1 << bit)
+        self.write8(addr, value)
+        self.registers['m'] = 4
+
+    # Misc
     def _daa(self):
-        """Decimal adjust accumulator (not implemented yet)."""
-        # TODO: full DAA logic
+        """Decimal adjust accumulator."""
+        a = self.registers['a']
+        f = self.registers['f']
+        n = f & FLAG['sub']
+        c = f & FLAG['carry']
+        h = f & FLAG['half-carry']
+        adjust = 0
+
+        if not n:
+            if h or (a & 0x0F) > 9:
+                adjust += 0x06
+            if c or a > 0x99:
+                adjust += 0x60
+                f |= FLAG['carry']
+        else:
+            if h:
+                adjust |= 0x06
+            if c:
+                adjust |= 0x60
+
+        a = (a - adjust) if n else (a + adjust)
+        a &= 0xFF
+
+        # Set flags
+        f &= FLAG['sub'] | FLAG['carry']  # preserve N and C
+        if a == 0:
+            f |= FLAG['zero']
+
+        self.registers['a'] = a
+        self.registers['f'] = f
         self.registers['m'] = 1
 
     def _stop(self):
@@ -1544,8 +2303,8 @@ class GbZ80Cpu(object):
     def cpl(self):
         """Complement A register (bit flip)."""
         self.registers['a'] = (~self.registers['a']) & 0xFF
-        self.registers['f'] &= FLAG['zero']
-        self.registers['f'] |= 0x60
+        self.registers['f'] &= FLAG['zero'] | FLAG['carry']
+        self.registers['f'] |= FLAG['sub'] | FLAG['half-carry']
         self.registers['m'] = 1
 
     def _ccf(self):
@@ -1577,11 +2336,12 @@ class GbZ80Cpu(object):
             else (0, 0)
         self.registers['a'] = (self.registers['a'] << 1) + ci
         self.registers['a'] &= 255
-        self.registers['f'] = (self.registers['f'] & 0xEF) + co
+        self.registers['f'] = co
         self.registers['m'] = 1
 
     def _scf(self):
         """Set carry flag."""
+        self.registers['f'] &= FLAG['zero']
         self.registers['f'] |= FLAG['carry']
         self.registers['m'] = 1
 
