@@ -974,7 +974,7 @@ class GbZ80Cpu(object):
             if not (value & 0x01):
                 flags |= FLAG_ZERO
             registers['f'] = flags
-            registers['m'] = 3
+            registers['m'] = 4
             return
 
         register_index = i & 0x07
@@ -1134,7 +1134,7 @@ class GbZ80Cpu(object):
         address = self.read16(self.registers['pc'])
         self.write16(address, self.registers['sp'])
         self.registers['pc'] += 2
-        self.registers['m'] = 4
+        self.registers['m'] = 5
 
     def _ld_hlmi_a(self):
         """Put A into memory address HL. Increment HL.
@@ -1272,9 +1272,8 @@ class GbZ80Cpu(object):
         """Add signed immediate value to current address and jump to it."""
         i = self.signed8(self.read8(self.registers['pc']))
         self.registers['pc'] += 1
-        self.registers['m'] = 2
         self.registers['pc'] += i
-        self.registers['m'] += 3
+        self.registers['m'] = 3
 
     def _jr_cc_n(self, and_val, flag_check_value):
         """Conditional relative jump
@@ -1390,7 +1389,7 @@ class GbZ80Cpu(object):
         self.write8(self.registers['sp'], self.registers[r1])
         self.registers['sp'] -= 1
         self.write8(self.registers['sp'], self.registers[r2])
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _pop_nn(self, r1, r2):
         """Pop register pair nn onto stack.
@@ -1532,11 +1531,12 @@ class GbZ80Cpu(object):
         if n == 'pc':
             value = self.read8(registers['pc'])
             registers['pc'] += 1
+            registers['m'] = 2
         else:
             value = registers[n]
+            registers['m'] = 1
 
         registers['f'] = CP_FLAG_TABLE[(registers['a'] << 8) | value]
-        registers['m'] = 2
 
     def _cp_hl(self):
         """Compare A with the byte at HL."""
@@ -2002,7 +2002,7 @@ class GbZ80Cpu(object):
         # print(f"RET to {target:04X} from SP={self.registers['sp']:04X}")
         self.registers['pc'] = target
         self.registers['sp'] += 2
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _rst_n(self, n):
         """Push present address onto stack and jump to address $0000 + n.
@@ -2013,15 +2013,15 @@ class GbZ80Cpu(object):
         self.registers['sp'] -= 2
         self.write16(self.registers['sp'], self.registers['pc'])
         self.registers['pc'] = n
-        self.registers['m'] = 3
+        self.registers['m'] = 4
 
     def _ret_f(self, and_val, flag_check_value):
         """Return if condition is true."""
-        self.registers['m'] = 1
+        self.registers['m'] = 2
         if (self.registers['f'] & and_val) == flag_check_value:
             self.registers['pc'] = self.read16(self.registers['sp'])
             self.registers['sp'] += 2
-            self.registers['m'] += 2
+            self.registers['m'] = 5
 
     def _rsv(self):
         """Copy some values from registers into rsv."""
@@ -2239,7 +2239,7 @@ class GbZ80Cpu(object):
         if not (value & (1 << bit)):
             flags |= FLAG_ZERO
         registers['f'] = flags
-        registers['m'] = 3
+        registers['m'] = 4
 
     def __apply_bit_flags(self, value, bit):
         """Apply flags for BIT b,r/m."""
