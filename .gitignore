@@ -115,3 +115,4 @@ memdump.txt
 *.sav
 *.stats
 *.txt
+input_scripts/tetris_start.json
