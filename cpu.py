@@ -897,7 +897,32 @@ class GbZ80Cpu(object):
         if m_cycles == 0:
             raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
         clock['m'] += m_cycles
-        self._step_system_timer(sys_interface, m_cycles)
+        memory = sys_interface.raw_memory
+        divider_counter = sys_interface.divider_counter
+        next_divider_counter = (divider_counter + m_cycles) & 0x3FFF
+        div_value = next_divider_counter >> 6
+        if not sys_interface.timer_enabled:
+            sys_interface.divider_counter = next_divider_counter
+            if memory[0xFF04] != div_value:
+                memory[0xFF04] = div_value
+        else:
+            shift = sys_interface.timer_period_shift
+            edge_count = (divider_counter + m_cycles) >> shift
+            edge_count -= divider_counter >> shift
+            if edge_count:
+                tima = memory[0xFF05]
+                tma = memory[0xFF06]
+                for _ in range(edge_count):
+                    if tima == 0xFF:
+                        tima = tma
+                        memory[0xFF0F] |= 0x04
+                    else:
+                        tima += 1
+                memory[0xFF05] = tima
+
+            sys_interface.divider_counter = next_divider_counter
+            if memory[0xFF04] != div_value:
+                memory[0xFF04] = div_value
         gpu.step(m_cycles * 4)
 
         # Handle delayed EI
