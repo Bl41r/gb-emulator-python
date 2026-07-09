@@ -266,7 +266,7 @@ class GbZ80Cpu(object):
             58: (self._ld_a_hl_d, ()),  # LDAHLD
             59: (self._dec_sp, ()),  # DECSP
             60: (self._inc_r, ('a',)),  # INCr_a
-            61: (self._dec_r, ('a',)),  # DECr_a
+            61: (self._dec_a, ()),  # DECr_a
             62: (self._ld_rn, ('a',)),  # LDrn_a
             63: (self._ccf, ()),  # CCF
             64: (self._ld_rr, ('b', 'b')),  # LDrr_bb (nop?)
@@ -330,8 +330,8 @@ class GbZ80Cpu(object):
             122: (self._ld_rr, ('a', 'd')),  # LDrr_ad
             123: (self._ld_rr, ('a', 'e')),  # LDrr_ae
             124: (self._ld_rr, ('a', 'h')),  # LDrr_ah
-            125: (self._ld_rr, ('a', 'l')),  # LDrr_al
-            126: (self._ld_r_hlm, ('a',)),  # LDrHLm_a
+            125: (self._ld_a_l, ()),  # LDrr_al
+            126: (self._ld_a_hlm, ()),  # LDrHLm_a
             127: (self._ld_rr, ('a', 'a')),  # LDrr_aa (nop?)
             128: (self._add_a_n, ('b',)),  # ADDr_b
             129: (self._add_a_n, ('c',)),  # ADDr_c
@@ -365,7 +365,7 @@ class GbZ80Cpu(object):
             157: (self._sub_a_n, ('l',)),  # SBCr_l
             158: (self._sbc_a_hl, ()),  # SBC A,(HL)
             159: (self._sub_a_n, ('a',)),  # SBCr_a
-            160: (self._and_n, ('b',)),  # ANDr_b
+            160: (self._and_b, ()),  # ANDr_b
             161: (self._and_n, ('c',)),  # ANDr_c
             162: (self._and_n, ('d',)),  # ANDr_d
             163: (self._and_n, ('e',)),  # ANDr_e
@@ -389,7 +389,7 @@ class GbZ80Cpu(object):
             181: (self._or_n, ('l',)),  # ORr_l
             182: (self._or_hl, ()),  # ORHL
             183: (self._or_n, ('a',)),  # ORr_a
-            184: (self._cp_n, ('b',)),  # CPr_b
+            184: (self._cp_b, ()),  # CPr_b
             185: (self._cp_n, ('c',)),  # CPr_c
             186: (self._cp_n, ('d',)),  # CPr_d
             187: (self._cp_n, ('e',)),  # CPr_e
@@ -774,7 +774,7 @@ class GbZ80Cpu(object):
                 registers['m'] = m_cycles
                 clock['m'] += m_cycles
                 self.halt_m_cycles += m_cycles
-                sys_interface.step(m_cycles)
+                self._step_system_timer(sys_interface, m_cycles)
                 gpu.step(m_cycles * 4)
                 return 0
             self.halted = False
@@ -791,7 +791,7 @@ class GbZ80Cpu(object):
                 if self.handle_interrupts():
                     m_cycles = registers['m']
                     clock['m'] += m_cycles
-                    sys_interface.step(m_cycles)
+                    self._step_system_timer(sys_interface, m_cycles)
                     gpu.step(m_cycles * 4)
 
         pc = registers['pc']
@@ -804,9 +804,90 @@ class GbZ80Cpu(object):
             self.opcode_counts[op] += 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
-        opcode, args = self.opcode_table[op]
-        opcode(*args)
+        if not trace_enabled and op == 0x20:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+            else:
+                i = sys_interface.read_byte(pc)
+
+            pc += 1
+            if registers['f'] & FLAG_ZERO:
+                registers['pc'] = pc
+                registers['m'] = 2
+            else:
+                if i >= 0x80:
+                    i -= 0x100
+                registers['pc'] = (pc + i) & 0xFFFF
+                registers['m'] = 3
+        elif not trace_enabled and op == 0xF0:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+            else:
+                n = sys_interface.read_byte(pc)
+
+            if n == 0:
+                registers['a'] = sys_interface.joypad.read()
+            elif self.gb_doctor_test_mode and n == 0x44:
+                registers['a'] = 0x90
+            elif n == 0x44:
+                memory = sys_interface.raw_memory
+                line = memory[0xFF44]
+                if not (memory[0xFF40] & 0x80):
+                    registers['a'] = 0
+                else:
+                    mode_clock = gpu._mode_clock + 8
+                    if gpu.linemode == 0 and mode_clock >= 204:
+                        registers['a'] = (line + 1) & 0xFF
+                    elif gpu.linemode == 1:
+                        if (
+                            line == 153
+                            and not gpu._line153_ly_reset
+                            and mode_clock >= 4
+                        ):
+                            registers['a'] = 0
+                        elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                            registers['a'] = (line + 1) & 0xFF
+                        else:
+                            registers['a'] = line
+                    else:
+                        registers['a'] = line
+            else:
+                registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+            registers['pc'] = pc + 1
+            registers['m'] = 3
+        elif not trace_enabled and op == 0xB8:
+            registers['f'] = CP_FLAG_TABLE[
+                (registers['a'] << 8) | registers['b']
+            ]
+            registers['m'] = 1
+        elif not trace_enabled and op == 0x28:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+            else:
+                i = sys_interface.read_byte(pc)
+
+            pc += 1
+            if not (registers['f'] & FLAG_ZERO):
+                registers['pc'] = pc
+                registers['m'] = 2
+            else:
+                if i >= 0x80:
+                    i -= 0x100
+                registers['pc'] = (pc + i) & 0xFFFF
+                registers['m'] = 3
+        elif not trace_enabled and op == 0xA7:
+            a = registers['a']
+            registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+            registers['m'] = 1
+        else:
+            opcode, args = self.opcode_table[op]
+            opcode(*args)
+
         if trace_enabled:
+            opcode, args = self.opcode_table[op]
             print(
                 f"[TRACE] Exec {opcode.__name__:<15} "
                 f"args: {str(args):<20} "
@@ -816,7 +897,7 @@ class GbZ80Cpu(object):
         if m_cycles == 0:
             raise Exception("[ERROR] CPU executed an instruction with m=0 — GPU will desync!")
         clock['m'] += m_cycles
-        sys_interface.step(m_cycles)
+        self._step_system_timer(sys_interface, m_cycles)
         gpu.step(m_cycles * 4)
 
         # Handle delayed EI
@@ -824,6 +905,37 @@ class GbZ80Cpu(object):
             registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
         return 1
+
+    @staticmethod
+    def _step_system_timer(sys_interface, m_cycles):
+        """Advance DIV/TIMA in the CPU hot path without method dispatch."""
+        memory = sys_interface.raw_memory
+        divider_counter = sys_interface.divider_counter
+        next_divider_counter = (divider_counter + m_cycles) & 0x3FFF
+        div_value = next_divider_counter >> 6
+        if not sys_interface.timer_enabled:
+            sys_interface.divider_counter = next_divider_counter
+            if memory[0xFF04] != div_value:
+                memory[0xFF04] = div_value
+            return
+
+        shift = sys_interface.timer_period_shift
+        edge_count = (divider_counter + m_cycles) >> shift
+        edge_count -= divider_counter >> shift
+        if edge_count:
+            tima = memory[0xFF05]
+            tma = memory[0xFF06]
+            for _ in range(edge_count):
+                if tima == 0xFF:
+                    tima = tma
+                    memory[0xFF0F] |= 0x04
+                else:
+                    tima += 1
+            memory[0xFF05] = tima
+
+        sys_interface.divider_counter = next_divider_counter
+        if memory[0xFF04] != div_value:
+            memory[0xFF04] = div_value
 
     def log_for_gameboy_dr(self, pc):
         pcmem = [self.read8(pc + i) if (pc + i) < 0x10000 else 0 for i in range(4)]
@@ -1039,6 +1151,12 @@ class GbZ80Cpu(object):
         registers['a'] = registers['b']
         registers['m'] = 1
 
+    def _ld_a_l(self):
+        """Load L into A, specialized for opcode 0x7D."""
+        registers = self.registers
+        registers['a'] = registers['l']
+        registers['m'] = 1
+
     def _ld_rn(self, r):
         """Load mem @ pc into register r."""
         registers = self.registers
@@ -1057,6 +1175,12 @@ class GbZ80Cpu(object):
         read_val = self.read8((self.registers['h'] << 8) + self.registers['l'])
         self.registers[r] = read_val
         self.registers['m'] = 2
+
+    def _ld_a_hlm(self):
+        """Load mem @ HL into A, specialized for opcode 0x7E."""
+        registers = self.registers
+        registers['a'] = self.read8((registers['h'] << 8) | registers['l'])
+        registers['m'] = 2
 
     def _ld_hlm_r(self, r):
         """Load registers[r] into mem @ HL."""
@@ -1141,9 +1265,14 @@ class GbZ80Cpu(object):
 
         Same as: LD (HL),A - INC HL
         """
-        address = (self.registers['h'] << 8) + self.registers['l']
-        self.write8(address, self.registers['a'])
-        self._inc_r_r('h', 'l', m=2)
+        registers = self.registers
+        address = (registers['h'] << 8) | registers['l']
+        self.write8(address, registers['a'])
+        l = (registers['l'] + 1) & 0xFF
+        registers['l'] = l
+        if l == 0:
+            registers['h'] = (registers['h'] + 1) & 0xFF
+        registers['m'] = 2
 
     def _ld_hlmd_a(self):
         """Put A into memory address HL. Decrement HL.
@@ -1156,9 +1285,14 @@ class GbZ80Cpu(object):
 
     def _ld_a_hl_i(self):
         """Load mem @ hl into reg a and increment."""
-        address = (self.registers['h'] << 8) + self.registers['l']
-        self.registers['a'] = self.read8(address)
-        self._inc_r_r('h', 'l', m=2)
+        registers = self.registers
+        address = (registers['h'] << 8) | registers['l']
+        registers['a'] = self.read8(address)
+        l = (registers['l'] + 1) & 0xFF
+        registers['l'] = l
+        if l == 0:
+            registers['h'] = (registers['h'] + 1) & 0xFF
+        registers['m'] = 2
 
     def _ld_a_hl_d(self):
         """Load mem @ hl into reg a and decrement."""
@@ -1182,7 +1316,28 @@ class GbZ80Cpu(object):
         elif self.gb_doctor_test_mode and n == 0x44:
             registers['a'] = 0x90
         elif n == 0x44:
-            registers['a'] = sys_interface.gpu.read_ly_at_cpu_bus()
+            memory = sys_interface.raw_memory
+            line = memory[0xFF44]
+            if not (memory[0xFF40] & 0x80):
+                registers['a'] = 0
+            else:
+                gpu = sys_interface.gpu
+                mode_clock = gpu._mode_clock + 8
+                if gpu.linemode == 0 and mode_clock >= 204:
+                    registers['a'] = (line + 1) & 0xFF
+                elif gpu.linemode == 1:
+                    if (
+                        line == 153
+                        and not gpu._line153_ly_reset
+                        and mode_clock >= 4
+                    ):
+                        registers['a'] = 0
+                    elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                        registers['a'] = (line + 1) & 0xFF
+                    else:
+                        registers['a'] = line
+                else:
+                    registers['a'] = line
         else:
             registers['a'] = sys_interface.raw_memory[0xFF00 + n]
         registers['pc'] = pc + 1
@@ -1538,6 +1693,12 @@ class GbZ80Cpu(object):
 
         registers['f'] = CP_FLAG_TABLE[(registers['a'] << 8) | value]
 
+    def _cp_b(self):
+        """Compare A with B, specialized for opcode 0xB8."""
+        registers = self.registers
+        registers['f'] = CP_FLAG_TABLE[(registers['a'] << 8) | registers['b']]
+        registers['m'] = 1
+
     def _cp_hl(self):
         """Compare A with the byte at HL."""
         registers = self.registers
@@ -1756,6 +1917,21 @@ class GbZ80Cpu(object):
         registers['f'] = flags
         registers['m'] = 1
 
+    def _dec_a(self):
+        """Decrement A with correct flags, specialized for opcode 0x3D."""
+        registers = self.registers
+        val = registers['a']
+        result = (val - 1) & 0xFF
+        flags = (registers['f'] & FLAG_CARRY) | FLAG['sub']
+        if result == 0:
+            flags |= FLAG_ZERO
+        if (val & 0xF) == 0:
+            flags |= FLAG_HALF_CARRY
+
+        registers['a'] = result
+        registers['f'] = flags
+        registers['m'] = 1
+
     def _inc_r(self, r):
         """Increment register with correct flags."""
         val = self.registers[r]
@@ -1839,6 +2015,14 @@ class GbZ80Cpu(object):
         registers = self.registers
         a = registers['a']
         registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+        registers['m'] = 1
+
+    def _and_b(self):
+        """AND A with B, specialized for opcode 0xA0."""
+        registers = self.registers
+        result = registers['a'] & registers['b']
+        registers['a'] = result
+        registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if result == 0 else 0)
         registers['m'] = 1
 
     def _and_pc(self):
