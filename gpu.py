@@ -76,6 +76,7 @@ class GbGpu(object):
         self._line153_ly_reset = False
         self._scanline_scroll_x = 0
         self._scanline_scroll_y = 0
+        self.cgb_mode = False
         self.frame_ready = False
         self.screen_data = bytearray([255] * (160 * 144 * 4))
         self.screen_buffer = np.frombuffer(

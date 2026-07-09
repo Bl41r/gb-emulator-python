@@ -59,6 +59,7 @@ def main(
     audio=True,
     volume=10,
     opcode_stats=False,
+    gbc=False,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -79,7 +80,13 @@ def main(
     else:
         caption = f"GameBoy Emulator - {filename}"
 
-    sys_interface = GbSystemInterface(gb_memory, cpu, gpu, apu=apu)
+    sys_interface = GbSystemInterface(
+        gb_memory,
+        cpu,
+        gpu,
+        apu=apu,
+        force_cgb_mode=gbc,
+    )
 
     for component in [cpu, gpu]:
         component.sys_interface = sys_interface
@@ -627,6 +634,14 @@ if __name__ == '__main__':
         action="store_true",
         help="count and print the most frequently executed opcodes",
     )
+    parser.add_argument(
+        "--gbc",
+        action="store_true",
+        help=(
+            "run as Game Boy Color hardware; CGB-only ROMs enable this "
+            "automatically"
+        ),
+    )
     args = parser.parse_args()
     if args.frameskip < 1:
         parser.error("--frameskip must be 1 or greater")
@@ -649,6 +664,7 @@ if __name__ == '__main__':
                 audio=not args.no_audio,
                 volume=args.volume,
                 opcode_stats=args.opcode_stats,
+                gbc=args.gbc,
             )
         finally:
             profiler.disable()
@@ -669,4 +685,5 @@ if __name__ == '__main__':
             audio=not args.no_audio,
             volume=args.volume,
             opcode_stats=args.opcode_stats,
+            gbc=args.gbc,
         )

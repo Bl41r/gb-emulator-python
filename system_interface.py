@@ -23,7 +23,7 @@ class GbSystemInterface(object):
     VERSION_BYTE = 0x14C
     TIMER_BITS = (7, 1, 3, 5)
 
-    def __init__(self, memory, cpu, gpu, apu=None):
+    def __init__(self, memory, cpu, gpu, apu=None, force_cgb_mode=False):
         """Init."""
         self.cartridge_type = None
         self.memory = memory
@@ -31,6 +31,8 @@ class GbSystemInterface(object):
         self.cpu = cpu
         self.gpu = gpu
         self.apu = apu
+        self.force_cgb_mode = force_cgb_mode
+        self.cgb_mode = False
         self.divider_counter = 0
         self.cartridge = None
         self.rom_path = None
@@ -41,6 +43,10 @@ class GbSystemInterface(object):
         self.timer_bit = self.TIMER_BITS[0]
         self.timer_period_shift = self.timer_bit + 1
         self.joypad = Joypad()
+        self.cgb_bg_palette_index = 0
+        self.cgb_obj_palette_index = 0
+        self.cgb_bg_palette_data = bytearray(0x40)
+        self.cgb_obj_palette_data = bytearray(0x40)
 
     def load_rom_image(self, filename):
         """Load a ROM image into memory.
@@ -53,6 +59,10 @@ class GbSystemInterface(object):
         self.joypad = Joypad()
         rom_array = self._read_rom_file(filename)
         self.cartridge = Cartridge(rom_array)
+        self.cgb_mode = self.force_cgb_mode or self.cartridge.cgb_only
+        self.gpu.cgb_mode = self.cgb_mode
+        if self.cgb_mode:
+            self._initialize_cgb_mode()
         self.rom_path = Path(filename)
         self.save_path = (
             self.rom_path.with_suffix(".sav")
@@ -83,8 +93,36 @@ class GbSystemInterface(object):
             "Language:",
             self.read_byte(GbSystemInterface.LANGUAGE_BYTE))
         print("Title:", self.cartridge.title)
+        if self.cgb_mode:
+            reason = (
+                "CGB-only cartridge"
+                if self.cartridge.cgb_only
+                else "--gbc requested"
+            )
+            print(f"Hardware mode: Game Boy Color ({reason})")
+        elif self.cartridge.supports_cgb:
+            print("Hardware mode: DMG (ROM also supports Game Boy Color)")
+        else:
+            print("Hardware mode: DMG")
 
         # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
+
+    def _initialize_cgb_mode(self):
+        """Apply the post-boot state needed to identify as CGB hardware."""
+        memory = self.raw_memory
+        self.cpu.registers['a'] = 0x11
+        memory[0xFF4D] = 0x7E  # KEY1, normal speed, prepare bit clear
+        memory[0xFF4F] = 0xFE  # VBK, VRAM bank 0
+        memory[0xFF51] = 0xFF
+        memory[0xFF52] = 0xFF
+        memory[0xFF53] = 0xFF
+        memory[0xFF54] = 0xFF
+        memory[0xFF55] = 0xFF
+        memory[0xFF68] = 0x00  # BG palette index
+        memory[0xFF69] = 0x00  # BG palette data
+        memory[0xFF6A] = 0x00  # OBJ palette index
+        memory[0xFF6B] = 0x00  # OBJ palette data
+        memory[0xFF70] = 0xF8  # SVBK, WRAM bank 1 selected by value 0
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
@@ -103,6 +141,55 @@ class GbSystemInterface(object):
 
         if address == 0xFF46:
             self._transfer_oam(value)
+            return
+
+        if self.cgb_mode and address == 0xFF4D:
+            self.memory.write_byte(address, (self.raw_memory[address] & 0x80) | 0x7E | (value & 0x01))
+            return
+
+        if self.cgb_mode and address == 0xFF4F:
+            self.memory.write_byte(address, 0xFE | (value & 0x01))
+            return
+
+        if self.cgb_mode and 0xFF51 <= address <= 0xFF55:
+            self.memory.write_byte(address, value)
+            return
+
+        if self.cgb_mode and address == 0xFF68:
+            self.cgb_bg_palette_index = value & 0xBF
+            self.memory.write_byte(address, self.cgb_bg_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF69:
+            self.cgb_bg_palette_data[self.cgb_bg_palette_index & 0x3F] = value
+            self.memory.write_byte(address, value)
+            if self.cgb_bg_palette_index & 0x80:
+                self.cgb_bg_palette_index = (
+                    (self.cgb_bg_palette_index & 0x80)
+                    | ((self.cgb_bg_palette_index + 1) & 0x3F)
+                )
+                self.memory.write_byte(0xFF68, self.cgb_bg_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF6A:
+            self.cgb_obj_palette_index = value & 0xBF
+            self.memory.write_byte(address, self.cgb_obj_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF6B:
+            self.cgb_obj_palette_data[self.cgb_obj_palette_index & 0x3F] = value
+            self.memory.write_byte(address, value)
+            if self.cgb_obj_palette_index & 0x80:
+                self.cgb_obj_palette_index = (
+                    (self.cgb_obj_palette_index & 0x80)
+                    | ((self.cgb_obj_palette_index + 1) & 0x3F)
+                )
+                self.memory.write_byte(0xFF6A, self.cgb_obj_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF70:
+            bank = value & 0x07
+            self.memory.write_byte(address, 0xF8 | bank)
             return
 
         if address == 0xFF04:
@@ -257,6 +344,12 @@ class GbSystemInterface(object):
 
         if address == 0xFF00:
             return self.joypad.read()
+
+        if self.cgb_mode and address == 0xFF69:
+            return self.cgb_bg_palette_data[self.cgb_bg_palette_index & 0x3F]
+
+        if self.cgb_mode and address == 0xFF6B:
+            return self.cgb_obj_palette_data[self.cgb_obj_palette_index & 0x3F]
 
         return self.raw_memory[address]
 
