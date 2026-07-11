@@ -811,7 +811,9 @@ class GbZ80Cpu(object):
             else:
                 n = sys_interface.read_byte(pc)
 
-            if n == 0:
+            if n >= 0x80:
+                registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+            elif n == 0:
                 registers['a'] = sys_interface.joypad.read()
             elif self.gb_doctor_test_mode and n == 0x44:
                 registers['a'] = 0x90
