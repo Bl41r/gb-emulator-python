@@ -792,6 +792,7 @@ class GbGpu(object):
             priority[:] = self._empty_scanrow
             self._bg_priority_dirty = False
         tile_row_codes = self.tile_row_codes
+        palette0_cache = self._cgb_bg_palette0_row_cache
 
         x = 0
         tile_col = scroll_x >> 3
@@ -842,12 +843,21 @@ class GbGpu(object):
                     tile_index = tile_id
                 if attributes and not (attributes & 0xF8):
                     row_code = tile_row_codes[tile_index][tile_pixel_row]
-                    pixels, rgba = self._cgb_unflipped_row_rgba(
-                        row_code,
-                        palette_data,
-                        attributes,
-                        row_cache,
-                    )
+                    cache = row_cache[attributes]
+                    cached = cache.get(row_code)
+                    if cached is None:
+                        pixels, rgba = self._cgb_unflipped_row_rgba(
+                            row_code,
+                            palette_data,
+                            attributes,
+                            row_cache,
+                        )
+                    else:
+                        pixels, rgba = cached
+                        if diagnostics_enabled:
+                            diagnostics['cgb_row_cache_hits'] = (
+                                diagnostics.get('cgb_row_cache_hits', 0) + 1
+                            )
                 elif attributes:
                     if attributes & 0x40:
                         tile_pixel_row = 7 - tile_pixel_row
@@ -866,10 +876,18 @@ class GbGpu(object):
                         self._bg_priority_dirty = True
                 else:
                     row_code = tile_row_codes[tile_index][tile_pixel_row]
-                    pixels, rgba = self._cgb_palette0_row_rgba(
-                        row_code,
-                        palette_data,
-                    )
+                    cached = palette0_cache.get(row_code)
+                    if cached is None:
+                        pixels, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                    else:
+                        pixels, rgba = cached
+                        if diagnostics_enabled:
+                            diagnostics['cgb_palette0_cache_hits'] = (
+                                diagnostics.get('cgb_palette0_cache_hits', 0) + 1
+                            )
 
                 scanrow[x:x + 8] = pixels
                 offset = screen_offset + x * 4
@@ -926,12 +944,21 @@ class GbGpu(object):
                 tile_index = tile_id
             if attributes and not (attributes & 0xF8):
                 row_code = tile_row_codes[tile_index][tile_pixel_row]
-                pixels, rgba = self._cgb_unflipped_row_rgba(
-                    row_code,
-                    palette_data,
-                    attributes,
-                    row_cache,
-                )
+                cache = row_cache[attributes]
+                cached = cache.get(row_code)
+                if cached is None:
+                    pixels, rgba = self._cgb_unflipped_row_rgba(
+                        row_code,
+                        palette_data,
+                        attributes,
+                        row_cache,
+                    )
+                else:
+                    pixels, rgba = cached
+                    if diagnostics_enabled:
+                        diagnostics['cgb_row_cache_hits'] = (
+                            diagnostics.get('cgb_row_cache_hits', 0) + 1
+                        )
                 bg_priority = 0
             elif attributes:
                 if attributes & 0x40:
@@ -949,10 +976,18 @@ class GbGpu(object):
                 bg_priority = 1 if attributes & 0x80 else 0
             else:
                 row_code = tile_row_codes[tile_index][tile_pixel_row]
-                pixels, rgba = self._cgb_palette0_row_rgba(
-                    row_code,
-                    palette_data,
-                )
+                cached = palette0_cache.get(row_code)
+                if cached is None:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                else:
+                    pixels, rgba = cached
+                    if diagnostics_enabled:
+                        diagnostics['cgb_palette0_cache_hits'] = (
+                            diagnostics.get('cgb_palette0_cache_hits', 0) + 1
+                        )
                 bg_priority = 0
 
             if tile_pixel_col == 0 and x <= 152:

@@ -548,9 +548,11 @@ class GbSystemInterface(object):
         """Copy one page's first 160 bytes into object attribute memory."""
         self.memory.write_byte(0xFF46, source_page)
         source = source_page << 8
-        values = [self.read_byte(source + offset) for offset in range(0xA0)]
-        for offset, value in enumerate(values):
-            self.memory.write_byte(0xFE00 + offset, value)
+        if 0xC000 <= source and source + 0xA0 <= 0xFE00:
+            self.raw_memory[0xFE00:0xFEA0] = self.raw_memory[source:source + 0xA0]
+        else:
+            values = [self.read_byte(source + offset) for offset in range(0xA0)]
+            self.raw_memory[0xFE00:0xFEA0] = array.array('B', values)
         self.gpu.invalidate_sprite_cache()
 
     def read_word(self, address):

@@ -839,7 +839,7 @@ class GbZ80Cpu(object):
                         registers['a'] = line
             else:
                 registers['a'] = sys_interface.raw_memory[0xFF00 + n]
-            registers['pc'] = pc + 1
+            registers['pc'] = (pc + 1) & 0xFFFF
             registers['m'] = 3
         elif not trace_enabled and op == 0xA7:
             a = registers['a']
@@ -854,7 +854,7 @@ class GbZ80Cpu(object):
 
             pc += 1
             if not (registers['f'] & FLAG_ZERO):
-                registers['pc'] = pc
+                registers['pc'] = pc & 0xFFFF
                 registers['m'] = 2
             else:
                 if i >= 0x80:
@@ -875,13 +875,89 @@ class GbZ80Cpu(object):
 
             pc += 1
             if registers['f'] & FLAG_ZERO:
-                registers['pc'] = pc
+                registers['pc'] = pc & 0xFFFF
                 registers['m'] = 2
             else:
                 if i >= 0x80:
                     i -= 0x100
                 registers['pc'] = (pc + i) & 0xFFFF
                 registers['m'] = 3
+        elif not trace_enabled and op == 0x23:
+            l = (registers['l'] + 1) & 0xFF
+            registers['l'] = l
+            if l == 0:
+                registers['h'] = (registers['h'] + 1) & 0xFF
+            registers['m'] = 2
+        elif not trace_enabled and op == 0x05:
+            val = registers['b']
+            result = (val - 1) & 0xFF
+            flags = (registers['f'] & FLAG_CARRY) | FLAG['sub']
+            if result == 0:
+                flags |= FLAG_ZERO
+            if (val & 0xF) == 0:
+                flags |= FLAG_HALF_CARRY
+            registers['b'] = result
+            registers['f'] = flags
+            registers['m'] = 1
+        elif not trace_enabled and op == 0x21:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                registers['l'] = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+                next_pc = pc + 1
+                registers['h'] = (
+                    direct_rom[next_pc] if next_pc < self.direct_rom_length else 0xFF
+                )
+            else:
+                registers['l'] = sys_interface.read_byte(pc)
+                registers['h'] = sys_interface.read_byte((pc + 1) & 0xFFFF)
+            registers['pc'] = (pc + 2) & 0xFFFF
+            registers['m'] = 3
+        elif not trace_enabled and op == 0x12:
+            address = (registers['d'] << 8) | registers['e']
+            if (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                sys_interface.write_byte(address, registers['a'])
+            elif 0xC000 <= address <= 0xFDFF or 0xFF80 <= address <= 0xFFFE:
+                sys_interface.raw_memory[address] = registers['a']
+            else:
+                sys_interface.write_byte(address, registers['a'])
+            registers['m'] = 2
+        elif not trace_enabled and op == 0x22:
+            address = (registers['h'] << 8) | registers['l']
+            if (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                sys_interface.write_byte(address, registers['a'])
+            elif 0xC000 <= address <= 0xFDFF or 0xFF80 <= address <= 0xFFFE:
+                sys_interface.raw_memory[address] = registers['a']
+            else:
+                sys_interface.write_byte(address, registers['a'])
+            l = (registers['l'] + 1) & 0xFF
+            registers['l'] = l
+            if l == 0:
+                registers['h'] = (registers['h'] + 1) & 0xFF
+            registers['m'] = 2
+        elif not trace_enabled and op == 0x2A:
+            address = (registers['h'] << 8) | registers['l']
+            if direct_rom is not None and address < self.direct_rom_length:
+                registers['a'] = direct_rom[address]
+            elif (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                registers['a'] = sys_interface.read_byte(address)
+            elif 0xC000 <= address <= 0xFDFF or 0xFF80 <= address <= 0xFFFE:
+                registers['a'] = sys_interface.raw_memory[address]
+            else:
+                registers['a'] = sys_interface.read_byte(address)
+            l = (registers['l'] + 1) & 0xFF
+            registers['l'] = l
+            if l == 0:
+                registers['h'] = (registers['h'] + 1) & 0xFF
+            registers['m'] = 2
         else:
             opcode, args = self.opcode_table[op]
             opcode(*args)
@@ -1553,7 +1629,7 @@ class GbZ80Cpu(object):
         """Add signed immediate value to current address and jump to it."""
         i = self.signed8(self.read8(self.registers['pc']))
         self.registers['pc'] += 1
-        self.registers['pc'] += i
+        self.registers['pc'] = (self.registers['pc'] + i) & 0xFFFF
         self.registers['m'] = 3
 
     def _jr_cc_n(self, and_val, flag_check_value):
