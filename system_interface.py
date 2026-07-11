@@ -322,10 +322,15 @@ class GbSystemInterface(object):
                         diagnostics.get('cgb_tilemap_writes', 0) + 1
                     )
             if self.raw_memory[0xFF4F] & 0x01:
-                self.cgb_vram_bank1[address - 0x8000] = value
+                offset = address - 0x8000
+                if self.cgb_vram_bank1[offset] == value:
+                    return
+                self.cgb_vram_bank1[offset] = value
                 if address <= 0x97FF:
                     self.gpu.update_tile(address, value, bank=1)
             else:
+                if self.raw_memory[address] == value:
+                    return
                 self.memory.write_byte(address, value)
                 if address <= 0x97FF:
                     self.gpu.update_tile(address, value, bank=0)
@@ -346,6 +351,8 @@ class GbSystemInterface(object):
             self.cgb_wram_banks[self.cgb_wram_bank - 1][offset] = value
             return
 
+        if 0x8000 <= address <= 0x9FFF and self.raw_memory[address] == value:
+            return
         self.memory.write_byte(address, value)
         if 0x8000 <= address <= 0x97FF:     # VRAM tile area write
             self.gpu.update_tile(address, value, bank=0)
