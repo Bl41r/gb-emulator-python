@@ -107,12 +107,14 @@ boot-roms/
 test-roms/
 documents/
 memdump.txt
+captures/
 
 
 .idea/
 *.gb
 *.gbc
 *.sav
+*.ram
 *.stats
 *.txt
 input_scripts/tetris_start.json

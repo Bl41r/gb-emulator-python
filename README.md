@@ -63,6 +63,39 @@ Count exact base and CB-prefixed opcodes without cProfile's larger overhead:
 python main.py roms/tetris.gb --uncapped --no-audio --opcode-stats --max-seconds 30
 ```
 
+Capture GPU diagnostics and visual reference frames when investigating CGB
+rendering:
+
+```powershell
+python main.py roms/Zelda_IV_ZX.gb --gbc --no-display --max-frames 900 --gpu-diagnostics
+python main.py roms/Zelda_IV_ZX.gb --gbc --no-display --max-frames 900 --screenshot-dir captures/zelda --screenshot-start-frame 300 --screenshot-end-frame 900 --screenshot-interval-frames 60
+```
+
+Compare this emulator against PyBoy for the same ROM and frame range:
+
+```powershell
+python tools/visual_compare.py roms/Zelda_IV_ZX.gb --gbc --start-frame 1494 --end-frame 2094 --interval-frames 60 --output-dir captures/zelda_beach_compare
+```
+
+The visual comparison tool writes this emulator's captures, PyBoy reference
+captures, individual contact sheets, and a combined contact sheet under the
+chosen output directory.
+
+For cross-hardware comparisons, select exact rows with `--modes`:
+
+```powershell
+python tools/visual_compare.py roms/Zelda_IV_ZX.gb --modes ours-cgb pyboy-cgb ours-dmg pyboy-dmg --start-frame 1494 --end-frame 1614 --interval-frames 5 --crop 0 0 160 70 --make-gif --motion-metrics --output-dir captures/zelda_four_way_compare
+```
+
+For motion-sensitive rendering bugs, add `--make-gif`. This always writes a
+side-by-side PNG sequence under `motion_frames` and a browser-playable
+`motion_viewer.html`; if the optional `imageio` package is installed, it also
+writes `motion_compare.gif`.
+
+```powershell
+python tools/visual_compare.py roms/Zelda_IV_ZX.gb --gbc --start-frame 1494 --end-frame 1614 --interval-frames 5 --crop 0 0 160 70 --make-gif --output-dir captures/zelda_beach_motion_compare
+```
+
 Script repeatable button input for profiling gameplay instead of title screens:
 
 ```powershell
