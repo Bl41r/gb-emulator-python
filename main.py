@@ -105,11 +105,17 @@ def main(
     scripted_input = load_input_script(input_script) if input_script else {}
 
     window = None
+    frame_surface = None
+    scaled_surface = None
+    display_rgb_view = None
     audio_output = None
     if not no_display:
         # Setup Pygame
         pygame.init()
         window = pygame.display.set_mode((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+        frame_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        scaled_surface = pygame.Surface((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+        display_rgb_view = np.transpose(gpu.screen['rgb'], (1, 0, 2))
         pygame.display.set_caption(caption)
         if audio_enabled:
             try:
@@ -208,7 +214,12 @@ def main(
                             next_audio_cycle += DMG_CYCLES_PER_FRAME
                     if should_draw_frame(stats['frames'], frameskip):
                         draw_start = time.perf_counter()
-                        draw_screen(gpu, window)
+                        draw_screen(
+                            display_rgb_view,
+                            window,
+                            frame_surface,
+                            scaled_surface,
+                        )
                         stats['draw_seconds'] += time.perf_counter() - draw_start
                         stats['drawn_frames'] += 1
                     if pace_frames:
@@ -684,17 +695,18 @@ def print_gpu_diagnostics(gpu):
         )
 
 
-def draw_screen(gpu, screen):
+def draw_screen(display_rgb_view, screen, frame_surface, scaled_surface):
     """Draw the GPU buffer to the Pygame window using fast blitting."""
-    # Create surface from the GPU's persistent RGB framebuffer.
-    surface = pygame.surfarray.make_surface(
-        np.transpose(gpu.screen['rgb'], (1, 0, 2))
+    pygame.surfarray.blit_array(
+        frame_surface,
+        display_rgb_view,
     )
-
-    # Scale it
-    surface = pygame.transform.scale(surface, (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
-
-    screen.blit(surface, (0, 0))
+    pygame.transform.scale(
+        frame_surface,
+        (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE),
+        scaled_surface,
+    )
+    screen.blit(scaled_surface, (0, 0))
     pygame.display.flip()
 
 
