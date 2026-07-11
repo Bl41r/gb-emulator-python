@@ -999,7 +999,28 @@ class GbZ80Cpu(object):
             sys_interface.divider_counter = next_divider_counter
             if memory[0xFF04] != div_value:
                 memory[0xFF04] = div_value
-        gpu.step(m_cycles * 4)
+        ppu_cycles = m_cycles * 4
+        if memory[0xFF40] & 0x80:
+            mode_clock = gpu._mode_clock
+            next_mode_clock = mode_clock + ppu_cycles
+            linemode = gpu.linemode
+            if (
+                (linemode == 0 and next_mode_clock < 204)
+                or (linemode == 2 and next_mode_clock < 80)
+                or (linemode == 3 and next_mode_clock < 172)
+                or (
+                    linemode == 1
+                    and next_mode_clock < 456
+                    and not (
+                        memory[0xFF44] == 153
+                        and not gpu._line153_ly_reset
+                        and next_mode_clock >= 4
+                    )
+                )
+            ):
+                gpu._mode_clock = next_mode_clock
+            else:
+                gpu.step(ppu_cycles)
 
         # Handle delayed EI
         if self.enable_interrupts_next_cycle:
