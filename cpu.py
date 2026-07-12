@@ -177,6 +177,7 @@ class GbZ80Cpu(object):
         self.sys_interface = None    # Set after interface instantiated.
         self.direct_rom = None
         self.direct_rom_length = 0
+        self.hram_poll_loop_ldh_offsets = {}
         self.opcode_counts = None
         self.cb_opcode_counts = None
         self.halt_m_cycles = 0
@@ -223,7 +224,7 @@ class GbZ80Cpu(object):
             # 16: (self._djnz_n, ()),  # DJNZn or stop?
             16: (self._stop, ()),  # DJNZn or stop?
             17: (self._ld_r1r2_nn, ('d', 'e')),  # LDDEnn
-            18: (self._ld_r1r2m_a, ('d', 'e')),  # LDDEmA
+            18: (self._ld_de_a, ()),  # LDDEmA
             19: (self._inc_r_r, ('d', 'e')),  # INCDE
             20: (self._inc_r, ('d',)),  # INCr_d
             21: (self._dec_r, ('d',)),  # DECr_d
@@ -238,9 +239,9 @@ class GbZ80Cpu(object):
             30: (self._ld_rn, ('e',)),  # LDrn_e
             31: (self._rra, ()),  # RRA
             32: (self._jr_nz_n, ()),  # JRNZn
-            33: (self._ld_r1r2_nn, ('h', 'l')),  # LDHLnn
+            33: (self._ld_hl_nn, ()),  # LDHLnn
             34: (self._ld_hlmi_a, ()),  # LDHLIA
-            35: (self._inc_r_r, ('h', 'l')),  # INCHL
+            35: (self._inc_hl, ()),  # INCHL
             36: (self._inc_r, ('h',)),  # INCr_h
             37: (self._dec_r, ('h',)),  # DECr_h
             38: (self._ld_rn, ('h',)),  # LDrn_h
@@ -802,65 +803,91 @@ class GbZ80Cpu(object):
             op = sys_interface.read_byte(pc)
         if self.opcode_counts is not None:
             self.opcode_counts[op] += 1
+        executed_instructions = 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
-        if not trace_enabled and op == 0x20:
-            pc = registers['pc']
-            if direct_rom is not None and pc < 0x8000:
-                i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
-            else:
-                i = sys_interface.read_byte(pc)
+        if not trace_enabled and op == 0xF0:
+            handled_f0 = False
+            poll_loops = self.hram_poll_loop_ldh_offsets
+            if (
+                poll_loops
+                and not gb_doctor_test_mode
+                and self.opcode_counts is None
+                and not self.enable_interrupts_next_cycle
+            ):
+                n = poll_loops.get(pc)
+                if n is not None:
+                    memory = sys_interface.raw_memory
+                    if (
+                        not (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+                        and gpu.m_cycles_until_mode_transition() > 7
+                        and sys_interface.m_cycles_until_timer_interrupt() > 7
+                    ):
+                        a = memory[0xFF00 + n]
+                        registers['a'] = a
+                        registers['f'] = FLAG_HALF_CARRY | (
+                            FLAG_ZERO if a == 0 else 0
+                        )
+                        if a == 0:
+                            registers['pc'] = pc
+                            registers['m'] = 7
+                        else:
+                            registers['pc'] = (pc + 5) & 0xFFFF
+                            registers['m'] = 6
+                        executed_instructions = 3
+                    else:
+                        operand_pc = registers['pc']
+                        registers['a'] = memory[0xFF00 + n]
+                        registers['pc'] = (operand_pc + 1) & 0xFFFF
+                        registers['m'] = 3
+                    handled_f0 = True
 
-            pc += 1
-            if registers['f'] & FLAG_ZERO:
-                registers['pc'] = pc
-                registers['m'] = 2
-            else:
-                if i >= 0x80:
-                    i -= 0x100
-                registers['pc'] = (pc + i) & 0xFFFF
-                registers['m'] = 3
-        elif not trace_enabled and op == 0xF0:
-            pc = registers['pc']
-            if direct_rom is not None and pc < 0x8000:
-                n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
-            else:
-                n = sys_interface.read_byte(pc)
-
-            if n == 0:
-                registers['a'] = sys_interface.joypad.read()
-            elif self.gb_doctor_test_mode and n == 0x44:
-                registers['a'] = 0x90
-            elif n == 0x44:
-                memory = sys_interface.raw_memory
-                line = memory[0xFF44]
-                if not (memory[0xFF40] & 0x80):
-                    registers['a'] = 0
+            if not handled_f0:
+                operand_pc = registers['pc']
+                if direct_rom is not None and operand_pc < 0x8000:
+                    n = (
+                        direct_rom[operand_pc]
+                        if operand_pc < self.direct_rom_length
+                        else 0xFF
+                    )
                 else:
-                    mode_clock = gpu._mode_clock + 8
-                    if gpu.linemode == 0 and mode_clock >= 204:
-                        registers['a'] = (line + 1) & 0xFF
-                    elif gpu.linemode == 1:
-                        if (
-                            line == 153
-                            and not gpu._line153_ly_reset
-                            and mode_clock >= 4
-                        ):
-                            registers['a'] = 0
-                        elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                    n = sys_interface.read_byte(operand_pc)
+
+                if n >= 0x80:
+                    registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+                elif n == 0:
+                    registers['a'] = sys_interface.joypad.read()
+                elif self.gb_doctor_test_mode and n == 0x44:
+                    registers['a'] = 0x90
+                elif n == 0x44:
+                    memory = sys_interface.raw_memory
+                    line = memory[0xFF44]
+                    if not (memory[0xFF40] & 0x80):
+                        registers['a'] = 0
+                    else:
+                        mode_clock = gpu._mode_clock + 8
+                        if gpu.linemode == 0 and mode_clock >= 204:
                             registers['a'] = (line + 1) & 0xFF
+                        elif gpu.linemode == 1:
+                            if (
+                                line == 153
+                                and not gpu._line153_ly_reset
+                                and mode_clock >= 4
+                            ):
+                                registers['a'] = 0
+                            elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                                registers['a'] = (line + 1) & 0xFF
+                            else:
+                                registers['a'] = line
                         else:
                             registers['a'] = line
-                    else:
-                        registers['a'] = line
-            else:
-                registers['a'] = sys_interface.raw_memory[0xFF00 + n]
-            registers['pc'] = pc + 1
-            registers['m'] = 3
-        elif not trace_enabled and op == 0xB8:
-            registers['f'] = CP_FLAG_TABLE[
-                (registers['a'] << 8) | registers['b']
-            ]
+                else:
+                    registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+                registers['pc'] = (operand_pc + 1) & 0xFFFF
+                registers['m'] = 3
+        elif not trace_enabled and op == 0xA7:
+            a = registers['a']
+            registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
             registers['m'] = 1
         elif not trace_enabled and op == 0x28:
             pc = registers['pc']
@@ -871,17 +898,110 @@ class GbZ80Cpu(object):
 
             pc += 1
             if not (registers['f'] & FLAG_ZERO):
-                registers['pc'] = pc
+                registers['pc'] = pc & 0xFFFF
                 registers['m'] = 2
             else:
                 if i >= 0x80:
                     i -= 0x100
                 registers['pc'] = (pc + i) & 0xFFFF
                 registers['m'] = 3
-        elif not trace_enabled and op == 0xA7:
-            a = registers['a']
-            registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+        elif not trace_enabled and op == 0xB8:
+            registers['f'] = CP_FLAG_TABLE[
+                (registers['a'] << 8) | registers['b']
+            ]
             registers['m'] = 1
+        elif not trace_enabled and op == 0x20:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                i = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+            else:
+                i = sys_interface.read_byte(pc)
+
+            pc += 1
+            if registers['f'] & FLAG_ZERO:
+                registers['pc'] = pc & 0xFFFF
+                registers['m'] = 2
+            else:
+                if i >= 0x80:
+                    i -= 0x100
+                registers['pc'] = (pc + i) & 0xFFFF
+                registers['m'] = 3
+        elif not trace_enabled and op == 0x23:
+            l = (registers['l'] + 1) & 0xFF
+            registers['l'] = l
+            if l == 0:
+                registers['h'] = (registers['h'] + 1) & 0xFF
+            registers['m'] = 2
+        elif not trace_enabled and op == 0x05:
+            val = registers['b']
+            result = (val - 1) & 0xFF
+            flags = (registers['f'] & FLAG_CARRY) | FLAG['sub']
+            if result == 0:
+                flags |= FLAG_ZERO
+            if (val & 0xF) == 0:
+                flags |= FLAG_HALF_CARRY
+            registers['b'] = result
+            registers['f'] = flags
+            registers['m'] = 1
+        elif not trace_enabled and op == 0x21:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                registers['l'] = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+                next_pc = pc + 1
+                registers['h'] = (
+                    direct_rom[next_pc] if next_pc < self.direct_rom_length else 0xFF
+                )
+            else:
+                registers['l'] = sys_interface.read_byte(pc)
+                registers['h'] = sys_interface.read_byte((pc + 1) & 0xFFFF)
+            registers['pc'] = (pc + 2) & 0xFFFF
+            registers['m'] = 3
+        elif not trace_enabled and op == 0x12:
+            address = (registers['d'] << 8) | registers['e']
+            if (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                sys_interface.write_byte(address, registers['a'])
+            elif 0xC000 <= address <= 0xFDFF or 0xFF80 <= address <= 0xFFFE:
+                sys_interface.raw_memory[address] = registers['a']
+            else:
+                sys_interface.write_byte(address, registers['a'])
+            registers['m'] = 2
+        elif not trace_enabled and op == 0x22:
+            address = (registers['h'] << 8) | registers['l']
+            if (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                sys_interface.write_byte(address, registers['a'])
+            elif 0xC000 <= address <= 0xFDFF or 0xFF80 <= address <= 0xFFFE:
+                sys_interface.raw_memory[address] = registers['a']
+            else:
+                sys_interface.write_byte(address, registers['a'])
+            l = (registers['l'] + 1) & 0xFF
+            registers['l'] = l
+            if l == 0:
+                registers['h'] = (registers['h'] + 1) & 0xFF
+            registers['m'] = 2
+        elif not trace_enabled and op == 0x2A:
+            address = (registers['h'] << 8) | registers['l']
+            if direct_rom is not None and address < self.direct_rom_length:
+                registers['a'] = direct_rom[address]
+            elif (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                registers['a'] = sys_interface.read_byte(address)
+            elif 0xC000 <= address <= 0xFDFF or 0xFF80 <= address <= 0xFFFE:
+                registers['a'] = sys_interface.raw_memory[address]
+            else:
+                registers['a'] = sys_interface.read_byte(address)
+            l = (registers['l'] + 1) & 0xFF
+            registers['l'] = l
+            if l == 0:
+                registers['h'] = (registers['h'] + 1) & 0xFF
+            registers['m'] = 2
         else:
             opcode, args = self.opcode_table[op]
             opcode(*args)
@@ -923,13 +1043,34 @@ class GbZ80Cpu(object):
             sys_interface.divider_counter = next_divider_counter
             if memory[0xFF04] != div_value:
                 memory[0xFF04] = div_value
-        gpu.step(m_cycles * 4)
+        ppu_cycles = m_cycles * 4
+        if memory[0xFF40] & 0x80:
+            mode_clock = gpu._mode_clock
+            next_mode_clock = mode_clock + ppu_cycles
+            linemode = gpu.linemode
+            if (
+                (linemode == 0 and next_mode_clock < 204)
+                or (linemode == 2 and next_mode_clock < 80)
+                or (linemode == 3 and next_mode_clock < 172)
+                or (
+                    linemode == 1
+                    and next_mode_clock < 456
+                    and not (
+                        memory[0xFF44] == 153
+                        and not gpu._line153_ly_reset
+                        and next_mode_clock >= 4
+                    )
+                )
+            ):
+                gpu._mode_clock = next_mode_clock
+            else:
+                gpu.step(ppu_cycles)
 
         # Handle delayed EI
         if self.enable_interrupts_next_cycle:
             registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
-        return 1
+        return executed_instructions
 
     @staticmethod
     def _step_system_timer(sys_interface, m_cycles):
@@ -1019,7 +1160,7 @@ class GbZ80Cpu(object):
         self.sys_interface.write_byte(0xFF0F, interrupt_flags)
 
         # Push current PC to stack
-        self.registers['sp'] -= 2
+        self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
         self.write16(self.registers['sp'], self.registers['pc'])
 
         # Jump to interrupt vector
@@ -1038,41 +1179,57 @@ class GbZ80Cpu(object):
 
     def read8(self, address):
         """Return a byte from memory at address."""
+        address &= 0xFFFF
         direct_rom = self.direct_rom
         if direct_rom is not None and address < self.direct_rom_length:
             return direct_rom[address]
+        sys_interface = self.sys_interface
+        if (
+            sys_interface.cgb_mode
+            and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+        ):
+            return sys_interface.read_byte(address)
         if (
             0xC000 <= address <= 0xFDFF
             or 0xFF80 <= address <= 0xFFFE
         ):
-            return self.sys_interface.raw_memory[address]
-        return self.sys_interface.read_byte(address)
+            return sys_interface.raw_memory[address]
+        return sys_interface.read_byte(address)
 
     def write8(self, address, val):
         """Write a byte to memory at address."""
+        sys_interface = self.sys_interface
+        if (
+            sys_interface.cgb_mode
+            and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+        ):
+            sys_interface.write_byte(address, val)
+            return
         if (
             0xC000 <= address <= 0xFDFF
             or 0xFF80 <= address <= 0xFFFE
         ):
-            self.sys_interface.raw_memory[address] = val
+            sys_interface.raw_memory[address] = val
             return
-        self.sys_interface.write_byte(address, val)
+        sys_interface.write_byte(address, val)
 
     def read16(self, address):
         """Return a word(16-bits) from memory."""
+        address &= 0xFFFF
         direct_rom = self.direct_rom
         if (
             direct_rom is not None
             and address + 1 < self.direct_rom_length
         ):
             return direct_rom[address] | (direct_rom[address + 1] << 8)
+        sys_interface = self.sys_interface
         if (
             0xC000 <= address < 0xFDFF
             or 0xFF80 <= address < 0xFFFE
         ):
-            memory = self.sys_interface.raw_memory
+            memory = sys_interface.raw_memory
             return memory[address] | (memory[address + 1] << 8)
-        return self.sys_interface.read_word(address)
+        return sys_interface.read_word(address)
 
     def write16(self, address, val):
         """Write a word to memory at address."""
@@ -1227,6 +1384,25 @@ class GbZ80Cpu(object):
         self.write8(address, self.registers['a'])
         self.registers['m'] = 2
 
+    def _ld_de_a(self):
+        """Load A into mem @ DE, specialized for opcode 0x12."""
+        registers = self.registers
+        address = (registers['d'] << 8) | registers['e']
+        sys_interface = self.sys_interface
+        if (
+            sys_interface.cgb_mode
+            and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+        ):
+            sys_interface.write_byte(address, registers['a'])
+        elif (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            sys_interface.raw_memory[address] = registers['a']
+        else:
+            sys_interface.write_byte(address, registers['a'])
+        registers['m'] = 2
+
     def _ld_nn_a(self):
         """Load byte registers['a'] into mem @ 16-bit address.
 
@@ -1239,7 +1415,19 @@ class GbZ80Cpu(object):
             address = direct_rom[pc] | (direct_rom[pc + 1] << 8)
         else:
             address = self.sys_interface.read_word(pc)
-        self.sys_interface.write_byte(address, registers['a'])
+        sys_interface = self.sys_interface
+        if (
+            sys_interface.cgb_mode
+            and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+        ):
+            sys_interface.write_byte(address, registers['a'])
+        elif (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            sys_interface.raw_memory[address] = registers['a']
+        else:
+            sys_interface.write_byte(address, registers['a'])
         registers['pc'] = (pc + 2) & 0xFFFF
         registers['m'] = 4
 
@@ -1261,7 +1449,22 @@ class GbZ80Cpu(object):
             address = direct_rom[pc] | (direct_rom[pc + 1] << 8)
         else:
             address = self.sys_interface.read_word(pc)
-        registers['a'] = self.sys_interface.read_byte(address)
+        if direct_rom is not None and address < self.direct_rom_length:
+            registers['a'] = direct_rom[address]
+        else:
+            sys_interface = self.sys_interface
+            if (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                registers['a'] = sys_interface.read_byte(address)
+            elif (
+                0xC000 <= address <= 0xFDFF
+                or 0xFF80 <= address <= 0xFFFE
+            ):
+                registers['a'] = sys_interface.raw_memory[address]
+            else:
+                registers['a'] = sys_interface.read_byte(address)
         registers['pc'] = (pc + 2) & 0xFFFF
         registers['m'] = 4
 
@@ -1271,6 +1474,20 @@ class GbZ80Cpu(object):
         self.registers[r1] = self.read8(self.registers['pc'] + 1)
         self.registers['pc'] += 2
         self.registers['m'] = 3
+
+    def _ld_hl_nn(self):
+        """Load 16-bit immediate into HL, specialized for opcode 0x21."""
+        registers = self.registers
+        pc = registers['pc']
+        direct_rom = self.direct_rom
+        if direct_rom is not None and pc + 1 < self.direct_rom_length:
+            registers['l'] = direct_rom[pc]
+            registers['h'] = direct_rom[pc + 1]
+        else:
+            registers['l'] = self.read8(pc)
+            registers['h'] = self.read8(pc + 1)
+        registers['pc'] = (pc + 2) & 0xFFFF
+        registers['m'] = 3
 
     def _ld_sp_nn(self):
         """Load 16-bit immediate value into stack pointer."""
@@ -1292,7 +1509,19 @@ class GbZ80Cpu(object):
         """
         registers = self.registers
         address = (registers['h'] << 8) | registers['l']
-        self.write8(address, registers['a'])
+        sys_interface = self.sys_interface
+        if (
+            sys_interface.cgb_mode
+            and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+        ):
+            sys_interface.write_byte(address, registers['a'])
+        elif (
+            0xC000 <= address <= 0xFDFF
+            or 0xFF80 <= address <= 0xFFFE
+        ):
+            sys_interface.raw_memory[address] = registers['a']
+        else:
+            sys_interface.write_byte(address, registers['a'])
         l = (registers['l'] + 1) & 0xFF
         registers['l'] = l
         if l == 0:
@@ -1312,7 +1541,23 @@ class GbZ80Cpu(object):
         """Load mem @ hl into reg a and increment."""
         registers = self.registers
         address = (registers['h'] << 8) | registers['l']
-        registers['a'] = self.read8(address)
+        direct_rom = self.direct_rom
+        if direct_rom is not None and address < self.direct_rom_length:
+            registers['a'] = direct_rom[address]
+        else:
+            sys_interface = self.sys_interface
+            if (
+                sys_interface.cgb_mode
+                and (0xD000 <= address <= 0xDFFF or 0xF000 <= address <= 0xFDFF)
+            ):
+                registers['a'] = sys_interface.read_byte(address)
+            elif (
+                0xC000 <= address <= 0xFDFF
+                or 0xFF80 <= address <= 0xFFFE
+            ):
+                registers['a'] = sys_interface.raw_memory[address]
+            else:
+                registers['a'] = sys_interface.read_byte(address)
         l = (registers['l'] + 1) & 0xFF
         registers['l'] = l
         if l == 0:
@@ -1452,7 +1697,7 @@ class GbZ80Cpu(object):
         """Add signed immediate value to current address and jump to it."""
         i = self.signed8(self.read8(self.registers['pc']))
         self.registers['pc'] += 1
-        self.registers['pc'] += i
+        self.registers['pc'] = (self.registers['pc'] + i) & 0xFFFF
         self.registers['m'] = 3
 
     def _jr_cc_n(self, and_val, flag_check_value):
@@ -1553,8 +1798,8 @@ class GbZ80Cpu(object):
     def _reti(self):
         """Return from interrupt, enable interrupts immediately."""
         lo = self.read8(self.registers['sp'])
-        hi = self.read8(self.registers['sp'] + 1)
-        self.registers['sp'] += 2
+        hi = self.read8((self.registers['sp'] + 1) & 0xFFFF)
+        self.registers['sp'] = (self.registers['sp'] + 2) & 0xFFFF
         self.registers['pc'] = (hi << 8) | lo
         self.registers['ime'] = 1
         self.registers['m'] = 4  # RETI should consume 4 machine cycles
@@ -1565,9 +1810,9 @@ class GbZ80Cpu(object):
 
         Decrement Stack Pointer (SP) twice.
         """
-        self.registers['sp'] -= 1
+        self.registers['sp'] = (self.registers['sp'] - 1) & 0xFFFF
         self.write8(self.registers['sp'], self.registers[r1])
-        self.registers['sp'] -= 1
+        self.registers['sp'] = (self.registers['sp'] - 1) & 0xFFFF
         self.write8(self.registers['sp'], self.registers[r2])
         self.registers['m'] = 4
 
@@ -1577,9 +1822,9 @@ class GbZ80Cpu(object):
         Increment Stack Pointer (SP) twice.
         """
         lo = self.read8(self.registers['sp'])
-        self.registers['sp'] += 1
+        self.registers['sp'] = (self.registers['sp'] + 1) & 0xFFFF
         hi = self.read8(self.registers['sp'])
-        self.registers['sp'] += 1
+        self.registers['sp'] = (self.registers['sp'] + 1) & 0xFFFF
 
         if (r1, r2) == ('a', 'f'):
             lo &= 0xF0  # Only keep upper nibble (Z, N, H, C)
@@ -1595,7 +1840,7 @@ class GbZ80Cpu(object):
         """
         target = self.read16(self.registers['pc'])
         # print(f"CALL to {target:04X} from {self.registers['pc']:04X} SP={self.registers['sp']:04X}")
-        self.registers['sp'] -= 2
+        self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = target
         self.registers['m'] = 6
@@ -1607,7 +1852,7 @@ class GbZ80Cpu(object):
         self.registers['m'] = 3
 
         if (self.registers['f'] & flag_mask) == expected_value:
-            self.registers['sp'] -= 2
+            self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
             self.write16(self.registers['sp'], self.registers['pc'])
             self.registers['pc'] = address
             self.registers['m'] += 3
@@ -1907,6 +2152,15 @@ class GbZ80Cpu(object):
         if not self.registers[r2]:
             self.registers[r1] = (self.registers[r1] + 1) & 255
         self.registers['m'] = m
+
+    def _inc_hl(self):
+        """Increment HL, specialized for opcode 0x23."""
+        registers = self.registers
+        l = (registers['l'] + 1) & 0xFF
+        registers['l'] = l
+        if l == 0:
+            registers['h'] = (registers['h'] + 1) & 0xFF
+        registers['m'] = 2
 
     def _dec_r_r(self, r1, r2, m=2):
         """Decrement registers.
@@ -2210,7 +2464,7 @@ class GbZ80Cpu(object):
         target = self.read16(self.registers['sp'])
         # print(f"RET to {target:04X} from SP={self.registers['sp']:04X}")
         self.registers['pc'] = target
-        self.registers['sp'] += 2
+        self.registers['sp'] = (self.registers['sp'] + 2) & 0xFFFF
         self.registers['m'] = 4
 
     def _rst_n(self, n):
@@ -2219,7 +2473,7 @@ class GbZ80Cpu(object):
         n = n = $00,$08,$10,$18,$20,$28,$30,$38
         """
         self._rsv()
-        self.registers['sp'] -= 2
+        self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
         self.write16(self.registers['sp'], self.registers['pc'])
         self.registers['pc'] = n
         self.registers['m'] = 4
@@ -2229,7 +2483,7 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
         if (self.registers['f'] & and_val) == flag_check_value:
             self.registers['pc'] = self.read16(self.registers['sp'])
-            self.registers['sp'] += 2
+            self.registers['sp'] = (self.registers['sp'] + 2) & 0xFFFF
             self.registers['m'] = 5
 
     def _rsv(self):
@@ -2505,8 +2759,20 @@ class GbZ80Cpu(object):
         self.registers['m'] = 1
 
     def _stop(self):
-        """Fake STOP instruction."""
-        self.stopped = True
+        """Handle STOP, including CGB speed-switch handoff via KEY1."""
+        registers = self.registers
+        sys_interface = self.sys_interface
+        registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+        if sys_interface.cgb_mode:
+            key1 = sys_interface.raw_memory[0xFF4D]
+            if key1 & 0x01:
+                next_key1 = (key1 ^ 0x80) & 0xFE
+                sys_interface.raw_memory[0xFF4D] = next_key1
+                sys_interface.double_speed = bool(next_key1 & 0x80)
+            else:
+                self.stopped = True
+        else:
+            self.stopped = True
         self.registers['m'] = 1
 
     def cpl(self):

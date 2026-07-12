@@ -16,6 +16,41 @@ from joypad import Joypad
 class GbSystemInterface(object):
     """Interface between CPU/GPU and memory unit."""
 
+    DMG_COMPAT_SHADE_RGB = (
+        (255, 255, 255),
+        (192, 192, 192),
+        (96, 96, 96),
+        (0, 0, 0),
+    )
+    DMG_COMPAT_SHADE_RGB555 = tuple(
+        ((shade[0] >> 3) | ((shade[1] >> 3) << 5) | ((shade[2] >> 3) << 10))
+        for shade in DMG_COMPAT_SHADE_RGB
+    )
+    DMG_POST_BOOT_REGISTERS = {
+        'a': 0x01, 'f': 0xB0,
+        'b': 0x00, 'c': 0x13,
+        'd': 0x00, 'e': 0xD8,
+        'h': 0x01, 'l': 0x4D,
+        'pc': 0x0100, 'sp': 0xFFFE,
+        'm': 0, 'ime': 0,
+    }
+    CGB_POST_BOOT_REGISTERS = {
+        'a': 0x11, 'f': 0x80,
+        'b': 0x00, 'c': 0x00,
+        'd': 0xFF, 'e': 0x56,
+        'h': 0x00, 'l': 0x0D,
+        'pc': 0x0100, 'sp': 0xFFFE,
+        'm': 0, 'ime': 0,
+    }
+    CGB_DMG_COMPAT_POST_BOOT_REGISTERS = {
+        'a': 0x11, 'f': 0x80,
+        'b': 0x00, 'c': 0x00,
+        'd': 0x00, 'e': 0x08,
+        'h': 0x00, 'l': 0x7C,
+        'pc': 0x0100, 'sp': 0xFFFE,
+        'm': 0, 'ime': 0,
+    }
+
     CART_TITLE = range(0x0134, 0x0143)
     CART_TYPE_CHECK_BYTE = 0x0147
     MANUFACTURER_CODE_BYTE = 0x14B
@@ -23,7 +58,15 @@ class GbSystemInterface(object):
     VERSION_BYTE = 0x14C
     TIMER_BITS = (7, 1, 3, 5)
 
-    def __init__(self, memory, cpu, gpu, apu=None):
+    def __init__(
+        self,
+        memory,
+        cpu,
+        gpu,
+        apu=None,
+        force_cgb_mode=False,
+        bios_path=None,
+    ):
         """Init."""
         self.cartridge_type = None
         self.memory = memory
@@ -31,6 +74,16 @@ class GbSystemInterface(object):
         self.cpu = cpu
         self.gpu = gpu
         self.apu = apu
+        self.force_cgb_mode = force_cgb_mode
+        self.bios_path = bios_path
+        self.boot_rom = None
+        self.boot_rom_enabled = False
+        self.cgb_mode = False
+        self.cgb_dmg_compat_mode = False
+        self.double_speed = False
+        self.cgb_vram_bank1 = bytearray(0x2000)
+        self.cgb_wram_banks = [bytearray(0x1000) for _ in range(7)]
+        self.cgb_wram_bank = 1
         self.divider_counter = 0
         self.cartridge = None
         self.rom_path = None
@@ -41,6 +94,14 @@ class GbSystemInterface(object):
         self.timer_bit = self.TIMER_BITS[0]
         self.timer_period_shift = self.timer_bit + 1
         self.joypad = Joypad()
+        self.cgb_bg_palette_index = 0
+        self.cgb_obj_palette_index = 0
+        self.cgb_bg_palette_data = bytearray(0x40)
+        self.cgb_obj_palette_data = bytearray(0x40)
+        self.cgb_bg_palette_rgb = [[(0, 0, 0) for _ in range(4)] for _ in range(8)]
+        self.cgb_obj_palette_rgb = [[(0, 0, 0) for _ in range(4)] for _ in range(8)]
+        self.cgb_bg_palette_generation = 0
+        self.cgb_obj_palette_generation = 0
 
     def load_rom_image(self, filename):
         """Load a ROM image into memory.
@@ -48,11 +109,41 @@ class GbSystemInterface(object):
         TODO: multiple rom banks for oversized roms
         """
         self.memory.reset_memory()
+        self.cgb_vram_bank1[:] = bytes(0x2000)
+        for bank in self.cgb_wram_banks:
+            bank[:] = bytes(0x1000)
+        self.cgb_wram_bank = 1
+        self.cgb_bg_palette_index = 0
+        self.cgb_obj_palette_index = 0
+        self.cgb_bg_palette_data[:] = bytes(0x40)
+        self.cgb_obj_palette_data[:] = bytes(0x40)
+        self.cgb_bg_palette_generation = 0
+        self.cgb_obj_palette_generation = 0
+        self._refresh_cgb_palette_rgb(
+            self.cgb_bg_palette_data,
+            self.cgb_bg_palette_rgb,
+        )
+        self._refresh_cgb_palette_rgb(
+            self.cgb_obj_palette_data,
+            self.cgb_obj_palette_rgb,
+        )
         self.divider_counter = 0
         self._set_timer_control(0)
         self.joypad = Joypad()
         rom_array = self._read_rom_file(filename)
         self.cartridge = Cartridge(rom_array)
+        if self.bios_path:
+            self._load_boot_rom(self.bios_path)
+            self._validate_boot_rom_hardware_match()
+        self.cgb_mode = (
+            self.force_cgb_mode
+            or self.cartridge.cgb_only
+            or (self.boot_rom is not None and len(self.boot_rom) == 0x900)
+        )
+        self.cgb_dmg_compat_mode = self.cgb_mode and not self.cartridge.supports_cgb
+        self.gpu.cgb_mode = self.cgb_mode
+        if not self.boot_rom_enabled:
+            self._apply_post_boot_state()
         self.rom_path = Path(filename)
         self.save_path = (
             self.rom_path.with_suffix(".sav")
@@ -67,8 +158,34 @@ class GbSystemInterface(object):
         self.direct_rom_length = len(self.direct_rom)
         self.cpu.direct_rom = self.direct_rom
         self.cpu.direct_rom_length = self.direct_rom_length
+        if self.boot_rom_enabled:
+            self.cpu.direct_rom = None
+        scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
+        poll_loops = {}
+        limit = min(scan_limit, self.direct_rom_length)
+        direct_rom = self.direct_rom
+        for pc in range(max(0, limit - 4)):
+            if (
+                direct_rom[pc] == 0xF0
+                and direct_rom[pc + 1] >= 0x80
+                and direct_rom[pc + 2] == 0xA7
+                and direct_rom[pc + 3] == 0x28
+                and direct_rom[pc + 4] == 0xFB
+            ):
+                poll_loops[pc] = direct_rom[pc + 1]
+        self.cpu.hram_poll_loop_ldh_offsets = poll_loops
 
-        self.cpu.registers['pc'] = 0x0100
+        if self.boot_rom_enabled:
+            self.cpu.registers.update({
+                'a': 0, 'f': 0,
+                'b': 0, 'c': 0,
+                'd': 0, 'e': 0,
+                'h': 0, 'l': 0,
+                'pc': 0x0000,
+                'sp': 0x0000,
+                'm': 0,
+                'ime': 0,
+            })
 
         self.cartridge_type = self.cartridge.cartridge_type
         print(
@@ -83,8 +200,175 @@ class GbSystemInterface(object):
             "Language:",
             self.read_byte(GbSystemInterface.LANGUAGE_BYTE))
         print("Title:", self.cartridge.title)
+        if self.cgb_mode:
+            if self.cartridge.cgb_only:
+                reason = "CGB-only cartridge"
+            elif self.boot_rom_is_cgb:
+                reason = "GBC boot ROM"
+            else:
+                reason = "--gbc requested"
+            print(f"Hardware mode: Game Boy Color ({reason})")
+        elif self.cartridge.supports_cgb:
+            print("Hardware mode: DMG (ROM also supports Game Boy Color)")
+        else:
+            print("Hardware mode: DMG")
 
         # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
+
+    def _load_boot_rom(self, bios_path):
+        """Load an optional DMG/CGB boot ROM image."""
+        data = Path(bios_path).read_bytes()
+        if len(data) not in (0x100, 0x900):
+            raise ValueError(
+                "unsupported BIOS size {} bytes; expected 256-byte DMG "
+                "or 2304-byte CGB boot ROM".format(len(data))
+            )
+        self.boot_rom = bytes(data)
+        self.boot_rom_enabled = True
+        self.raw_memory[0xFF50] = 0x00
+        print(
+            "Loaded boot ROM:",
+            "{} ({} bytes)".format(bios_path, len(self.boot_rom)),
+        )
+
+    @property
+    def boot_rom_is_dmg(self):
+        return self.boot_rom is not None and len(self.boot_rom) == 0x100
+
+    @property
+    def boot_rom_is_cgb(self):
+        return self.boot_rom is not None and len(self.boot_rom) == 0x900
+
+    def _validate_boot_rom_hardware_match(self):
+        """Warn or fail for boot ROM / requested hardware mismatches."""
+        if not self.boot_rom_is_dmg:
+            return
+        if self.cartridge.cgb_only:
+            raise ValueError(
+                "cannot boot a CGB-only cartridge with a 256-byte DMG BIOS; "
+                "use a 2304-byte GBC BIOS instead"
+            )
+        if self.force_cgb_mode:
+            print(
+                "Warning: --gbc was requested with a 256-byte DMG BIOS. "
+                "The DMG BIOS cannot initialize GBC hardware or palettes; "
+                "use a 2304-byte GBC BIOS for color boot behavior."
+            )
+
+    def _boot_rom_contains(self, address):
+        """Return whether the currently mapped boot ROM owns this address."""
+        if not self.boot_rom_enabled or self.boot_rom is None:
+            return False
+        if len(self.boot_rom) == 0x100:
+            return address < 0x100
+        return address < 0x100 or 0x200 <= address < 0x900
+
+    def read_boot_rom_byte(self, address):
+        """Read a byte from the mapped boot ROM."""
+        return self.boot_rom[address]
+
+    def _apply_post_boot_state(self):
+        """Apply the hardware state normally produced by the skipped BIOS."""
+        memory = self.raw_memory
+        if self.cgb_mode:
+            if self.cgb_dmg_compat_mode:
+                self.cpu.registers.update(self.CGB_DMG_COMPAT_POST_BOOT_REGISTERS)
+            else:
+                self.cpu.registers.update(self.CGB_POST_BOOT_REGISTERS)
+            self._initialize_cgb_mode()
+        else:
+            self.cpu.registers.update(self.DMG_POST_BOOT_REGISTERS)
+            memory[0xFF50] = 0x01
+
+    def _initialize_cgb_mode(self):
+        """Apply the post-boot state needed to identify as CGB hardware."""
+        memory = self.raw_memory
+        memory[0xFF50] = 0x01
+        memory[0xFF4D] = 0x7E  # KEY1, normal speed, prepare bit clear
+        memory[0xFF4F] = 0xFE  # VBK, VRAM bank 0
+        memory[0xFF51] = 0xFF
+        memory[0xFF52] = 0xFF
+        memory[0xFF53] = 0xFF
+        memory[0xFF54] = 0xFF
+        memory[0xFF55] = 0xFF
+        memory[0xFF68] = 0x00  # BG palette index
+        memory[0xFF69] = 0x00  # BG palette data
+        memory[0xFF6A] = 0x00  # OBJ palette index
+        memory[0xFF6B] = 0x00  # OBJ palette data
+        memory[0xFF70] = 0xF8  # SVBK, WRAM bank 1 selected by value 0
+        if self.cgb_dmg_compat_mode:
+            self._sync_all_dmg_palettes_to_cgb()
+
+    def _set_cgb_palette_from_dmg_register(
+        self,
+        raw_palette,
+        decoded_palette,
+        palette_number,
+        dmg_palette,
+    ):
+        """Map one DMG palette register into a CGB palette RAM slot."""
+        base = palette_number * 8
+        for color_index in range(4):
+            shade_index = (dmg_palette >> (color_index * 2)) & 0x03
+            rgb555 = self.DMG_COMPAT_SHADE_RGB555[shade_index]
+            offset = base + color_index * 2
+            raw_palette[offset] = rgb555 & 0xFF
+            raw_palette[offset + 1] = (rgb555 >> 8) & 0xFF
+            decoded_palette[palette_number][color_index] = (
+                self.DMG_COMPAT_SHADE_RGB[shade_index]
+            )
+
+    def _sync_all_dmg_palettes_to_cgb(self):
+        """Seed CGB palette RAM for DMG-only games running on CGB hardware."""
+        memory = self.raw_memory
+        self._set_cgb_palette_from_dmg_register(
+            self.cgb_bg_palette_data,
+            self.cgb_bg_palette_rgb,
+            0,
+            memory[0xFF47],
+        )
+        self._set_cgb_palette_from_dmg_register(
+            self.cgb_obj_palette_data,
+            self.cgb_obj_palette_rgb,
+            0,
+            memory[0xFF48],
+        )
+        self._set_cgb_palette_from_dmg_register(
+            self.cgb_obj_palette_data,
+            self.cgb_obj_palette_rgb,
+            1,
+            memory[0xFF49],
+        )
+        self.gpu.invalidate_cgb_bg_palette_cache(0)
+        self.gpu.invalidate_cgb_obj_palette_cache(0)
+        self.gpu.invalidate_cgb_obj_palette_cache(1)
+
+    def _sync_dmg_palette_write_to_cgb(self, address, value):
+        """Keep CGB palette RAM aligned with DMG palette register writes."""
+        if address == 0xFF47:
+            self._set_cgb_palette_from_dmg_register(
+                self.cgb_bg_palette_data,
+                self.cgb_bg_palette_rgb,
+                0,
+                value,
+            )
+            self.gpu.invalidate_cgb_bg_palette_cache(0)
+        elif address == 0xFF48:
+            self._set_cgb_palette_from_dmg_register(
+                self.cgb_obj_palette_data,
+                self.cgb_obj_palette_rgb,
+                0,
+                value,
+            )
+            self.gpu.invalidate_cgb_obj_palette_cache(0)
+        else:
+            self._set_cgb_palette_from_dmg_register(
+                self.cgb_obj_palette_data,
+                self.cgb_obj_palette_rgb,
+                1,
+                value,
+            )
+            self.gpu.invalidate_cgb_obj_palette_cache(1)
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
@@ -103,6 +387,110 @@ class GbSystemInterface(object):
 
         if address == 0xFF46:
             self._transfer_oam(value)
+            return
+
+        if address == 0xFF50:
+            self.memory.write_byte(address, value)
+            if value & 0x01:
+                self.boot_rom_enabled = False
+                self.cpu.direct_rom = self.direct_rom
+            return
+
+        if self.cgb_dmg_compat_mode and 0xFF47 <= address <= 0xFF49:
+            self.memory.write_byte(address, value)
+            self._sync_dmg_palette_write_to_cgb(address, value)
+            return
+
+        if self.cgb_mode and address == 0xFF4D:
+            self.memory.write_byte(address, (self.raw_memory[address] & 0x80) | 0x7E | (value & 0x01))
+            return
+
+        if self.cgb_mode and address == 0xFF4F:
+            self.memory.write_byte(address, 0xFE | (value & 0x01))
+            return
+
+        if self.cgb_mode and 0xFF51 <= address <= 0xFF55:
+            self.memory.write_byte(address, value)
+            if address == 0xFF55:
+                self._cgb_dma_transfer(value)
+            return
+
+        if self.cgb_mode and address == 0xFF68:
+            self.cgb_bg_palette_index = value & 0xBF
+            self.memory.write_byte(address, self.cgb_bg_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF69:
+            palette_offset = self.cgb_bg_palette_index & 0x3F
+            palette_number = palette_offset >> 3
+            palette_changed = self.cgb_bg_palette_data[palette_offset] != value
+            if self.gpu.diagnostics_enabled:
+                diagnostics = self.gpu.diagnostics
+                diagnostics['cgb_bg_palette_writes'] = (
+                    diagnostics.get('cgb_bg_palette_writes', 0) + 1
+                )
+                if not palette_changed:
+                    diagnostics['cgb_bg_palette_redundant_writes'] = (
+                        diagnostics.get('cgb_bg_palette_redundant_writes', 0) + 1
+                    )
+            if palette_changed:
+                self._write_cgb_palette_byte(
+                    self.cgb_bg_palette_data,
+                    self.cgb_bg_palette_rgb,
+                    palette_offset,
+                    value,
+                )
+                self.cgb_bg_palette_generation += 1
+                self.gpu.invalidate_cgb_bg_palette_cache(palette_number)
+            self.memory.write_byte(address, value)
+            if self.cgb_bg_palette_index & 0x80:
+                self.cgb_bg_palette_index = (
+                    (self.cgb_bg_palette_index & 0x80)
+                    | ((self.cgb_bg_palette_index + 1) & 0x3F)
+                )
+                self.memory.write_byte(0xFF68, self.cgb_bg_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF6A:
+            self.cgb_obj_palette_index = value & 0xBF
+            self.memory.write_byte(address, self.cgb_obj_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF6B:
+            palette_offset = self.cgb_obj_palette_index & 0x3F
+            palette_number = palette_offset >> 3
+            palette_changed = self.cgb_obj_palette_data[palette_offset] != value
+            if self.gpu.diagnostics_enabled:
+                diagnostics = self.gpu.diagnostics
+                diagnostics['cgb_obj_palette_writes'] = (
+                    diagnostics.get('cgb_obj_palette_writes', 0) + 1
+                )
+                if not palette_changed:
+                    diagnostics['cgb_obj_palette_redundant_writes'] = (
+                        diagnostics.get('cgb_obj_palette_redundant_writes', 0) + 1
+                    )
+            if palette_changed:
+                self._write_cgb_palette_byte(
+                    self.cgb_obj_palette_data,
+                    self.cgb_obj_palette_rgb,
+                    palette_offset,
+                    value,
+                )
+                self.cgb_obj_palette_generation += 1
+                self.gpu.invalidate_cgb_obj_palette_cache(palette_number)
+            self.memory.write_byte(address, value)
+            if self.cgb_obj_palette_index & 0x80:
+                self.cgb_obj_palette_index = (
+                    (self.cgb_obj_palette_index & 0x80)
+                    | ((self.cgb_obj_palette_index + 1) & 0x3F)
+                )
+                self.memory.write_byte(0xFF6A, self.cgb_obj_palette_index)
+            return
+
+        if self.cgb_mode and address == 0xFF70:
+            bank = value & 0x07
+            self._select_cgb_wram_bank(bank or 1)
+            self.memory.write_byte(address, 0xF8 | bank)
             return
 
         if address == 0xFF04:
@@ -149,9 +537,57 @@ class GbSystemInterface(object):
             )
             return
 
+        if self.cgb_mode and 0x8000 <= address <= 0x9FFF:
+            if self.gpu.diagnostics_enabled:
+                diagnostics = self.gpu.diagnostics
+                diagnostics['cgb_vram_writes'] = (
+                    diagnostics.get('cgb_vram_writes', 0) + 1
+                )
+                mode_key = f"cgb_vram_writes_mode{self.gpu.linemode}"
+                diagnostics[mode_key] = diagnostics.get(mode_key, 0) + 1
+                if address <= 0x97FF:
+                    diagnostics['cgb_tile_data_writes'] = (
+                        diagnostics.get('cgb_tile_data_writes', 0) + 1
+                    )
+                else:
+                    diagnostics['cgb_tilemap_writes'] = (
+                        diagnostics.get('cgb_tilemap_writes', 0) + 1
+                    )
+            if self.raw_memory[0xFF4F] & 0x01:
+                offset = address - 0x8000
+                if self.cgb_vram_bank1[offset] == value:
+                    return
+                self.cgb_vram_bank1[offset] = value
+                if address <= 0x97FF:
+                    self.gpu.update_tile(address, value, bank=1)
+            else:
+                if self.raw_memory[address] == value:
+                    return
+                self.memory.write_byte(address, value)
+                if address <= 0x97FF:
+                    self.gpu.update_tile(address, value, bank=0)
+            return
+
+        if self.cgb_mode and 0xD000 <= address <= 0xDFFF:
+            offset = address - 0xD000
+            self.raw_memory[address] = value
+            if offset < 0x0E00:
+                self.raw_memory[0xF000 + offset] = value
+            self.cgb_wram_banks[self.cgb_wram_bank - 1][offset] = value
+            return
+
+        if self.cgb_mode and 0xF000 <= address <= 0xFDFF:
+            offset = address - 0xF000
+            self.raw_memory[0xD000 + offset] = value
+            self.raw_memory[address] = value
+            self.cgb_wram_banks[self.cgb_wram_bank - 1][offset] = value
+            return
+
+        if 0x8000 <= address <= 0x9FFF and self.raw_memory[address] == value:
+            return
         self.memory.write_byte(address, value)
         if 0x8000 <= address <= 0x97FF:     # VRAM tile area write
-            self.gpu.update_tile(address, value)
+            self.gpu.update_tile(address, value, bank=0)
         elif 0xFE00 <= address <= 0xFE9F:
             self.gpu.invalidate_sprite_cache()
 
@@ -225,6 +661,9 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
+        if self._boot_rom_contains(address):
+            return self.read_boot_rom_byte(address)
+
         if 0x0000 <= address <= 0x7FFF:
             cartridge = self.cartridge
             if cartridge:
@@ -249,6 +688,17 @@ class GbSystemInterface(object):
                 )
             return self.raw_memory[address]
 
+        if self.cgb_mode and 0x8000 <= address <= 0x9FFF:
+            if self.raw_memory[0xFF4F] & 0x01:
+                return self.cgb_vram_bank1[address - 0x8000]
+            return self.raw_memory[address]
+
+        if self.cgb_mode and 0xD000 <= address <= 0xDFFF:
+            return self.raw_memory[address]
+
+        if self.cgb_mode and 0xF000 <= address <= 0xFDFF:
+            return self.raw_memory[0xD000 + (address - 0xF000)]
+
         if (
             address == 0xFF44
             and self.memory.gb_doctor_test_mode
@@ -258,7 +708,74 @@ class GbSystemInterface(object):
         if address == 0xFF00:
             return self.joypad.read()
 
+        if self.cgb_mode and address == 0xFF69:
+            return self.cgb_bg_palette_data[self.cgb_bg_palette_index & 0x3F]
+
+        if self.cgb_mode and address == 0xFF6B:
+            return self.cgb_obj_palette_data[self.cgb_obj_palette_index & 0x3F]
+
         return self.raw_memory[address]
+
+    def _select_cgb_wram_bank(self, bank):
+        """Mirror the selected CGB WRAM bank into raw memory D000-DFFF."""
+        if bank == self.cgb_wram_bank:
+            return
+        old = self.cgb_wram_bank - 1
+        self.cgb_wram_banks[old][:] = self.raw_memory[0xD000:0xE000]
+        self.cgb_wram_bank = bank
+        selected = self.cgb_wram_banks[bank - 1]
+        self.raw_memory[0xD000:0xE000] = array.array('B', selected)
+        self.raw_memory[0xF000:0xFE00] = array.array('B', selected[:0x0E00])
+
+    @staticmethod
+    def _refresh_cgb_palette_rgb(raw_palette, decoded_palette):
+        for palette in range(8):
+            for color_index in range(4):
+                offset = palette * 8 + color_index * 2
+                color = raw_palette[offset] | (raw_palette[offset + 1] << 8)
+                red = color & 0x1F
+                green = (color >> 5) & 0x1F
+                blue = (color >> 10) & 0x1F
+                decoded_palette[palette][color_index] = (
+                    (red << 3) | (red >> 2),
+                    (green << 3) | (green >> 2),
+                    (blue << 3) | (blue >> 2),
+                )
+
+    @staticmethod
+    def _write_cgb_palette_byte(raw_palette, decoded_palette, offset, value):
+        raw_palette[offset] = value
+        palette = offset >> 3
+        color_index = (offset >> 1) & 0x03
+        color_offset = palette * 8 + color_index * 2
+        color = raw_palette[color_offset] | (raw_palette[color_offset + 1] << 8)
+        red = color & 0x1F
+        green = (color >> 5) & 0x1F
+        blue = (color >> 10) & 0x1F
+        decoded_palette[palette][color_index] = (
+            (red << 3) | (red >> 2),
+            (green << 3) | (green >> 2),
+            (blue << 3) | (blue >> 2),
+        )
+
+    def _cgb_dma_transfer(self, control):
+        """Perform a first-pass CGB VRAM DMA transfer immediately."""
+        source = (
+            (self.raw_memory[0xFF51] << 8)
+            | (self.raw_memory[0xFF52] & 0xF0)
+        ) & 0xFFF0
+        destination = (
+            0x8000
+            | ((self.raw_memory[0xFF53] & 0x1F) << 8)
+            | (self.raw_memory[0xFF54] & 0xF0)
+        )
+        length = ((control & 0x7F) + 1) * 0x10
+        for offset in range(length):
+            self.write_byte(
+                0x8000 | ((destination + offset) & 0x1FFF),
+                self.read_byte((source + offset) & 0xFFFF),
+            )
+        self.memory.write_byte(0xFF55, 0xFF)
 
     def set_button(self, button, is_pressed):
         """Update a joypad button and request its interrupt on a falling edge."""
@@ -273,9 +790,11 @@ class GbSystemInterface(object):
         """Copy one page's first 160 bytes into object attribute memory."""
         self.memory.write_byte(0xFF46, source_page)
         source = source_page << 8
-        values = [self.read_byte(source + offset) for offset in range(0xA0)]
-        for offset, value in enumerate(values):
-            self.memory.write_byte(0xFE00 + offset, value)
+        if 0xC000 <= source and source + 0xA0 <= 0xFE00:
+            self.raw_memory[0xFE00:0xFEA0] = self.raw_memory[source:source + 0xA0]
+        else:
+            values = [self.read_byte(source + offset) for offset in range(0xA0)]
+            self.raw_memory[0xFE00:0xFEA0] = array.array('B', values)
         self.gpu.invalidate_sprite_cache()
 
     def read_word(self, address):

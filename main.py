@@ -3,6 +3,7 @@ import cProfile
 from collections import deque
 import json
 import os
+from pathlib import Path
 import pygame
 import numpy as np
 import pygame.surfarray
@@ -59,6 +60,16 @@ def main(
     audio=True,
     volume=10,
     opcode_stats=False,
+    gpu_diagnostics=False,
+    screenshot_dir=None,
+    screenshot_start_seconds=0.0,
+    screenshot_end_seconds=None,
+    screenshot_interval_seconds=1.0,
+    screenshot_start_frame=None,
+    screenshot_end_frame=None,
+    screenshot_interval_frames=60,
+    gbc=False,
+    bios=None,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -67,6 +78,7 @@ def main(
         trace_enabled=trace,
     )
     gpu = GbGpu()
+    gpu.diagnostics_enabled = gpu_diagnostics
     if opcode_stats:
         cpu.opcode_counts = [0] * 256
         cpu.cb_opcode_counts = [0] * 256
@@ -79,7 +91,14 @@ def main(
     else:
         caption = f"GameBoy Emulator - {filename}"
 
-    sys_interface = GbSystemInterface(gb_memory, cpu, gpu, apu=apu)
+    sys_interface = GbSystemInterface(
+        gb_memory,
+        cpu,
+        gpu,
+        apu=apu,
+        force_cgb_mode=gbc,
+        bios_path=bios,
+    )
 
     for component in [cpu, gpu]:
         component.sys_interface = sys_interface
@@ -88,11 +107,17 @@ def main(
     scripted_input = load_input_script(input_script) if input_script else {}
 
     window = None
+    frame_surface = None
+    scaled_surface = None
+    display_rgb_view = None
     audio_output = None
     if not no_display:
         # Setup Pygame
         pygame.init()
         window = pygame.display.set_mode((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+        frame_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        scaled_surface = pygame.Surface((SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
+        display_rgb_view = np.transpose(gpu.screen['rgb'], (1, 0, 2))
         pygame.display.set_caption(caption)
         if audio_enabled:
             try:
@@ -113,6 +138,11 @@ def main(
         'last_caption_drawn_frames': 0,
         'last_caption_instructions': 0,
     }
+    screenshot_dir_path = Path(screenshot_dir) if screenshot_dir else None
+    if screenshot_dir_path is not None:
+        screenshot_dir_path.mkdir(parents=True, exist_ok=True)
+    next_screenshot_seconds = screenshot_start_seconds
+    next_screenshot_frame = screenshot_start_frame
     stop_seconds = (
         stats['start_seconds'] + max_seconds
         if max_seconds is not None
@@ -132,6 +162,35 @@ def main(
                 gpu.frame_ready = False
                 stats['frames'] += 1
                 stats['instructions'] = instructions
+                if screenshot_dir_path is not None:
+                    elapsed = time.perf_counter() - stats['start_seconds']
+                    if screenshot_start_frame is not None:
+                        capture_allowed = stats['frames'] >= next_screenshot_frame
+                        if (
+                            screenshot_end_frame is not None
+                            and stats['frames'] > screenshot_end_frame
+                        ):
+                            capture_allowed = False
+                    else:
+                        capture_allowed = elapsed >= next_screenshot_seconds
+                        if (
+                            screenshot_end_seconds is not None
+                            and elapsed > screenshot_end_seconds
+                        ):
+                            capture_allowed = False
+                    if capture_allowed:
+                        save_gpu_screenshot(
+                            gpu,
+                            screenshot_dir_path,
+                            stats['frames'],
+                            elapsed,
+                        )
+                        if screenshot_start_frame is not None:
+                            while next_screenshot_frame <= stats['frames']:
+                                next_screenshot_frame += screenshot_interval_frames
+                        else:
+                            while next_screenshot_seconds <= elapsed:
+                                next_screenshot_seconds += screenshot_interval_seconds
                 pressed_buttons = apply_scripted_input(
                     sys_interface,
                     scripted_input,
@@ -157,7 +216,12 @@ def main(
                             next_audio_cycle += DMG_CYCLES_PER_FRAME
                     if should_draw_frame(stats['frames'], frameskip):
                         draw_start = time.perf_counter()
-                        draw_screen(gpu, window)
+                        draw_screen(
+                            display_rgb_view,
+                            window,
+                            frame_surface,
+                            scaled_surface,
+                        )
                         stats['draw_seconds'] += time.perf_counter() - draw_start
                         stats['drawn_frames'] += 1
                     if pace_frames:
@@ -199,6 +263,8 @@ def main(
         print_run_stats(stats, no_display)
         if opcode_stats:
             print_opcode_stats(cpu)
+        if gpu_diagnostics:
+            print_gpu_diagnostics(gpu)
 
 
 def load_input_script(filename):
@@ -532,18 +598,129 @@ def print_opcode_stats(cpu, limit=20):
             )
 
 
-def draw_screen(gpu, screen):
-    """Draw the GPU buffer to the Pygame window using fast blitting."""
-    # Create surface from the GPU's persistent RGB framebuffer.
-    surface = pygame.surfarray.make_surface(
-        np.transpose(gpu.screen['rgb'], (1, 0, 2))
+def print_gpu_diagnostics(gpu):
+    """Print opt-in GPU hot-path diagnostic counters."""
+    stats = gpu.diagnostics
+    total_scanlines = stats.get('cgb_bg_scanlines', 0)
+    print("GPU diagnostics:")
+    if total_scanlines:
+        bg_seconds = stats.get('cgb_bg_seconds', 0.0)
+        sprite_seconds = stats.get('cgb_sprite_seconds', 0.0)
+        window_seconds = stats.get('cgb_window_seconds', 0.0)
+        print(
+            "  CGB render time: "
+            f"BG {bg_seconds:.3f}s, "
+            f"window {window_seconds:.3f}s, "
+            f"sprites {sprite_seconds:.3f}s"
+        )
+        print(
+            "  CGB BG scanlines: "
+            f"{total_scanlines:,}, "
+            f"{bg_seconds / total_scanlines * 1_000_000:.1f} us/scanline"
+        )
+    tiles = stats.get('cgb_bg_tiles', 0)
+    if tiles:
+        simple = stats.get('cgb_bg_attr_zero', 0)
+        palette = stats.get('cgb_bg_attr_palette_only', 0)
+        bank = stats.get('cgb_bg_attr_bank', 0)
+        xflip = stats.get('cgb_bg_attr_xflip', 0)
+        yflip = stats.get('cgb_bg_attr_yflip', 0)
+        priority = stats.get('cgb_bg_attr_priority', 0)
+        print(
+            "  CGB BG tiles: "
+            f"{tiles:,}; "
+            f"attr=0 {simple / tiles * 100:.1f}%, "
+            f"palette-only {palette / tiles * 100:.1f}%, "
+            f"bank {bank / tiles * 100:.1f}%, "
+            f"xflip {xflip / tiles * 100:.1f}%, "
+            f"yflip {yflip / tiles * 100:.1f}%, "
+            f"priority {priority / tiles * 100:.1f}%"
+        )
+    row_hits = stats.get('cgb_row_cache_hits', 0)
+    row_misses = stats.get('cgb_row_cache_misses', 0)
+    palette0_hits = stats.get('cgb_palette0_cache_hits', 0)
+    palette0_misses = stats.get('cgb_palette0_cache_misses', 0)
+    row_total = row_hits + row_misses
+    palette0_total = palette0_hits + palette0_misses
+    if row_total or palette0_total:
+        row_rate = row_hits / row_total * 100 if row_total else 0
+        palette0_rate = (
+            palette0_hits / palette0_total * 100 if palette0_total else 0
+        )
+        print(
+            "  CGB row cache: "
+            f"general {row_hits:,}/{row_total:,} hits "
+            f"({row_rate:.1f}%), "
+            f"palette0 {palette0_hits:,}/{palette0_total:,} hits "
+            f"({palette0_rate:.1f}%)"
+        )
+    vram_writes = stats.get('cgb_vram_writes', 0)
+    palette_invalidations = (
+        stats.get('cgb_bg_palette_invalidations', 0)
+        + stats.get('cgb_obj_palette_invalidations', 0)
     )
+    if vram_writes or palette_invalidations:
+        bg_palette_writes = stats.get('cgb_bg_palette_writes', 0)
+        obj_palette_writes = stats.get('cgb_obj_palette_writes', 0)
+        bg_redundant = stats.get('cgb_bg_palette_redundant_writes', 0)
+        obj_redundant = stats.get('cgb_obj_palette_redundant_writes', 0)
+        bg_redundant_pct = (
+            bg_redundant / bg_palette_writes * 100
+            if bg_palette_writes else 0
+        )
+        obj_redundant_pct = (
+            obj_redundant / obj_palette_writes * 100
+            if obj_palette_writes else 0
+        )
+        print(
+            "  CGB invalidation pressure: "
+            f"{vram_writes:,} VRAM writes "
+            f"({stats.get('cgb_tile_data_writes', 0):,} tile-data, "
+            f"{stats.get('cgb_tilemap_writes', 0):,} tilemap), "
+            f"{stats.get('cgb_bg_palette_invalidations', 0):,} BG palette "
+            f"and {stats.get('cgb_obj_palette_invalidations', 0):,} OBJ "
+            "palette invalidations"
+        )
+        print(
+            "  CGB palette writes: "
+            f"BG {bg_palette_writes:,} writes "
+            f"({bg_redundant:,} redundant, {bg_redundant_pct:.1f}%), "
+            f"OBJ {obj_palette_writes:,} writes "
+            f"({obj_redundant:,} redundant, {obj_redundant_pct:.1f}%)"
+        )
+        print(
+            "  CGB VRAM writes by PPU mode: "
+            f"mode0 {stats.get('cgb_vram_writes_mode0', 0):,}, "
+            f"mode1 {stats.get('cgb_vram_writes_mode1', 0):,}, "
+            f"mode2 {stats.get('cgb_vram_writes_mode2', 0):,}, "
+            f"mode3 {stats.get('cgb_vram_writes_mode3', 0):,}"
+        )
 
-    # Scale it
-    surface = pygame.transform.scale(surface, (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE))
 
-    screen.blit(surface, (0, 0))
+def draw_screen(display_rgb_view, screen, frame_surface, scaled_surface):
+    """Draw the GPU buffer to the Pygame window using fast blitting."""
+    pygame.surfarray.blit_array(
+        frame_surface,
+        display_rgb_view,
+    )
+    pygame.transform.scale(
+        frame_surface,
+        (SCREEN_WIDTH * SCALE, SCREEN_HEIGHT * SCALE),
+        scaled_surface,
+    )
+    screen.blit(scaled_surface, (0, 0))
     pygame.display.flip()
+
+
+def save_gpu_screenshot(gpu, directory, frame, elapsed_seconds):
+    """Save the current RGB framebuffer as a PNG for visual diagnostics."""
+    filename = f"frame_{frame:06d}_{elapsed_seconds:06.2f}s.png"
+    surface = pygame.image.frombuffer(
+        gpu.screen['rgb'].tobytes(),
+        (SCREEN_WIDTH, SCREEN_HEIGHT),
+        "RGB",
+    )
+    pygame.image.save(surface, str(directory / filename))
 
 
 def dump_logs(memory, cpu):
@@ -627,6 +804,63 @@ if __name__ == '__main__':
         action="store_true",
         help="count and print the most frequently executed opcodes",
     )
+    parser.add_argument(
+        "--gpu-diagnostics",
+        action="store_true",
+        help="print opt-in GPU renderer counters and timing",
+    )
+    parser.add_argument(
+        "--screenshot-dir",
+        help="write diagnostic framebuffer PNGs to this directory",
+    )
+    parser.add_argument(
+        "--screenshot-start-seconds",
+        type=float,
+        default=0.0,
+        help="start writing screenshots after this elapsed runtime",
+    )
+    parser.add_argument(
+        "--screenshot-end-seconds",
+        type=float,
+        help="stop writing screenshots after this elapsed runtime",
+    )
+    parser.add_argument(
+        "--screenshot-interval-seconds",
+        type=float,
+        default=1.0,
+        help="seconds between diagnostic screenshots",
+    )
+    parser.add_argument(
+        "--screenshot-start-frame",
+        type=int,
+        help="start writing screenshots at this completed emulated frame",
+    )
+    parser.add_argument(
+        "--screenshot-end-frame",
+        type=int,
+        help="stop writing screenshots after this completed emulated frame",
+    )
+    parser.add_argument(
+        "--screenshot-interval-frames",
+        type=int,
+        default=60,
+        help="completed emulated frames between diagnostic screenshots",
+    )
+    parser.add_argument(
+        "--gbc",
+        action="store_true",
+        help=(
+            "run as Game Boy Color hardware; CGB-only ROMs enable this "
+            "automatically"
+        ),
+    )
+    parser.add_argument(
+        "--bios",
+        help=(
+            "optional path to a 256-byte DMG or 2304-byte GBC boot ROM; "
+            "a GBC boot ROM runs the game as GBC hardware"
+        ),
+    )
     args = parser.parse_args()
     if args.frameskip < 1:
         parser.error("--frameskip must be 1 or greater")
@@ -649,6 +883,16 @@ if __name__ == '__main__':
                 audio=not args.no_audio,
                 volume=args.volume,
                 opcode_stats=args.opcode_stats,
+                gpu_diagnostics=args.gpu_diagnostics,
+                screenshot_dir=args.screenshot_dir,
+                screenshot_start_seconds=args.screenshot_start_seconds,
+                screenshot_end_seconds=args.screenshot_end_seconds,
+                screenshot_interval_seconds=args.screenshot_interval_seconds,
+                screenshot_start_frame=args.screenshot_start_frame,
+                screenshot_end_frame=args.screenshot_end_frame,
+                screenshot_interval_frames=args.screenshot_interval_frames,
+                gbc=args.gbc,
+                bios=args.bios,
             )
         finally:
             profiler.disable()
@@ -669,4 +913,14 @@ if __name__ == '__main__':
             audio=not args.no_audio,
             volume=args.volume,
             opcode_stats=args.opcode_stats,
+            gpu_diagnostics=args.gpu_diagnostics,
+            screenshot_dir=args.screenshot_dir,
+            screenshot_start_seconds=args.screenshot_start_seconds,
+            screenshot_end_seconds=args.screenshot_end_seconds,
+            screenshot_interval_seconds=args.screenshot_interval_seconds,
+            screenshot_start_frame=args.screenshot_start_frame,
+            screenshot_end_frame=args.screenshot_end_frame,
+            screenshot_interval_frames=args.screenshot_interval_frames,
+            gbc=args.gbc,
+            bios=args.bios,
         )

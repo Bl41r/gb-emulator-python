@@ -104,15 +104,18 @@ venv.bak/
 .mypy_cache/
 
 boot-roms/
+bios/
 test-roms/
 documents/
 memdump.txt
+captures/
 
 
 .idea/
 *.gb
 *.gbc
 *.sav
+*.ram
 *.stats
 *.txt
 input_scripts/tetris_start.json

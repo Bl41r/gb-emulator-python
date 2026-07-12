@@ -53,6 +53,7 @@ class Cartridge:
             raise ValueError("ROM is too small to contain a cartridge header")
 
         self.rom = bytes(rom)
+        self.cgb_flag = self.rom[0x0143]
         self.cartridge_type = self.rom[0x0147]
         self.rom_size_code = self.rom[0x0148]
         self.ram_size_code = self.rom[0x0149]
@@ -103,6 +104,16 @@ class Cartridge:
     def title(self):
         raw_title = self.rom[0x0134:0x0144]
         return raw_title.split(b"\x00", 1)[0].decode("ascii", errors="replace")
+
+    @property
+    def supports_cgb(self):
+        """Return whether the cartridge advertises Game Boy Color support."""
+        return self.cgb_flag in (0x80, 0xC0)
+
+    @property
+    def cgb_only(self):
+        """Return whether the cartridge requires Game Boy Color hardware."""
+        return self.cgb_flag == 0xC0
 
     @property
     def is_mbc1(self):
