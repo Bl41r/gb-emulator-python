@@ -34,7 +34,15 @@ class GbSystemInterface(object):
     VERSION_BYTE = 0x14C
     TIMER_BITS = (7, 1, 3, 5)
 
-    def __init__(self, memory, cpu, gpu, apu=None, force_cgb_mode=False):
+    def __init__(
+        self,
+        memory,
+        cpu,
+        gpu,
+        apu=None,
+        force_cgb_mode=False,
+        bios_path=None,
+    ):
         """Init."""
         self.cartridge_type = None
         self.memory = memory
@@ -43,6 +51,9 @@ class GbSystemInterface(object):
         self.gpu = gpu
         self.apu = apu
         self.force_cgb_mode = force_cgb_mode
+        self.bios_path = bios_path
+        self.boot_rom = None
+        self.boot_rom_enabled = False
         self.cgb_mode = False
         self.cgb_dmg_compat_mode = False
         self.double_speed = False
@@ -97,10 +108,16 @@ class GbSystemInterface(object):
         self.joypad = Joypad()
         rom_array = self._read_rom_file(filename)
         self.cartridge = Cartridge(rom_array)
-        self.cgb_mode = self.force_cgb_mode or self.cartridge.cgb_only
+        if self.bios_path:
+            self._load_boot_rom(self.bios_path)
+        self.cgb_mode = (
+            self.force_cgb_mode
+            or self.cartridge.cgb_only
+            or (self.boot_rom is not None and len(self.boot_rom) == 0x900)
+        )
         self.cgb_dmg_compat_mode = self.cgb_mode and not self.cartridge.supports_cgb
         self.gpu.cgb_mode = self.cgb_mode
-        if self.cgb_mode:
+        if self.cgb_mode and not self.boot_rom_enabled:
             self._initialize_cgb_mode()
         self.rom_path = Path(filename)
         self.save_path = (
@@ -116,6 +133,8 @@ class GbSystemInterface(object):
         self.direct_rom_length = len(self.direct_rom)
         self.cpu.direct_rom = self.direct_rom
         self.cpu.direct_rom_length = self.direct_rom_length
+        if self.boot_rom_enabled:
+            self.cpu.direct_rom = None
         scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
         poll_loops = {}
         limit = min(scan_limit, self.direct_rom_length)
@@ -131,7 +150,19 @@ class GbSystemInterface(object):
                 poll_loops[pc] = direct_rom[pc + 1]
         self.cpu.hram_poll_loop_ldh_offsets = poll_loops
 
-        self.cpu.registers['pc'] = 0x0100
+        if self.boot_rom_enabled:
+            self.cpu.registers.update({
+                'a': 0, 'f': 0,
+                'b': 0, 'c': 0,
+                'd': 0, 'e': 0,
+                'h': 0, 'l': 0,
+                'pc': 0x0000,
+                'sp': 0x0000,
+                'm': 0,
+                'ime': 0,
+            })
+        else:
+            self.cpu.registers['pc'] = 0x0100
 
         self.cartridge_type = self.cartridge.cartridge_type
         print(
@@ -147,11 +178,12 @@ class GbSystemInterface(object):
             self.read_byte(GbSystemInterface.LANGUAGE_BYTE))
         print("Title:", self.cartridge.title)
         if self.cgb_mode:
-            reason = (
-                "CGB-only cartridge"
-                if self.cartridge.cgb_only
-                else "--gbc requested"
-            )
+            if self.cartridge.cgb_only:
+                reason = "CGB-only cartridge"
+            elif self.boot_rom is not None and len(self.boot_rom) == 0x900:
+                reason = "GBC boot ROM"
+            else:
+                reason = "--gbc requested"
             print(f"Hardware mode: Game Boy Color ({reason})")
         elif self.cartridge.supports_cgb:
             print("Hardware mode: DMG (ROM also supports Game Boy Color)")
@@ -159,6 +191,34 @@ class GbSystemInterface(object):
             print("Hardware mode: DMG")
 
         # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
+
+    def _load_boot_rom(self, bios_path):
+        """Load an optional DMG/CGB boot ROM image."""
+        data = Path(bios_path).read_bytes()
+        if len(data) not in (0x100, 0x900):
+            raise ValueError(
+                "unsupported BIOS size {} bytes; expected 256-byte DMG "
+                "or 2304-byte CGB boot ROM".format(len(data))
+            )
+        self.boot_rom = bytes(data)
+        self.boot_rom_enabled = True
+        self.raw_memory[0xFF50] = 0x00
+        print(
+            "Loaded boot ROM:",
+            "{} ({} bytes)".format(bios_path, len(self.boot_rom)),
+        )
+
+    def _boot_rom_contains(self, address):
+        """Return whether the currently mapped boot ROM owns this address."""
+        if not self.boot_rom_enabled or self.boot_rom is None:
+            return False
+        if len(self.boot_rom) == 0x100:
+            return address < 0x100
+        return address < 0x100 or 0x200 <= address < 0x900
+
+    def read_boot_rom_byte(self, address):
+        """Read a byte from the mapped boot ROM."""
+        return self.boot_rom[address]
 
     def _initialize_cgb_mode(self):
         """Apply the post-boot state needed to identify as CGB hardware."""
@@ -267,6 +327,13 @@ class GbSystemInterface(object):
 
         if address == 0xFF46:
             self._transfer_oam(value)
+            return
+
+        if address == 0xFF50:
+            self.memory.write_byte(address, value)
+            if value & 0x01:
+                self.boot_rom_enabled = False
+                self.cpu.direct_rom = self.direct_rom
             return
 
         if self.cgb_dmg_compat_mode and 0xFF47 <= address <= 0xFF49:
@@ -534,6 +601,9 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
+        if self._boot_rom_contains(address):
+            return self.read_boot_rom_byte(address)
+
         if 0x0000 <= address <= 0x7FFF:
             cartridge = self.cartridge
             if cartridge:

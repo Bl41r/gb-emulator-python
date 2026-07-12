@@ -69,6 +69,7 @@ def main(
     screenshot_end_frame=None,
     screenshot_interval_frames=60,
     gbc=False,
+    bios=None,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -96,6 +97,7 @@ def main(
         gpu,
         apu=apu,
         force_cgb_mode=gbc,
+        bios_path=bios,
     )
 
     for component in [cpu, gpu]:
@@ -852,6 +854,13 @@ if __name__ == '__main__':
             "automatically"
         ),
     )
+    parser.add_argument(
+        "--bios",
+        help=(
+            "optional path to a 256-byte DMG or 2304-byte GBC boot ROM; "
+            "a GBC boot ROM runs the game as GBC hardware"
+        ),
+    )
     args = parser.parse_args()
     if args.frameskip < 1:
         parser.error("--frameskip must be 1 or greater")
@@ -883,6 +892,7 @@ if __name__ == '__main__':
                 screenshot_end_frame=args.screenshot_end_frame,
                 screenshot_interval_frames=args.screenshot_interval_frames,
                 gbc=args.gbc,
+                bios=args.bios,
             )
         finally:
             profiler.disable()
@@ -912,4 +922,5 @@ if __name__ == '__main__':
             screenshot_end_frame=args.screenshot_end_frame,
             screenshot_interval_frames=args.screenshot_interval_frames,
             gbc=args.gbc,
+            bios=args.bios,
         )

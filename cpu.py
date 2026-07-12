@@ -1160,7 +1160,7 @@ class GbZ80Cpu(object):
         self.sys_interface.write_byte(0xFF0F, interrupt_flags)
 
         # Push current PC to stack
-        self.registers['sp'] -= 2
+        self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
         self.write16(self.registers['sp'], self.registers['pc'])
 
         # Jump to interrupt vector
@@ -1179,6 +1179,7 @@ class GbZ80Cpu(object):
 
     def read8(self, address):
         """Return a byte from memory at address."""
+        address &= 0xFFFF
         direct_rom = self.direct_rom
         if direct_rom is not None and address < self.direct_rom_length:
             return direct_rom[address]
@@ -1214,19 +1215,21 @@ class GbZ80Cpu(object):
 
     def read16(self, address):
         """Return a word(16-bits) from memory."""
+        address &= 0xFFFF
         direct_rom = self.direct_rom
         if (
             direct_rom is not None
             and address + 1 < self.direct_rom_length
         ):
             return direct_rom[address] | (direct_rom[address + 1] << 8)
+        sys_interface = self.sys_interface
         if (
             0xC000 <= address < 0xFDFF
             or 0xFF80 <= address < 0xFFFE
         ):
-            memory = self.sys_interface.raw_memory
+            memory = sys_interface.raw_memory
             return memory[address] | (memory[address + 1] << 8)
-        return self.sys_interface.read_word(address)
+        return sys_interface.read_word(address)
 
     def write16(self, address, val):
         """Write a word to memory at address."""
@@ -1795,8 +1798,8 @@ class GbZ80Cpu(object):
     def _reti(self):
         """Return from interrupt, enable interrupts immediately."""
         lo = self.read8(self.registers['sp'])
-        hi = self.read8(self.registers['sp'] + 1)
-        self.registers['sp'] += 2
+        hi = self.read8((self.registers['sp'] + 1) & 0xFFFF)
+        self.registers['sp'] = (self.registers['sp'] + 2) & 0xFFFF
         self.registers['pc'] = (hi << 8) | lo
         self.registers['ime'] = 1
         self.registers['m'] = 4  # RETI should consume 4 machine cycles
@@ -1807,9 +1810,9 @@ class GbZ80Cpu(object):
 
         Decrement Stack Pointer (SP) twice.
         """
-        self.registers['sp'] -= 1
+        self.registers['sp'] = (self.registers['sp'] - 1) & 0xFFFF
         self.write8(self.registers['sp'], self.registers[r1])
-        self.registers['sp'] -= 1
+        self.registers['sp'] = (self.registers['sp'] - 1) & 0xFFFF
         self.write8(self.registers['sp'], self.registers[r2])
         self.registers['m'] = 4
 
@@ -1819,9 +1822,9 @@ class GbZ80Cpu(object):
         Increment Stack Pointer (SP) twice.
         """
         lo = self.read8(self.registers['sp'])
-        self.registers['sp'] += 1
+        self.registers['sp'] = (self.registers['sp'] + 1) & 0xFFFF
         hi = self.read8(self.registers['sp'])
-        self.registers['sp'] += 1
+        self.registers['sp'] = (self.registers['sp'] + 1) & 0xFFFF
 
         if (r1, r2) == ('a', 'f'):
             lo &= 0xF0  # Only keep upper nibble (Z, N, H, C)
@@ -1837,7 +1840,7 @@ class GbZ80Cpu(object):
         """
         target = self.read16(self.registers['pc'])
         # print(f"CALL to {target:04X} from {self.registers['pc']:04X} SP={self.registers['sp']:04X}")
-        self.registers['sp'] -= 2
+        self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
         self.write16(self.registers['sp'], self.registers['pc'] + 2)
         self.registers['pc'] = target
         self.registers['m'] = 6
@@ -1849,7 +1852,7 @@ class GbZ80Cpu(object):
         self.registers['m'] = 3
 
         if (self.registers['f'] & flag_mask) == expected_value:
-            self.registers['sp'] -= 2
+            self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
             self.write16(self.registers['sp'], self.registers['pc'])
             self.registers['pc'] = address
             self.registers['m'] += 3
@@ -2461,7 +2464,7 @@ class GbZ80Cpu(object):
         target = self.read16(self.registers['sp'])
         # print(f"RET to {target:04X} from SP={self.registers['sp']:04X}")
         self.registers['pc'] = target
-        self.registers['sp'] += 2
+        self.registers['sp'] = (self.registers['sp'] + 2) & 0xFFFF
         self.registers['m'] = 4
 
     def _rst_n(self, n):
@@ -2470,7 +2473,7 @@ class GbZ80Cpu(object):
         n = n = $00,$08,$10,$18,$20,$28,$30,$38
         """
         self._rsv()
-        self.registers['sp'] -= 2
+        self.registers['sp'] = (self.registers['sp'] - 2) & 0xFFFF
         self.write16(self.registers['sp'], self.registers['pc'])
         self.registers['pc'] = n
         self.registers['m'] = 4
@@ -2480,7 +2483,7 @@ class GbZ80Cpu(object):
         self.registers['m'] = 2
         if (self.registers['f'] & and_val) == flag_check_value:
             self.registers['pc'] = self.read16(self.registers['sp'])
-            self.registers['sp'] += 2
+            self.registers['sp'] = (self.registers['sp'] + 2) & 0xFFFF
             self.registers['m'] = 5
 
     def _rsv(self):
