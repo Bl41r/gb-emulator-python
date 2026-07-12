@@ -26,6 +26,30 @@ class GbSystemInterface(object):
         ((shade[0] >> 3) | ((shade[1] >> 3) << 5) | ((shade[2] >> 3) << 10))
         for shade in DMG_COMPAT_SHADE_RGB
     )
+    DMG_POST_BOOT_REGISTERS = {
+        'a': 0x01, 'f': 0xB0,
+        'b': 0x00, 'c': 0x13,
+        'd': 0x00, 'e': 0xD8,
+        'h': 0x01, 'l': 0x4D,
+        'pc': 0x0100, 'sp': 0xFFFE,
+        'm': 0, 'ime': 0,
+    }
+    CGB_POST_BOOT_REGISTERS = {
+        'a': 0x11, 'f': 0x80,
+        'b': 0x00, 'c': 0x00,
+        'd': 0xFF, 'e': 0x56,
+        'h': 0x00, 'l': 0x0D,
+        'pc': 0x0100, 'sp': 0xFFFE,
+        'm': 0, 'ime': 0,
+    }
+    CGB_DMG_COMPAT_POST_BOOT_REGISTERS = {
+        'a': 0x11, 'f': 0x80,
+        'b': 0x00, 'c': 0x00,
+        'd': 0x00, 'e': 0x08,
+        'h': 0x00, 'l': 0x7C,
+        'pc': 0x0100, 'sp': 0xFFFE,
+        'm': 0, 'ime': 0,
+    }
 
     CART_TITLE = range(0x0134, 0x0143)
     CART_TYPE_CHECK_BYTE = 0x0147
@@ -110,6 +134,7 @@ class GbSystemInterface(object):
         self.cartridge = Cartridge(rom_array)
         if self.bios_path:
             self._load_boot_rom(self.bios_path)
+            self._validate_boot_rom_hardware_match()
         self.cgb_mode = (
             self.force_cgb_mode
             or self.cartridge.cgb_only
@@ -117,8 +142,8 @@ class GbSystemInterface(object):
         )
         self.cgb_dmg_compat_mode = self.cgb_mode and not self.cartridge.supports_cgb
         self.gpu.cgb_mode = self.cgb_mode
-        if self.cgb_mode and not self.boot_rom_enabled:
-            self._initialize_cgb_mode()
+        if not self.boot_rom_enabled:
+            self._apply_post_boot_state()
         self.rom_path = Path(filename)
         self.save_path = (
             self.rom_path.with_suffix(".sav")
@@ -161,8 +186,6 @@ class GbSystemInterface(object):
                 'm': 0,
                 'ime': 0,
             })
-        else:
-            self.cpu.registers['pc'] = 0x0100
 
         self.cartridge_type = self.cartridge.cartridge_type
         print(
@@ -180,7 +203,7 @@ class GbSystemInterface(object):
         if self.cgb_mode:
             if self.cartridge.cgb_only:
                 reason = "CGB-only cartridge"
-            elif self.boot_rom is not None and len(self.boot_rom) == 0x900:
+            elif self.boot_rom_is_cgb:
                 reason = "GBC boot ROM"
             else:
                 reason = "--gbc requested"
@@ -208,6 +231,30 @@ class GbSystemInterface(object):
             "{} ({} bytes)".format(bios_path, len(self.boot_rom)),
         )
 
+    @property
+    def boot_rom_is_dmg(self):
+        return self.boot_rom is not None and len(self.boot_rom) == 0x100
+
+    @property
+    def boot_rom_is_cgb(self):
+        return self.boot_rom is not None and len(self.boot_rom) == 0x900
+
+    def _validate_boot_rom_hardware_match(self):
+        """Warn or fail for boot ROM / requested hardware mismatches."""
+        if not self.boot_rom_is_dmg:
+            return
+        if self.cartridge.cgb_only:
+            raise ValueError(
+                "cannot boot a CGB-only cartridge with a 256-byte DMG BIOS; "
+                "use a 2304-byte GBC BIOS instead"
+            )
+        if self.force_cgb_mode:
+            print(
+                "Warning: --gbc was requested with a 256-byte DMG BIOS. "
+                "The DMG BIOS cannot initialize GBC hardware or palettes; "
+                "use a 2304-byte GBC BIOS for color boot behavior."
+            )
+
     def _boot_rom_contains(self, address):
         """Return whether the currently mapped boot ROM owns this address."""
         if not self.boot_rom_enabled or self.boot_rom is None:
@@ -220,10 +267,23 @@ class GbSystemInterface(object):
         """Read a byte from the mapped boot ROM."""
         return self.boot_rom[address]
 
+    def _apply_post_boot_state(self):
+        """Apply the hardware state normally produced by the skipped BIOS."""
+        memory = self.raw_memory
+        if self.cgb_mode:
+            if self.cgb_dmg_compat_mode:
+                self.cpu.registers.update(self.CGB_DMG_COMPAT_POST_BOOT_REGISTERS)
+            else:
+                self.cpu.registers.update(self.CGB_POST_BOOT_REGISTERS)
+            self._initialize_cgb_mode()
+        else:
+            self.cpu.registers.update(self.DMG_POST_BOOT_REGISTERS)
+            memory[0xFF50] = 0x01
+
     def _initialize_cgb_mode(self):
         """Apply the post-boot state needed to identify as CGB hardware."""
         memory = self.raw_memory
-        self.cpu.registers['a'] = 0x11
+        memory[0xFF50] = 0x01
         memory[0xFF4D] = 0x7E  # KEY1, normal speed, prepare bit clear
         memory[0xFF4F] = 0xFE  # VBK, VRAM bank 0
         memory[0xFF51] = 0xFF
