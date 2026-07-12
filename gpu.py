@@ -76,6 +76,7 @@ GPU_BGP = 0xFF47
 GPU_WY = 0xFF4A
 GPU_WX = 0xFF4B
 GPU_MODE_CYCLES = (204, 456, 80, 172)
+STAT_MODE_IRQ_MASKS = (0x08, 0x10, 0x20, 0x00)
 
 
 class GbGpu(object):
@@ -455,25 +456,23 @@ class GbGpu(object):
     def _update_stat_register(self, request_irq=True):
         """Refresh mode/coincidence bits and raise STAT on a line edge."""
         memory = self.sys_interface.raw_memory
+        linemode = self.linemode
         stat = memory[GPU_STAT] & 0xF8
 
         # Set current mode (bits 0–1)
-        stat |= self.linemode & 0b11
+        stat |= linemode & 0b11
 
         # Coincidence flag is read-only bit 2.
         if memory[GPU_LY] == memory[GPU_LYC]:
             stat |= 0x04
 
         memory[GPU_STAT] = stat
-        lcd_enabled = bool(memory[GPU_LCDC] & 0x80)
-        irq_line = lcd_enabled and bool(
-            (self.linemode == 0 and stat & 0x08)
-            or (self.linemode == 1 and stat & 0x10)
-            or (self.linemode == 2 and stat & 0x20)
-            or (stat & 0x04 and stat & 0x40)
-        )
         if not request_irq:
             return
+        irq_mask = STAT_MODE_IRQ_MASKS[linemode]
+        if stat & 0x04:
+            irq_mask |= 0x40
+        irq_line = bool(memory[GPU_LCDC] & 0x80 and stat & irq_mask)
         if irq_line and not self._stat_irq_line:
             memory[0xFF0F] |= 0x02
         self._stat_irq_line = irq_line
