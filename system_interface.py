@@ -16,6 +16,17 @@ from joypad import Joypad
 class GbSystemInterface(object):
     """Interface between CPU/GPU and memory unit."""
 
+    DMG_COMPAT_SHADE_RGB = (
+        (255, 255, 255),
+        (192, 192, 192),
+        (96, 96, 96),
+        (0, 0, 0),
+    )
+    DMG_COMPAT_SHADE_RGB555 = tuple(
+        ((shade[0] >> 3) | ((shade[1] >> 3) << 5) | ((shade[2] >> 3) << 10))
+        for shade in DMG_COMPAT_SHADE_RGB
+    )
+
     CART_TITLE = range(0x0134, 0x0143)
     CART_TYPE_CHECK_BYTE = 0x0147
     MANUFACTURER_CODE_BYTE = 0x14B
@@ -33,6 +44,7 @@ class GbSystemInterface(object):
         self.apu = apu
         self.force_cgb_mode = force_cgb_mode
         self.cgb_mode = False
+        self.cgb_dmg_compat_mode = False
         self.double_speed = False
         self.cgb_vram_bank1 = bytearray(0x2000)
         self.cgb_wram_banks = [bytearray(0x1000) for _ in range(7)]
@@ -86,6 +98,7 @@ class GbSystemInterface(object):
         rom_array = self._read_rom_file(filename)
         self.cartridge = Cartridge(rom_array)
         self.cgb_mode = self.force_cgb_mode or self.cartridge.cgb_only
+        self.cgb_dmg_compat_mode = self.cgb_mode and not self.cartridge.supports_cgb
         self.gpu.cgb_mode = self.cgb_mode
         if self.cgb_mode:
             self._initialize_cgb_mode()
@@ -163,6 +176,79 @@ class GbSystemInterface(object):
         memory[0xFF6A] = 0x00  # OBJ palette index
         memory[0xFF6B] = 0x00  # OBJ palette data
         memory[0xFF70] = 0xF8  # SVBK, WRAM bank 1 selected by value 0
+        if self.cgb_dmg_compat_mode:
+            self._sync_all_dmg_palettes_to_cgb()
+
+    def _set_cgb_palette_from_dmg_register(
+        self,
+        raw_palette,
+        decoded_palette,
+        palette_number,
+        dmg_palette,
+    ):
+        """Map one DMG palette register into a CGB palette RAM slot."""
+        base = palette_number * 8
+        for color_index in range(4):
+            shade_index = (dmg_palette >> (color_index * 2)) & 0x03
+            rgb555 = self.DMG_COMPAT_SHADE_RGB555[shade_index]
+            offset = base + color_index * 2
+            raw_palette[offset] = rgb555 & 0xFF
+            raw_palette[offset + 1] = (rgb555 >> 8) & 0xFF
+            decoded_palette[palette_number][color_index] = (
+                self.DMG_COMPAT_SHADE_RGB[shade_index]
+            )
+
+    def _sync_all_dmg_palettes_to_cgb(self):
+        """Seed CGB palette RAM for DMG-only games running on CGB hardware."""
+        memory = self.raw_memory
+        self._set_cgb_palette_from_dmg_register(
+            self.cgb_bg_palette_data,
+            self.cgb_bg_palette_rgb,
+            0,
+            memory[0xFF47],
+        )
+        self._set_cgb_palette_from_dmg_register(
+            self.cgb_obj_palette_data,
+            self.cgb_obj_palette_rgb,
+            0,
+            memory[0xFF48],
+        )
+        self._set_cgb_palette_from_dmg_register(
+            self.cgb_obj_palette_data,
+            self.cgb_obj_palette_rgb,
+            1,
+            memory[0xFF49],
+        )
+        self.gpu.invalidate_cgb_bg_palette_cache(0)
+        self.gpu.invalidate_cgb_obj_palette_cache(0)
+        self.gpu.invalidate_cgb_obj_palette_cache(1)
+
+    def _sync_dmg_palette_write_to_cgb(self, address, value):
+        """Keep CGB palette RAM aligned with DMG palette register writes."""
+        if address == 0xFF47:
+            self._set_cgb_palette_from_dmg_register(
+                self.cgb_bg_palette_data,
+                self.cgb_bg_palette_rgb,
+                0,
+                value,
+            )
+            self.gpu.invalidate_cgb_bg_palette_cache(0)
+        elif address == 0xFF48:
+            self._set_cgb_palette_from_dmg_register(
+                self.cgb_obj_palette_data,
+                self.cgb_obj_palette_rgb,
+                0,
+                value,
+            )
+            self.gpu.invalidate_cgb_obj_palette_cache(0)
+        else:
+            self._set_cgb_palette_from_dmg_register(
+                self.cgb_obj_palette_data,
+                self.cgb_obj_palette_rgb,
+                1,
+                value,
+            )
+            self.gpu.invalidate_cgb_obj_palette_cache(1)
 
     def write_byte(self, address, value):
         """Write a byte to an address."""
@@ -181,6 +267,11 @@ class GbSystemInterface(object):
 
         if address == 0xFF46:
             self._transfer_oam(value)
+            return
+
+        if self.cgb_dmg_compat_mode and 0xFF47 <= address <= 0xFF49:
+            self.memory.write_byte(address, value)
+            self._sync_dmg_palette_write_to_cgb(address, value)
             return
 
         if self.cgb_mode and address == 0xFF4D:

@@ -1337,10 +1337,13 @@ class GbGpu(object):
                 tile_index = (tile_index & 0xFE) + (row >> 3)
                 row &= 7
 
-            if attributes & 0x08:
+            if not self.sys_interface.cgb_dmg_compat_mode and attributes & 0x08:
                 tile_index += 512
             tile_row = self.tile_set[tile_index][row]
-            palette = palette_data[attributes & 0x07]
+            if self.sys_interface.cgb_dmg_compat_mode:
+                palette = palette_data[1 if attributes & 0x10 else 0]
+            else:
+                palette = palette_data[attributes & 0x07]
 
             for pixel in range(8):
                 screen_x = object_x - 8 + pixel
