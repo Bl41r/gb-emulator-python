@@ -103,6 +103,20 @@ class GbSystemInterface(object):
         self.direct_rom_length = len(self.direct_rom)
         self.cpu.direct_rom = self.direct_rom
         self.cpu.direct_rom_length = self.direct_rom_length
+        scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
+        poll_loops = {}
+        limit = min(scan_limit, self.direct_rom_length)
+        direct_rom = self.direct_rom
+        for pc in range(max(0, limit - 4)):
+            if (
+                direct_rom[pc] == 0xF0
+                and direct_rom[pc + 1] >= 0x80
+                and direct_rom[pc + 2] == 0xA7
+                and direct_rom[pc + 3] == 0x28
+                and direct_rom[pc + 4] == 0xFB
+            ):
+                poll_loops[pc] = direct_rom[pc + 1]
+        self.cpu.hram_poll_loop_ldh_offsets = poll_loops
 
         self.cpu.registers['pc'] = 0x0100
 

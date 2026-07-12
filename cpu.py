@@ -177,6 +177,7 @@ class GbZ80Cpu(object):
         self.sys_interface = None    # Set after interface instantiated.
         self.direct_rom = None
         self.direct_rom_length = 0
+        self.hram_poll_loop_ldh_offsets = {}
         self.opcode_counts = None
         self.cb_opcode_counts = None
         self.halt_m_cycles = 0
@@ -802,47 +803,88 @@ class GbZ80Cpu(object):
             op = sys_interface.read_byte(pc)
         if self.opcode_counts is not None:
             self.opcode_counts[op] += 1
+        executed_instructions = 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
         if not trace_enabled and op == 0xF0:
-            pc = registers['pc']
-            if direct_rom is not None and pc < 0x8000:
-                n = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
-            else:
-                n = sys_interface.read_byte(pc)
+            handled_f0 = False
+            poll_loops = self.hram_poll_loop_ldh_offsets
+            if (
+                poll_loops
+                and not gb_doctor_test_mode
+                and self.opcode_counts is None
+                and not self.enable_interrupts_next_cycle
+            ):
+                n = poll_loops.get(pc)
+                if n is not None:
+                    memory = sys_interface.raw_memory
+                    if (
+                        not (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+                        and gpu.m_cycles_until_mode_transition() > 7
+                        and sys_interface.m_cycles_until_timer_interrupt() > 7
+                    ):
+                        a = memory[0xFF00 + n]
+                        registers['a'] = a
+                        registers['f'] = FLAG_HALF_CARRY | (
+                            FLAG_ZERO if a == 0 else 0
+                        )
+                        if a == 0:
+                            registers['pc'] = pc
+                            registers['m'] = 7
+                        else:
+                            registers['pc'] = (pc + 5) & 0xFFFF
+                            registers['m'] = 6
+                        executed_instructions = 3
+                    else:
+                        operand_pc = registers['pc']
+                        registers['a'] = memory[0xFF00 + n]
+                        registers['pc'] = (operand_pc + 1) & 0xFFFF
+                        registers['m'] = 3
+                    handled_f0 = True
 
-            if n >= 0x80:
-                registers['a'] = sys_interface.raw_memory[0xFF00 + n]
-            elif n == 0:
-                registers['a'] = sys_interface.joypad.read()
-            elif self.gb_doctor_test_mode and n == 0x44:
-                registers['a'] = 0x90
-            elif n == 0x44:
-                memory = sys_interface.raw_memory
-                line = memory[0xFF44]
-                if not (memory[0xFF40] & 0x80):
-                    registers['a'] = 0
+            if not handled_f0:
+                operand_pc = registers['pc']
+                if direct_rom is not None and operand_pc < 0x8000:
+                    n = (
+                        direct_rom[operand_pc]
+                        if operand_pc < self.direct_rom_length
+                        else 0xFF
+                    )
                 else:
-                    mode_clock = gpu._mode_clock + 8
-                    if gpu.linemode == 0 and mode_clock >= 204:
-                        registers['a'] = (line + 1) & 0xFF
-                    elif gpu.linemode == 1:
-                        if (
-                            line == 153
-                            and not gpu._line153_ly_reset
-                            and mode_clock >= 4
-                        ):
-                            registers['a'] = 0
-                        elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                    n = sys_interface.read_byte(operand_pc)
+
+                if n >= 0x80:
+                    registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+                elif n == 0:
+                    registers['a'] = sys_interface.joypad.read()
+                elif self.gb_doctor_test_mode and n == 0x44:
+                    registers['a'] = 0x90
+                elif n == 0x44:
+                    memory = sys_interface.raw_memory
+                    line = memory[0xFF44]
+                    if not (memory[0xFF40] & 0x80):
+                        registers['a'] = 0
+                    else:
+                        mode_clock = gpu._mode_clock + 8
+                        if gpu.linemode == 0 and mode_clock >= 204:
                             registers['a'] = (line + 1) & 0xFF
+                        elif gpu.linemode == 1:
+                            if (
+                                line == 153
+                                and not gpu._line153_ly_reset
+                                and mode_clock >= 4
+                            ):
+                                registers['a'] = 0
+                            elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                                registers['a'] = (line + 1) & 0xFF
+                            else:
+                                registers['a'] = line
                         else:
                             registers['a'] = line
-                    else:
-                        registers['a'] = line
-            else:
-                registers['a'] = sys_interface.raw_memory[0xFF00 + n]
-            registers['pc'] = (pc + 1) & 0xFFFF
-            registers['m'] = 3
+                else:
+                    registers['a'] = sys_interface.raw_memory[0xFF00 + n]
+                registers['pc'] = (operand_pc + 1) & 0xFFFF
+                registers['m'] = 3
         elif not trace_enabled and op == 0xA7:
             a = registers['a']
             registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
@@ -1028,7 +1070,7 @@ class GbZ80Cpu(object):
         if self.enable_interrupts_next_cycle:
             registers['ime'] = 1
             self.enable_interrupts_next_cycle = False
-        return 1
+        return executed_instructions
 
     @staticmethod
     def _step_system_timer(sys_interface, m_cycles):
