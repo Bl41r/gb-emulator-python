@@ -849,13 +849,17 @@ class GbZ80Cpu(object):
             flags = CP_FLAG_TABLE[(registers['a'] << 8) | value]
             registers['f'] = flags
 
-            if (
+            can_fold_cp_hl_loop = (
                 pc in self.cp_hl_jr_nz_loop_pcs
                 and self.opcode_counts is None
                 and not gb_doctor_test_mode
                 and not self.enable_interrupts_next_cycle
                 and not (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
-            ):
+            )
+
+            if not can_fold_cp_hl_loop:
+                registers['m'] = 2
+            else:
                 ppu_m_until = 0x10000
                 if memory[0xFF40] & 0x80:
                     remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
@@ -881,26 +885,24 @@ class GbZ80Cpu(object):
                         + (edges_until_overflow - 1) * period
                     )
 
-                if ppu_m_until > 5 and timer_m_until > 5:
-                    if flags & FLAG_ZERO:
-                        registers['pc'] = (registers['pc'] + 2) & 0xFFFF
-                        registers['m'] = 4
-                        executed_instructions = 2
-                    else:
-                        registers['pc'] = pc
-                        if address == 0xFF44:
-                            loops = (min(ppu_m_until, timer_m_until) - 1) // 5
-                            if loops < 1:
-                                loops = 1
-                            registers['m'] = loops * 5
-                            executed_instructions = loops * 2
-                        else:
-                            registers['m'] = 5
-                            executed_instructions = 2
-                else:
+                loop_boundary = min(ppu_m_until, timer_m_until)
+                if loop_boundary <= 5:
                     registers['m'] = 2
-            else:
-                registers['m'] = 2
+                elif flags & FLAG_ZERO:
+                    registers['pc'] = (registers['pc'] + 2) & 0xFFFF
+                    registers['m'] = 4
+                    executed_instructions = 2
+                elif address == 0xFF44:
+                    loops = (loop_boundary - 1) // 5
+                    if loops < 1:
+                        loops = 1
+                    registers['pc'] = pc
+                    registers['m'] = loops * 5
+                    executed_instructions = loops * 2
+                else:
+                    registers['pc'] = pc
+                    registers['m'] = 5
+                    executed_instructions = 2
         elif not trace_enabled and op == 0x20:
             pc = registers['pc']
             if direct_rom is not None and pc < 0x8000:
