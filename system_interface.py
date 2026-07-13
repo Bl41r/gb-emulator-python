@@ -100,6 +100,9 @@ class GbSystemInterface(object):
         self.cgb_obj_palette_data = bytearray(0x40)
         self.cgb_bg_palette_rgb = [[(0, 0, 0) for _ in range(4)] for _ in range(8)]
         self.cgb_obj_palette_rgb = [[(0, 0, 0) for _ in range(4)] for _ in range(8)]
+        self.cgb_dmg_compat_bg_base_palette = self.DMG_COMPAT_SHADE_RGB555
+        self.cgb_dmg_compat_obj0_base_palette = self.DMG_COMPAT_SHADE_RGB555
+        self.cgb_dmg_compat_obj1_base_palette = self.DMG_COMPAT_SHADE_RGB555
         self.cgb_bg_palette_generation = 0
         self.cgb_obj_palette_generation = 0
 
@@ -117,6 +120,9 @@ class GbSystemInterface(object):
         self.cgb_obj_palette_index = 0
         self.cgb_bg_palette_data[:] = bytes(0x40)
         self.cgb_obj_palette_data[:] = bytes(0x40)
+        self.cgb_dmg_compat_bg_base_palette = self.DMG_COMPAT_SHADE_RGB555
+        self.cgb_dmg_compat_obj0_base_palette = self.DMG_COMPAT_SHADE_RGB555
+        self.cgb_dmg_compat_obj1_base_palette = self.DMG_COMPAT_SHADE_RGB555
         self.cgb_bg_palette_generation = 0
         self.cgb_obj_palette_generation = 0
         self._refresh_cgb_palette_rgb(
@@ -305,18 +311,43 @@ class GbSystemInterface(object):
         decoded_palette,
         palette_number,
         dmg_palette,
+        base_palette,
     ):
         """Map one DMG palette register into a CGB palette RAM slot."""
         base = palette_number * 8
         for color_index in range(4):
             shade_index = (dmg_palette >> (color_index * 2)) & 0x03
-            rgb555 = self.DMG_COMPAT_SHADE_RGB555[shade_index]
+            rgb555 = base_palette[shade_index]
             offset = base + color_index * 2
             raw_palette[offset] = rgb555 & 0xFF
             raw_palette[offset + 1] = (rgb555 >> 8) & 0xFF
             decoded_palette[palette_number][color_index] = (
-                self.DMG_COMPAT_SHADE_RGB[shade_index]
+                self._rgb555_to_rgb(rgb555)
             )
+
+    @staticmethod
+    def _cgb_palette_slot(raw_palette, palette_number):
+        base = palette_number * 8
+        return tuple(
+            raw_palette[base + color_index * 2]
+            | (raw_palette[base + color_index * 2 + 1] << 8)
+            for color_index in range(4)
+        )
+
+    def _capture_cgb_dmg_compat_base_palettes(self):
+        """Preserve the GBC BIOS-selected DMG compatibility palettes."""
+        self.cgb_dmg_compat_bg_base_palette = self._cgb_palette_slot(
+            self.cgb_bg_palette_data,
+            0,
+        )
+        self.cgb_dmg_compat_obj0_base_palette = self._cgb_palette_slot(
+            self.cgb_obj_palette_data,
+            0,
+        )
+        self.cgb_dmg_compat_obj1_base_palette = self._cgb_palette_slot(
+            self.cgb_obj_palette_data,
+            1,
+        )
 
     def _sync_all_dmg_palettes_to_cgb(self):
         """Seed CGB palette RAM for DMG-only games running on CGB hardware."""
@@ -326,18 +357,21 @@ class GbSystemInterface(object):
             self.cgb_bg_palette_rgb,
             0,
             memory[0xFF47],
+            self.cgb_dmg_compat_bg_base_palette,
         )
         self._set_cgb_palette_from_dmg_register(
             self.cgb_obj_palette_data,
             self.cgb_obj_palette_rgb,
             0,
             memory[0xFF48],
+            self.cgb_dmg_compat_obj0_base_palette,
         )
         self._set_cgb_palette_from_dmg_register(
             self.cgb_obj_palette_data,
             self.cgb_obj_palette_rgb,
             1,
             memory[0xFF49],
+            self.cgb_dmg_compat_obj1_base_palette,
         )
         self.gpu.invalidate_cgb_bg_palette_cache(0)
         self.gpu.invalidate_cgb_obj_palette_cache(0)
@@ -351,6 +385,7 @@ class GbSystemInterface(object):
                 self.cgb_bg_palette_rgb,
                 0,
                 value,
+                self.cgb_dmg_compat_bg_base_palette,
             )
             self.gpu.invalidate_cgb_bg_palette_cache(0)
         elif address == 0xFF48:
@@ -359,6 +394,7 @@ class GbSystemInterface(object):
                 self.cgb_obj_palette_rgb,
                 0,
                 value,
+                self.cgb_dmg_compat_obj0_base_palette,
             )
             self.gpu.invalidate_cgb_obj_palette_cache(0)
         else:
@@ -367,6 +403,7 @@ class GbSystemInterface(object):
                 self.cgb_obj_palette_rgb,
                 1,
                 value,
+                self.cgb_dmg_compat_obj1_base_palette,
             )
             self.gpu.invalidate_cgb_obj_palette_cache(1)
 
@@ -392,6 +429,8 @@ class GbSystemInterface(object):
         if address == 0xFF50:
             self.memory.write_byte(address, value)
             if value & 0x01:
+                if self.cgb_dmg_compat_mode:
+                    self._capture_cgb_dmg_compat_base_palettes()
                 self.boot_rom_enabled = False
                 self.cpu.direct_rom = self.direct_rom
             return
@@ -726,6 +765,17 @@ class GbSystemInterface(object):
         selected = self.cgb_wram_banks[bank - 1]
         self.raw_memory[0xD000:0xE000] = array.array('B', selected)
         self.raw_memory[0xF000:0xFE00] = array.array('B', selected[:0x0E00])
+
+    @staticmethod
+    def _rgb555_to_rgb(color):
+        red = color & 0x1F
+        green = (color >> 5) & 0x1F
+        blue = (color >> 10) & 0x1F
+        return (
+            (red << 3) | (red >> 2),
+            (green << 3) | (green >> 2),
+            (blue << 3) | (blue >> 2),
+        )
 
     @staticmethod
     def _refresh_cgb_palette_rgb(raw_palette, decoded_palette):
