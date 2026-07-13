@@ -700,7 +700,7 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
-        if self._boot_rom_contains(address):
+        if self.boot_rom_enabled and self._boot_rom_contains(address):
             return self.read_boot_rom_byte(address)
 
         if 0x0000 <= address <= 0x7FFF:

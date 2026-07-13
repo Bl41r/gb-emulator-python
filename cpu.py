@@ -1973,7 +1973,11 @@ class GbZ80Cpu(object):
         """Compare A with the byte at HL."""
         registers = self.registers
         address = (registers['h'] << 8) | registers['l']
-        value = self.sys_interface.read_byte(address)
+        sys_interface = self.sys_interface
+        if address == 0xFF44 and not sys_interface.memory.gb_doctor_test_mode:
+            value = sys_interface.raw_memory[0xFF44]
+        else:
+            value = sys_interface.read_byte(address)
         a = registers['a']
         registers['f'] = CP_FLAG_TABLE[(a << 8) | value]
         registers['m'] = 2
