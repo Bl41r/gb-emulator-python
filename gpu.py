@@ -816,14 +816,29 @@ class GbGpu(object):
         tile_col = scroll_x >> 3
         tile_pixel_col = scroll_x & 7
         if tile_pixel_col == 0:
+            if not signed_addressing:
+                for x in range(0, 160, 8):
+                    tile_index = memory[map_row_base + tile_col]
+
+                    row_code = tile_row_codes[tile_index][tile_pixel_row]
+                    try:
+                        pixels, rgba = palette0_cache[row_code]
+                    except KeyError:
+                        pixels, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                    scanrow[x:x + 8] = pixels
+                    offset = screen_offset + x * 4
+                    screen_data[offset:offset + 32] = rgba
+                    tile_col = (tile_col + 1) & 31
+                return
+
             for x in range(0, 160, 8):
                 tile_id = memory[map_row_base + tile_col]
-                if signed_addressing:
-                    tile_index = 256 + (
-                        tile_id - 256 if tile_id > 127 else tile_id
-                    )
-                else:
-                    tile_index = tile_id
+                tile_index = 256 + (
+                    tile_id - 256 if tile_id > 127 else tile_id
+                )
 
                 row_code = tile_row_codes[tile_index][tile_pixel_row]
                 try:
@@ -840,14 +855,35 @@ class GbGpu(object):
             return
 
         x = 0
+        if not signed_addressing:
+            while x < 160:
+                tile_index = memory[map_row_base + tile_col]
+
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    pixels, rgba = palette0_cache[row_code]
+                except KeyError:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                run = min(8 - tile_pixel_col, 160 - x)
+                end = tile_pixel_col + run
+                scanrow[x:x + run] = pixels[tile_pixel_col:end]
+                offset = screen_offset + x * 4
+                screen_data[offset:offset + run * 4] = rgba[
+                    tile_pixel_col * 4:end * 4
+                ]
+                x += run
+                tile_col = (tile_col + 1) & 31
+                tile_pixel_col = 0
+            return
+
         while x < 160:
             tile_id = memory[map_row_base + tile_col]
-            if signed_addressing:
-                tile_index = 256 + (
-                    tile_id - 256 if tile_id > 127 else tile_id
-                )
-            else:
-                tile_index = tile_id
+            tile_index = 256 + (
+                tile_id - 256 if tile_id > 127 else tile_id
+            )
 
             row_code = tile_row_codes[tile_index][tile_pixel_row]
             try:
