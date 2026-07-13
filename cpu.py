@@ -1117,69 +1117,92 @@ class GbZ80Cpu(object):
                 registers['m'] = 3
                 return 1
 
-        compare_b_loops = self.hram_compare_b_loop_ldh_offsets
+        compare_b_loop_pcs = self.hram_compare_b_loop_ldh_offsets
         if (
-            compare_b_loops
+            compare_b_loop_pcs
             and not gb_doctor_test_mode
             and self.opcode_counts is None
             and not self.enable_interrupts_next_cycle
+            and pc in compare_b_loop_pcs
         ):
-            n = compare_b_loops.get(pc)
-            if n is not None:
-                memory = sys_interface.raw_memory
-                if memory[0xFFFF] & memory[0xFF0F] & 0x1F:
-                    registers['a'] = self._fast_ldh_value(n, sys_interface, gpu)
-                    registers['pc'] = (registers['pc'] + 1) & 0xFFFF
-                    registers['m'] = 3
-                    return 1
-
-                ppu_m_until = 0x10000
-                if memory[0xFF40] & 0x80:
-                    remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+            memory = sys_interface.raw_memory
+            line = memory[0xFF44]
+            if not (memory[0xFF40] & 0x80):
+                a = 0
+            else:
+                mode_clock = gpu._mode_clock + 8
+                if gpu.linemode == 0 and mode_clock >= 204:
+                    a = (line + 1) & 0xFF
+                elif gpu.linemode == 1:
                     if (
-                        gpu.linemode == 1
+                        line == 153
                         and not gpu._line153_ly_reset
-                        and memory[0xFF44] == 153
+                        and mode_clock >= 4
                     ):
-                        line153_remaining = 4 - gpu._mode_clock
-                        if line153_remaining < remaining:
-                            remaining = line153_remaining
-                    ppu_m_until = max(1, remaining // 4)
+                        a = 0
+                    elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                        a = (line + 1) & 0xFF
+                    else:
+                        a = line
+                else:
+                    a = line
 
-                timer_m_until = 0x10000
-                if sys_interface.timer_enabled:
-                    period = 1 << sys_interface.timer_period_shift
-                    until_next_edge = period - (
-                        sys_interface.divider_counter & (period - 1)
-                    )
-                    edges_until_overflow = 0x100 - memory[0xFF05]
-                    timer_m_until = (
-                        until_next_edge
-                        + (edges_until_overflow - 1) * period
-                    )
-
-                loop_boundary = min(ppu_m_until, timer_m_until)
-                if loop_boundary <= 7:
-                    registers['a'] = self._fast_ldh_value(n, sys_interface, gpu)
-                    registers['pc'] = (registers['pc'] + 1) & 0xFFFF
-                    registers['m'] = 3
-                    return 1
-
-                a = self._fast_ldh_value(n, sys_interface, gpu)
-                flags = CP_FLAG_TABLE[(a << 8) | registers['b']]
+            if memory[0xFFFF] & memory[0xFF0F] & 0x1F:
                 registers['a'] = a
-                registers['f'] = flags
-                if flags & FLAG_ZERO:
-                    registers['pc'] = (pc + 5) & 0xFFFF
-                    registers['m'] = 6
-                    return 3
+                registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+                registers['m'] = 3
+                return 1
 
-                loops = (loop_boundary - 1) // 7
-                if loops < 1:
-                    loops = 1
-                registers['pc'] = pc
-                registers['m'] = loops * 7
-                return loops * 3
+            ppu_m_until = 0x10000
+            if memory[0xFF40] & 0x80:
+                remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+                if (
+                    gpu.linemode == 1
+                    and not gpu._line153_ly_reset
+                    and memory[0xFF44] == 153
+                ):
+                    line153_remaining = 4 - gpu._mode_clock
+                    if line153_remaining < remaining:
+                        remaining = line153_remaining
+                ppu_m_until = remaining >> 2
+                if ppu_m_until < 1:
+                    ppu_m_until = 1
+
+            timer_m_until = 0x10000
+            if sys_interface.timer_enabled:
+                period = 1 << sys_interface.timer_period_shift
+                until_next_edge = period - (
+                    sys_interface.divider_counter & (period - 1)
+                )
+                edges_until_overflow = 0x100 - memory[0xFF05]
+                timer_m_until = (
+                    until_next_edge
+                    + (edges_until_overflow - 1) * period
+                )
+
+            loop_boundary = (
+                ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
+            )
+            if loop_boundary <= 7:
+                registers['a'] = a
+                registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+                registers['m'] = 3
+                return 1
+
+            flags = CP_FLAG_TABLE[(a << 8) | registers['b']]
+            registers['a'] = a
+            registers['f'] = flags
+            if flags & FLAG_ZERO:
+                registers['pc'] = (pc + 5) & 0xFFFF
+                registers['m'] = 6
+                return 3
+
+            loops = (loop_boundary - 1) // 7
+            if loops < 1:
+                loops = 1
+            registers['pc'] = pc
+            registers['m'] = loops * 7
+            return loops * 3
 
         operand_pc = registers['pc']
         if direct_rom is not None and operand_pc < 0x8000:
@@ -3008,7 +3031,6 @@ class GbZ80Cpu(object):
         if carry:
             self.registers['f'] |= 0x10  # Set carry flag
         self.registers['m'] = 1
-
 
 
 
