@@ -70,6 +70,7 @@ def main(
     screenshot_interval_frames=60,
     gbc=False,
     bios=None,
+    metrics_warmup_seconds=20.0,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -137,7 +138,17 @@ def main(
         'last_caption_frames': 0,
         'last_caption_drawn_frames': 0,
         'last_caption_instructions': 0,
+        'metrics_warmup_seconds': metrics_warmup_seconds,
+        'measured_active': metrics_warmup_seconds <= 0,
+        'measured_start_seconds': None,
+        'measured_frames': 0,
+        'measured_drawn_frames': 0,
+        'measured_instructions': 0,
+        'measured_draw_seconds': 0.0,
+        'measured_sleep_seconds': 0.0,
     }
+    if stats['measured_active']:
+        stats['measured_start_seconds'] = stats['start_seconds']
     screenshot_dir_path = Path(screenshot_dir) if screenshot_dir else None
     if screenshot_dir_path is not None:
         screenshot_dir_path.mkdir(parents=True, exist_ok=True)
@@ -162,8 +173,20 @@ def main(
                 gpu.frame_ready = False
                 stats['frames'] += 1
                 stats['instructions'] = instructions
+                now = time.perf_counter()
+                if (
+                    not stats['measured_active']
+                    and now - stats['start_seconds'] >= metrics_warmup_seconds
+                ):
+                    stats['measured_active'] = True
+                    stats['measured_start_seconds'] = now
+                    stats['measured_instructions'] = instructions
+                    if audio_output is not None:
+                        audio_output.reset_diagnostics(track_latency=True)
+                if stats['measured_active']:
+                    stats['measured_frames'] += 1
                 if screenshot_dir_path is not None:
-                    elapsed = time.perf_counter() - stats['start_seconds']
+                    elapsed = now - stats['start_seconds']
                     if screenshot_start_frame is not None:
                         capture_allowed = stats['frames'] >= next_screenshot_frame
                         if (
@@ -222,13 +245,19 @@ def main(
                             frame_surface,
                             scaled_surface,
                         )
-                        stats['draw_seconds'] += time.perf_counter() - draw_start
+                        draw_elapsed = time.perf_counter() - draw_start
+                        stats['draw_seconds'] += draw_elapsed
                         stats['drawn_frames'] += 1
+                        if stats['measured_active']:
+                            stats['measured_draw_seconds'] += draw_elapsed
+                            stats['measured_drawn_frames'] += 1
                     if pace_frames:
                         next_frame_deadline, slept = pace_frame(
                             next_frame_deadline
                         )
                         stats['sleep_seconds'] += slept
+                        if stats['measured_active']:
+                            stats['measured_sleep_seconds'] += slept
                     update_caption(caption, stats)
 
                 if max_frames is not None and stats['frames'] >= max_frames:
@@ -385,6 +414,25 @@ class PygameAudioOutput(object):
                 time.perf_counter() - self.start_seconds
             )
             self.max_tracked_queued_bytes = self.queued_bytes
+
+    def reset_diagnostics(self, track_latency=False):
+        """Reset audio diagnostics while leaving queued audio intact."""
+        with self.lock:
+            self.underruns = 0
+            self.callbacks = 0
+            self.start_seconds = time.perf_counter()
+            self.underrun_events = 0
+            self.underrun_bytes = 0
+            self.largest_underrun_bytes = 0
+            self.consecutive_underruns = 0
+            self.longest_underrun_streak = 0
+            self.in_underrun = False
+            self.underrun_event_times.clear()
+            self.latency_tracking_started = track_latency
+            self.latency_tracking_start_seconds = 0.0 if track_latency else None
+            self.max_tracked_queued_bytes = (
+                self.queued_bytes if track_latency else 0
+            )
 
     def _callback(self, device, output):
         del device
@@ -556,6 +604,41 @@ def print_run_stats(stats, no_display):
             f"({draw_seconds / elapsed * 100:.1f}% of elapsed), "
             f"{sleep_seconds:.2f}s pacing, "
             f"{emulation_seconds:.2f}s emulation/event loop"
+        )
+
+    if not stats['measured_active']:
+        print(
+            "Measured stats: "
+            f"warmup not completed ({stats['metrics_warmup_seconds']:.1f}s)"
+        )
+        return
+
+    measured_elapsed = time.perf_counter() - stats['measured_start_seconds']
+    measured_elapsed = max(measured_elapsed, 0.000001)
+    measured_instructions = stats['instructions'] - stats['measured_instructions']
+    measured_emulation_seconds = (
+        measured_elapsed
+        - stats['measured_draw_seconds']
+        - stats['measured_sleep_seconds']
+    )
+    print(
+        "Measured stats "
+        f"(after {stats['metrics_warmup_seconds']:.1f}s warmup): "
+        f"{stats['measured_frames']} frames, "
+        f"{measured_instructions} instructions, "
+        f"{measured_elapsed:.2f}s elapsed, "
+        f"{stats['measured_frames'] / measured_elapsed:.2f} fps, "
+        f"{measured_instructions / measured_elapsed:,.0f} instr/s"
+    )
+    if not no_display:
+        print(
+            "Measured rendering: "
+            f"{stats['measured_drawn_frames']} drawn frames, "
+            f"{stats['measured_draw_seconds']:.2f}s drawing "
+            f"({stats['measured_draw_seconds'] / measured_elapsed * 100:.1f}% "
+            "of measured), "
+            f"{stats['measured_sleep_seconds']:.2f}s pacing, "
+            f"{measured_emulation_seconds:.2f}s emulation/event loop"
         )
 
 
@@ -764,6 +847,15 @@ if __name__ == '__main__':
         help="exit automatically after running for this many real-time seconds",
     )
     parser.add_argument(
+        "--metrics-warmup-seconds",
+        type=float,
+        default=20.0,
+        help=(
+            "ignore the first N real-time seconds in measured FPS/audio "
+            "diagnostics (default: 20)"
+        ),
+    )
+    parser.add_argument(
         "--no-display",
         action="store_true",
         help="run without opening a pygame window or drawing frames",
@@ -866,6 +958,8 @@ if __name__ == '__main__':
         parser.error("--frameskip must be 1 or greater")
     if not 0 <= args.volume <= 100:
         parser.error("--volume must be between 0 and 100")
+    if args.metrics_warmup_seconds < 0:
+        parser.error("--metrics-warmup-seconds must be 0 or greater")
 
     if args.profile:
         profiler = cProfile.Profile()
@@ -893,6 +987,7 @@ if __name__ == '__main__':
                 screenshot_interval_frames=args.screenshot_interval_frames,
                 gbc=args.gbc,
                 bios=args.bios,
+                metrics_warmup_seconds=args.metrics_warmup_seconds,
             )
         finally:
             profiler.disable()
@@ -923,4 +1018,5 @@ if __name__ == '__main__':
             screenshot_interval_frames=args.screenshot_interval_frames,
             gbc=args.gbc,
             bios=args.bios,
+            metrics_warmup_seconds=args.metrics_warmup_seconds,
         )

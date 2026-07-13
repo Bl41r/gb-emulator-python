@@ -134,6 +134,7 @@ FLAG_ZERO = 0x80
 FLAG_HALF_CARRY = 0x20
 FLAG_CARRY = 0x10
 CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
+PPU_MODE_CYCLES = (204, 456, 80, 172)
 my_counter = 0
 
 
@@ -854,16 +855,50 @@ class GbZ80Cpu(object):
                 and not gb_doctor_test_mode
                 and not self.enable_interrupts_next_cycle
                 and not (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
-                and gpu.m_cycles_until_mode_transition() > 5
-                and sys_interface.m_cycles_until_timer_interrupt() > 5
             ):
-                if flags & FLAG_ZERO:
-                    registers['pc'] = (registers['pc'] + 2) & 0xFFFF
-                    registers['m'] = 4
+                ppu_m_until = 0x10000
+                if memory[0xFF40] & 0x80:
+                    remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+                    if (
+                        gpu.linemode == 1
+                        and not gpu._line153_ly_reset
+                        and memory[0xFF44] == 153
+                    ):
+                        line153_remaining = 4 - gpu._mode_clock
+                        if line153_remaining < remaining:
+                            remaining = line153_remaining
+                    ppu_m_until = max(1, remaining // 4)
+
+                timer_m_until = 0x10000
+                if sys_interface.timer_enabled:
+                    period = 1 << sys_interface.timer_period_shift
+                    until_next_edge = period - (
+                        sys_interface.divider_counter & (period - 1)
+                    )
+                    edges_until_overflow = 0x100 - memory[0xFF05]
+                    timer_m_until = (
+                        until_next_edge
+                        + (edges_until_overflow - 1) * period
+                    )
+
+                if ppu_m_until > 5 and timer_m_until > 5:
+                    if flags & FLAG_ZERO:
+                        registers['pc'] = (registers['pc'] + 2) & 0xFFFF
+                        registers['m'] = 4
+                        executed_instructions = 2
+                    else:
+                        registers['pc'] = pc
+                        if address == 0xFF44:
+                            loops = (min(ppu_m_until, timer_m_until) - 1) // 5
+                            if loops < 1:
+                                loops = 1
+                            registers['m'] = loops * 5
+                            executed_instructions = loops * 2
+                        else:
+                            registers['m'] = 5
+                            executed_instructions = 2
                 else:
-                    registers['pc'] = pc
-                    registers['m'] = 5
-                executed_instructions = 2
+                    registers['m'] = 2
             else:
                 registers['m'] = 2
         elif not trace_enabled and op == 0x20:

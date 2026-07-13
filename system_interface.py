@@ -113,6 +113,7 @@ class GbSystemInterface(object):
         """
         self.memory.reset_memory()
         self.cgb_vram_bank1[:] = bytes(0x2000)
+        self.gpu.reset_cgb_attr_cache()
         for bank in self.cgb_wram_banks:
             bank[:] = bytes(0x1000)
         self.cgb_wram_bank = 1
@@ -612,6 +613,8 @@ class GbSystemInterface(object):
                 self.cgb_vram_bank1[offset] = value
                 if address <= 0x97FF:
                     self.gpu.update_tile(address, value, bank=1)
+                else:
+                    self.gpu.invalidate_cgb_attr_cache(address)
             else:
                 if self.raw_memory[address] == value:
                     return
