@@ -3031,11 +3031,3 @@ class GbZ80Cpu(object):
         if carry:
             self.registers['f'] |= 0x10  # Set carry flag
         self.registers['m'] = 1
-
-
-
-
-
-
-
-
