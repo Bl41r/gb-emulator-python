@@ -87,10 +87,10 @@ def main(
     apu = GbApu(gb_memory.memory) if audio_enabled else None
 
     if GB_DR_TEST_MODE:
-        caption = f"GameBoy Emulator (TEST MODE) - {filename}"
+        caption = build_window_caption(filename, test_mode=True)
         print("IN TEST MODE")
     else:
-        caption = f"GameBoy Emulator - {filename}"
+        caption = build_window_caption(filename)
 
     sys_interface = GbSystemInterface(
         gb_memory,
@@ -558,6 +558,15 @@ def pace_frame(deadline):
     return deadline, waited
 
 
+def build_window_caption(filename, test_mode=False, max_rom_chars=32):
+    """Return a compact base window title that leaves room for FPS stats."""
+    rom_name = Path(filename).name
+    if len(rom_name) > max_rom_chars:
+        rom_name = rom_name[:max_rom_chars - 1] + "…"
+    mode_suffix = " test" if test_mode else ""
+    return f"gb-emu{mode_suffix} - {rom_name}"
+
+
 def update_caption(base_caption, stats):
     """Refresh the window title with recent performance once per second."""
     now = time.perf_counter()
@@ -572,9 +581,13 @@ def update_caption(base_caption, stats):
     draw_fps = drawn_frames / elapsed
     instructions_per_second = instructions / elapsed
 
+    if drawn_frames != frames:
+        fps_text = f"{fps:.1f} FPS / {draw_fps:.1f} drawn"
+    else:
+        fps_text = f"{fps:.1f} FPS"
+
     pygame.display.set_caption(
-        f"{base_caption} - {fps:.1f} emu FPS - {draw_fps:.1f} draw FPS - "
-        f"{instructions_per_second:,.0f} instr/s"
+        f"{base_caption} - {fps_text} - {instructions_per_second:,.0f} instr/s"
     )
     stats['last_caption_seconds'] = now
     stats['last_caption_frames'] = stats['frames']

@@ -215,6 +215,7 @@ class GbSystemInterface(object):
         limit = min(scan_limit, self.direct_rom_length)
         direct_rom = self.direct_rom
         hram_poll_loop_ldh_offsets = {}
+        hram_compare_b_loop_ldh_offsets = {}
         cp_hl_jr_nz_loop_pcs = set()
 
         for pc in range(max(0, limit - 4)):
@@ -228,6 +229,15 @@ class GbSystemInterface(object):
                 hram_poll_loop_ldh_offsets[pc] = direct_rom[pc + 1]
 
             if (
+                direct_rom[pc] == 0xF0
+                and direct_rom[pc + 1] == 0x44
+                and direct_rom[pc + 2] == 0xB8
+                and direct_rom[pc + 3] == 0x20
+                and direct_rom[pc + 4] == 0xFB
+            ):
+                hram_compare_b_loop_ldh_offsets[pc] = direct_rom[pc + 1]
+
+            if (
                 direct_rom[pc] == 0xBE
                 and direct_rom[pc + 1] == 0x20
                 and direct_rom[pc + 2] == 0xFD
@@ -235,6 +245,7 @@ class GbSystemInterface(object):
                 cp_hl_jr_nz_loop_pcs.add(pc)
 
         self.cpu.hram_poll_loop_ldh_offsets = hram_poll_loop_ldh_offsets
+        self.cpu.hram_compare_b_loop_ldh_offsets = hram_compare_b_loop_ldh_offsets
         self.cpu.cp_hl_jr_nz_loop_pcs = cp_hl_jr_nz_loop_pcs
 
     def _load_boot_rom(self, bios_path):
