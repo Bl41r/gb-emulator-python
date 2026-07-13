@@ -78,6 +78,7 @@ class GbSystemInterface(object):
         self.bios_path = bios_path
         self.boot_rom = None
         self.boot_rom_enabled = False
+        self.boot_rom_has_cgb_map = False
         self.cgb_mode = False
         self.cgb_dmg_compat_mode = False
         self.double_speed = False
@@ -258,6 +259,7 @@ class GbSystemInterface(object):
             )
         self.boot_rom = bytes(data)
         self.boot_rom_enabled = True
+        self.boot_rom_has_cgb_map = len(self.boot_rom) == 0x900
         self.raw_memory[0xFF50] = 0x00
         print(
             "Loaded boot ROM:",
@@ -727,8 +729,15 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
-        if self.boot_rom_enabled and self._boot_rom_contains(address):
-            return self.read_boot_rom_byte(address)
+        if self.boot_rom_enabled:
+            if (
+                address < 0x100
+                or (
+                    self.boot_rom_has_cgb_map
+                    and 0x200 <= address < 0x900
+                )
+            ):
+                return self.boot_rom[address]
 
         if 0x0000 <= address <= 0x7FFF:
             cartridge = self.cartridge

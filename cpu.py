@@ -970,6 +970,46 @@ class GbZ80Cpu(object):
             if l == 0:
                 registers['h'] = (registers['h'] + 1) & 0xFF
             registers['m'] = 2
+        elif not trace_enabled and op == 0xCB:
+            pc = registers['pc']
+            if direct_rom is not None and pc < 0x8000:
+                cb_op = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
+            else:
+                cb_op = sys_interface.read_byte(pc)
+            if self.cb_opcode_counts is not None:
+                self.cb_opcode_counts[cb_op] += 1
+            registers['pc'] = (pc + 1) & 0xFFFF
+
+            if cb_op == 0x46:
+                address = (registers['h'] << 8) | registers['l']
+                if (
+                    0x8000 <= address <= 0x9FFF
+                    or 0xC000 <= address <= 0xFEFF
+                    or 0xFF80 <= address <= 0xFFFE
+                ):
+                    value = sys_interface.raw_memory[address]
+                else:
+                    value = self.read8(address)
+                flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+                if not (value & 0x01):
+                    flags |= FLAG_ZERO
+                registers['f'] = flags
+                registers['m'] = 4
+            else:
+                register_index = cb_op & 0x07
+                if 0x40 <= cb_op < 0x80 and register_index != 6:
+                    value = registers[CB_REGISTER_NAMES[register_index]]
+                    flags = (registers['f'] & FLAG_CARRY) | FLAG_HALF_CARRY
+                    if not value & (1 << ((cb_op >> 3) & 0x07)):
+                        flags |= FLAG_ZERO
+                    registers['f'] = flags
+                    registers['m'] = 2
+                else:
+                    cb_handler, cb_args = self.cb_table[cb_op]
+                    if cb_args:
+                        cb_handler(*cb_args)
+                    else:
+                        cb_handler()
         else:
             opcode, args = self.opcode_table[op]
             opcode(*args)
