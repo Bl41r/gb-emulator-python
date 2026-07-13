@@ -166,28 +166,7 @@ class GbSystemInterface(object):
         self.cpu.direct_rom_length = self.direct_rom_length
         if self.boot_rom_enabled:
             self.cpu.direct_rom = None
-        scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
-        poll_loops = {}
-        cp_hl_jr_nz_loop_pcs = set()
-        limit = min(scan_limit, self.direct_rom_length)
-        direct_rom = self.direct_rom
-        for pc in range(max(0, limit - 4)):
-            if (
-                direct_rom[pc] == 0xF0
-                and direct_rom[pc + 1] >= 0x80
-                and direct_rom[pc + 2] == 0xA7
-                and direct_rom[pc + 3] == 0x28
-                and direct_rom[pc + 4] == 0xFB
-            ):
-                poll_loops[pc] = direct_rom[pc + 1]
-            if (
-                direct_rom[pc] == 0xBE
-                and direct_rom[pc + 1] == 0x20
-                and direct_rom[pc + 2] == 0xFD
-            ):
-                cp_hl_jr_nz_loop_pcs.add(pc)
-        self.cpu.hram_poll_loop_ldh_offsets = poll_loops
-        self.cpu.cp_hl_jr_nz_loop_pcs = cp_hl_jr_nz_loop_pcs
+        self._scan_cpu_fast_paths()
 
         if self.boot_rom_enabled:
             self.cpu.registers.update({
@@ -228,6 +207,34 @@ class GbSystemInterface(object):
             print("Hardware mode: DMG")
 
         # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
+
+    def _scan_cpu_fast_paths(self):
+        """Find static ROM instruction patterns that the CPU can fast-path."""
+        scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
+        limit = min(scan_limit, self.direct_rom_length)
+        direct_rom = self.direct_rom
+        hram_poll_loop_ldh_offsets = {}
+        cp_hl_jr_nz_loop_pcs = set()
+
+        for pc in range(max(0, limit - 4)):
+            if (
+                direct_rom[pc] == 0xF0
+                and direct_rom[pc + 1] >= 0x80
+                and direct_rom[pc + 2] == 0xA7
+                and direct_rom[pc + 3] == 0x28
+                and direct_rom[pc + 4] == 0xFB
+            ):
+                hram_poll_loop_ldh_offsets[pc] = direct_rom[pc + 1]
+
+            if (
+                direct_rom[pc] == 0xBE
+                and direct_rom[pc + 1] == 0x20
+                and direct_rom[pc + 2] == 0xFD
+            ):
+                cp_hl_jr_nz_loop_pcs.add(pc)
+
+        self.cpu.hram_poll_loop_ldh_offsets = hram_poll_loop_ldh_offsets
+        self.cpu.cp_hl_jr_nz_loop_pcs = cp_hl_jr_nz_loop_pcs
 
     def _load_boot_rom(self, bios_path):
         """Load an optional DMG/CGB boot ROM image."""
