@@ -168,6 +168,7 @@ class GbSystemInterface(object):
             self.cpu.direct_rom = None
         scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
         poll_loops = {}
+        cp_hl_jr_nz_loop_pcs = set()
         limit = min(scan_limit, self.direct_rom_length)
         direct_rom = self.direct_rom
         for pc in range(max(0, limit - 4)):
@@ -179,7 +180,14 @@ class GbSystemInterface(object):
                 and direct_rom[pc + 4] == 0xFB
             ):
                 poll_loops[pc] = direct_rom[pc + 1]
+            if (
+                direct_rom[pc] == 0xBE
+                and direct_rom[pc + 1] == 0x20
+                and direct_rom[pc + 2] == 0xFD
+            ):
+                cp_hl_jr_nz_loop_pcs.add(pc)
         self.cpu.hram_poll_loop_ldh_offsets = poll_loops
+        self.cpu.cp_hl_jr_nz_loop_pcs = cp_hl_jr_nz_loop_pcs
 
         if self.boot_rom_enabled:
             self.cpu.registers.update({
@@ -263,8 +271,6 @@ class GbSystemInterface(object):
 
     def _boot_rom_contains(self, address):
         """Return whether the currently mapped boot ROM owns this address."""
-        if not self.boot_rom_enabled or self.boot_rom is None:
-            return False
         if len(self.boot_rom) == 0x100:
             return address < 0x100
         return address < 0x100 or 0x200 <= address < 0x900

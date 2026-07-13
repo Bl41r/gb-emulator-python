@@ -178,6 +178,7 @@ class GbZ80Cpu(object):
         self.direct_rom = None
         self.direct_rom_length = 0
         self.hram_poll_loop_ldh_offsets = {}
+        self.cp_hl_jr_nz_loop_pcs = set()
         self.opcode_counts = None
         self.cb_opcode_counts = None
         self.halt_m_cycles = 0
@@ -910,6 +911,43 @@ class GbZ80Cpu(object):
                 (registers['a'] << 8) | registers['b']
             ]
             registers['m'] = 1
+        elif not trace_enabled and op == 0xBE:
+            if (
+                pc in self.cp_hl_jr_nz_loop_pcs
+                and self.opcode_counts is None
+                and not gb_doctor_test_mode
+                and not self.enable_interrupts_next_cycle
+                and not (
+                    sys_interface.raw_memory[0xFFFF]
+                    & sys_interface.raw_memory[0xFF0F]
+                    & 0x1F
+                )
+                and gpu.m_cycles_until_mode_transition() > 5
+                and sys_interface.m_cycles_until_timer_interrupt() > 5
+            ):
+                next_pc = registers['pc']
+                address = (registers['h'] << 8) | registers['l']
+                if address == 0xFF44:
+                    value = sys_interface.raw_memory[0xFF44]
+                else:
+                    value = self.read8(address)
+                flags = CP_FLAG_TABLE[(registers['a'] << 8) | value]
+                registers['f'] = flags
+                if flags & FLAG_ZERO:
+                    registers['pc'] = (next_pc + 2) & 0xFFFF
+                    registers['m'] = 4
+                else:
+                    registers['pc'] = pc
+                    registers['m'] = 5
+                executed_instructions = 2
+            else:
+                address = (registers['h'] << 8) | registers['l']
+                if address == 0xFF44 and not sys_interface.memory.gb_doctor_test_mode:
+                    value = sys_interface.raw_memory[0xFF44]
+                else:
+                    value = sys_interface.read_byte(address)
+                registers['f'] = CP_FLAG_TABLE[(registers['a'] << 8) | value]
+                registers['m'] = 2
         elif not trace_enabled and op == 0x20:
             pc = registers['pc']
             if direct_rom is not None and pc < 0x8000:
