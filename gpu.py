@@ -109,6 +109,7 @@ class GbGpu(object):
         self._tile_row_rgba_cache = [None] * 256
         self._cgb_bg_row_cache = [{} for _ in range(16)]
         self._cgb_bg_palette0_row_cache = {}
+        self._cgb_attr_zero_rows = bytearray([255] * 64)
         self._cgb_obj_row_cache = [{} for _ in range(16)]
         self.sys_interface = None    # Set after interface instantiated
         self.register_map = {
@@ -359,6 +360,18 @@ class GbGpu(object):
         for cache in self._cgb_bg_row_cache:
             cache.clear()
         self._cgb_bg_palette0_row_cache.clear()
+
+    def invalidate_cgb_attr_cache(self, address):
+        """Forget cached zero-attribute status for a CGB tilemap row."""
+        if address < 0x9800:
+            return
+        row = ((address - 0x9800) >> 5) & 31
+        map_index = 32 if address >= 0x9C00 else 0
+        self._cgb_attr_zero_rows[map_index + row] = 255
+
+    def reset_cgb_attr_cache(self):
+        """Forget all cached CGB tilemap attribute row status."""
+        self._cgb_attr_zero_rows[:] = bytes([255] * 64)
 
     def invalidate_cgb_obj_palette_cache(self, palette_number=None):
         """Drop cached CGB OBJ rows after a palette RAM write."""
@@ -765,6 +778,132 @@ class GbGpu(object):
         cache[row_code] = cached
         return cached
 
+    def _cgb_attr_row_is_zero(self, attr_vram, map_offset, tile_row):
+        """Return whether a CGB BG/window attribute tilemap row is all zero."""
+        cache_index = (32 if map_offset >= 0x1C00 else 0) + tile_row
+        cached = self._cgb_attr_zero_rows[cache_index]
+        if cached != 255:
+            return bool(cached)
+
+        row_start = map_offset + tile_row * 32
+        is_zero = not any(attr_vram[row_start:row_start + 32])
+        self._cgb_attr_zero_rows[cache_index] = 1 if is_zero else 0
+        return is_zero
+
+    def _render_cgb_palette0_background_scanline(
+        self,
+        line,
+        lcdc,
+        scroll_x,
+        scroll_y,
+    ):
+        """Render a CGB BG row that uses only bank 0, palette 0 attributes."""
+        sys_interface = self.sys_interface
+        memory = sys_interface.raw_memory
+        palette_data = sys_interface.cgb_bg_palette_rgb
+        y = (line + scroll_y) & 0xFF
+        tile_row = y >> 3
+        tile_pixel_row = y & 7
+        map_base = 0x9C00 if (lcdc & 0x08) else 0x9800
+        map_row_base = map_base + tile_row * 32
+        signed_addressing = not (lcdc & 0x10)
+        screen_data = self.screen_data
+        screen_offset = line * 160 * 4
+        scanrow = self._scanrow
+        tile_row_codes = self.tile_row_codes
+        palette0_cache = self._cgb_bg_palette0_row_cache
+
+        tile_col = scroll_x >> 3
+        tile_pixel_col = scroll_x & 7
+        if tile_pixel_col == 0:
+            if not signed_addressing:
+                for x in range(0, 160, 8):
+                    tile_index = memory[map_row_base + tile_col]
+
+                    row_code = tile_row_codes[tile_index][tile_pixel_row]
+                    try:
+                        pixels, rgba = palette0_cache[row_code]
+                    except KeyError:
+                        pixels, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                    scanrow[x:x + 8] = pixels
+                    offset = screen_offset + x * 4
+                    screen_data[offset:offset + 32] = rgba
+                    tile_col = (tile_col + 1) & 31
+                return
+
+            for x in range(0, 160, 8):
+                tile_id = memory[map_row_base + tile_col]
+                tile_index = 256 + (
+                    tile_id - 256 if tile_id > 127 else tile_id
+                )
+
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    pixels, rgba = palette0_cache[row_code]
+                except KeyError:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                scanrow[x:x + 8] = pixels
+                offset = screen_offset + x * 4
+                screen_data[offset:offset + 32] = rgba
+                tile_col = (tile_col + 1) & 31
+            return
+
+        x = 0
+        if not signed_addressing:
+            while x < 160:
+                tile_index = memory[map_row_base + tile_col]
+
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    pixels, rgba = palette0_cache[row_code]
+                except KeyError:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                run = min(8 - tile_pixel_col, 160 - x)
+                end = tile_pixel_col + run
+                scanrow[x:x + run] = pixels[tile_pixel_col:end]
+                offset = screen_offset + x * 4
+                screen_data[offset:offset + run * 4] = rgba[
+                    tile_pixel_col * 4:end * 4
+                ]
+                x += run
+                tile_col = (tile_col + 1) & 31
+                tile_pixel_col = 0
+            return
+
+        while x < 160:
+            tile_id = memory[map_row_base + tile_col]
+            tile_index = 256 + (
+                tile_id - 256 if tile_id > 127 else tile_id
+            )
+
+            row_code = tile_row_codes[tile_index][tile_pixel_row]
+            try:
+                pixels, rgba = palette0_cache[row_code]
+            except KeyError:
+                pixels, rgba = self._cgb_palette0_row_rgba(
+                    row_code,
+                    palette_data,
+                )
+            run = min(8 - tile_pixel_col, 160 - x)
+            end = tile_pixel_col + run
+            scanrow[x:x + run] = pixels[tile_pixel_col:end]
+            offset = screen_offset + x * 4
+            screen_data[offset:offset + run * 4] = rgba[
+                tile_pixel_col * 4:end * 4
+            ]
+            x += run
+            tile_col = (tile_col + 1) & 31
+            tile_pixel_col = 0
+
     def _render_cgb_background_scanline(self, line, lcdc, scroll_x, scroll_y):
         """Render a CGB background scanline using bank-1 tile attributes."""
         diagnostics_enabled = self.diagnostics_enabled
@@ -797,6 +936,26 @@ class GbGpu(object):
         tile_col = scroll_x >> 3
         tile_pixel_col = scroll_x & 7
         map_row_offset = map_offset + tile_row * 32
+        if self._cgb_attr_row_is_zero(attr_vram, map_offset, tile_row):
+            self._render_cgb_palette0_background_scanline(
+                line,
+                lcdc,
+                scroll_x,
+                scroll_y,
+            )
+            if diagnostics_enabled:
+                diagnostics['cgb_bg_scanlines'] = (
+                    diagnostics.get('cgb_bg_scanlines', 0) + 1
+                )
+                diagnostics['cgb_bg_attr_zero_fast_scanlines'] = (
+                    diagnostics.get('cgb_bg_attr_zero_fast_scanlines', 0) + 1
+                )
+                diagnostics['cgb_bg_seconds'] = (
+                    diagnostics.get('cgb_bg_seconds', 0.0)
+                    + time.perf_counter()
+                    - start_seconds
+                )
+            return
 
         if tile_pixel_col == 0:
             priority_run = priority_runs[8]

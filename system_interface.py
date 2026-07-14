@@ -78,6 +78,7 @@ class GbSystemInterface(object):
         self.bios_path = bios_path
         self.boot_rom = None
         self.boot_rom_enabled = False
+        self.boot_rom_has_cgb_map = False
         self.cgb_mode = False
         self.cgb_dmg_compat_mode = False
         self.double_speed = False
@@ -113,6 +114,7 @@ class GbSystemInterface(object):
         """
         self.memory.reset_memory()
         self.cgb_vram_bank1[:] = bytes(0x2000)
+        self.gpu.reset_cgb_attr_cache()
         for bank in self.cgb_wram_banks:
             bank[:] = bytes(0x1000)
         self.cgb_wram_bank = 1
@@ -166,20 +168,7 @@ class GbSystemInterface(object):
         self.cpu.direct_rom_length = self.direct_rom_length
         if self.boot_rom_enabled:
             self.cpu.direct_rom = None
-        scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
-        poll_loops = {}
-        limit = min(scan_limit, self.direct_rom_length)
-        direct_rom = self.direct_rom
-        for pc in range(max(0, limit - 4)):
-            if (
-                direct_rom[pc] == 0xF0
-                and direct_rom[pc + 1] >= 0x80
-                and direct_rom[pc + 2] == 0xA7
-                and direct_rom[pc + 3] == 0x28
-                and direct_rom[pc + 4] == 0xFB
-            ):
-                poll_loops[pc] = direct_rom[pc + 1]
-        self.cpu.hram_poll_loop_ldh_offsets = poll_loops
+        self._scan_cpu_fast_paths()
 
         if self.boot_rom_enabled:
             self.cpu.registers.update({
@@ -221,6 +210,45 @@ class GbSystemInterface(object):
 
         # print(f"ROM bytes at 0x0100: {self.memory.read_byte(0x0100):02X} {self.memory.read_byte(0x0101):02X} {self.memory.read_byte(0x0102):02X} {self.memory.read_byte(0x0103):02X}")
 
+    def _scan_cpu_fast_paths(self):
+        """Find static ROM instruction patterns that the CPU can fast-path."""
+        scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
+        limit = min(scan_limit, self.direct_rom_length)
+        direct_rom = self.direct_rom
+        hram_poll_loop_ldh_offsets = {}
+        hram_compare_b_loop_ldh_pcs = set()
+        cp_hl_jr_nz_loop_pcs = set()
+
+        for pc in range(max(0, limit - 4)):
+            if (
+                direct_rom[pc] == 0xF0
+                and direct_rom[pc + 1] >= 0x80
+                and direct_rom[pc + 2] == 0xA7
+                and direct_rom[pc + 3] == 0x28
+                and direct_rom[pc + 4] == 0xFB
+            ):
+                hram_poll_loop_ldh_offsets[pc] = direct_rom[pc + 1]
+
+            if (
+                direct_rom[pc] == 0xF0
+                and direct_rom[pc + 1] == 0x44
+                and direct_rom[pc + 2] == 0xB8
+                and direct_rom[pc + 3] == 0x20
+                and direct_rom[pc + 4] == 0xFB
+            ):
+                hram_compare_b_loop_ldh_pcs.add(pc)
+
+            if (
+                direct_rom[pc] == 0xBE
+                and direct_rom[pc + 1] == 0x20
+                and direct_rom[pc + 2] == 0xFD
+            ):
+                cp_hl_jr_nz_loop_pcs.add(pc)
+
+        self.cpu.hram_poll_loop_ldh_offsets = hram_poll_loop_ldh_offsets
+        self.cpu.hram_compare_b_loop_ldh_offsets = hram_compare_b_loop_ldh_pcs
+        self.cpu.cp_hl_jr_nz_loop_pcs = cp_hl_jr_nz_loop_pcs
+
     def _load_boot_rom(self, bios_path):
         """Load an optional DMG/CGB boot ROM image."""
         data = Path(bios_path).read_bytes()
@@ -231,6 +259,7 @@ class GbSystemInterface(object):
             )
         self.boot_rom = bytes(data)
         self.boot_rom_enabled = True
+        self.boot_rom_has_cgb_map = len(self.boot_rom) == 0x900
         self.raw_memory[0xFF50] = 0x00
         print(
             "Loaded boot ROM:",
@@ -263,8 +292,6 @@ class GbSystemInterface(object):
 
     def _boot_rom_contains(self, address):
         """Return whether the currently mapped boot ROM owns this address."""
-        if not self.boot_rom_enabled or self.boot_rom is None:
-            return False
         if len(self.boot_rom) == 0x100:
             return address < 0x100
         return address < 0x100 or 0x200 <= address < 0x900
@@ -599,6 +626,8 @@ class GbSystemInterface(object):
                 self.cgb_vram_bank1[offset] = value
                 if address <= 0x97FF:
                     self.gpu.update_tile(address, value, bank=1)
+                else:
+                    self.gpu.invalidate_cgb_attr_cache(address)
             else:
                 if self.raw_memory[address] == value:
                     return
@@ -700,8 +729,15 @@ class GbSystemInterface(object):
 
     def read_byte(self, address):
         """Read a byte in memory."""
-        if self._boot_rom_contains(address):
-            return self.read_boot_rom_byte(address)
+        if self.boot_rom_enabled:
+            if (
+                address < 0x100
+                or (
+                    self.boot_rom_has_cgb_map
+                    and 0x200 <= address < 0x900
+                )
+            ):
+                return self.boot_rom[address]
 
         if 0x0000 <= address <= 0x7FFF:
             cartridge = self.cartridge
