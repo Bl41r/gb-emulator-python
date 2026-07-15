@@ -137,6 +137,7 @@ CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
 PPU_MODE_CYCLES = (204, 456, 80, 172)
 OP_FAST_LY_COMPARE_B_LOOP = 0x100
 OP_FAST_CP_HL_JR_NZ_LOOP = 0x101
+PSEUDO_OPCODE_BASE = 0x100
 OP_FAST_HRAM_POLL_LOOP_BASE = 0x200
 INLINE_OPCODE_MASK = bytearray(256)
 for _op in (0x05, 0x12, 0x20, 0x21, 0x22, 0x23, 0x28, 0x2A,
@@ -760,6 +761,10 @@ class GbZ80Cpu(object):
         }
         self.opcode_table = [self.opcode_map[i] for i in range(256)]
         self.cb_table = [self.cb_map[i] for i in range(256)]
+        self.pseudo_opcode_table = [
+            self._fast_hram_compare_b_loop,
+            self._fast_cp_hl_jr_nz_loop,
+        ]
 
     def execute_next_operation(self):
         global my_counter
@@ -831,14 +836,10 @@ class GbZ80Cpu(object):
             executed_instructions = self._fast_hram_poll_loop(
                 pc, op - OP_FAST_HRAM_POLL_LOOP_BASE, sys_interface, gpu
             )
-        elif op == OP_FAST_LY_COMPARE_B_LOOP:
-            executed_instructions = self._fast_hram_compare_b_loop(
-                pc, sys_interface, gpu
-            )
-        elif op == OP_FAST_CP_HL_JR_NZ_LOOP:
-            executed_instructions = self._fast_cp_hl_jr_nz_loop(
-                pc, sys_interface, gpu
-            )
+        elif op >= PSEUDO_OPCODE_BASE:
+            executed_instructions = self.pseudo_opcode_table[
+                op - PSEUDO_OPCODE_BASE
+            ](pc, sys_interface, gpu)
         elif not trace_enabled and op == 0xF0:
             executed_instructions = self._fast_ldh_a_n(
                 pc, direct_rom, sys_interface, gpu, gb_doctor_test_mode
