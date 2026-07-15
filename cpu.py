@@ -135,6 +135,13 @@ FLAG_HALF_CARRY = 0x20
 FLAG_CARRY = 0x10
 CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
 PPU_MODE_CYCLES = (204, 456, 80, 172)
+OP_FAST_LY_COMPARE_B_LOOP = 0x100
+OP_FAST_CP_HL_JR_NZ_LOOP = 0x101
+OP_FAST_HRAM_POLL_LOOP_BASE = 0x200
+INLINE_OPCODE_MASK = bytearray(256)
+for _op in (0x05, 0x12, 0x20, 0x21, 0x22, 0x23, 0x28, 0x2A,
+            0xA7, 0xB8, 0xBE, 0xCB, 0xF0):
+    INLINE_OPCODE_MASK[_op] = 1
 my_counter = 0
 
 
@@ -177,6 +184,8 @@ class GbZ80Cpu(object):
         self.log_dump = log_dump
         self.sys_interface = None    # Set after interface instantiated.
         self.direct_rom = None
+        self.decoded_rom_ops = None
+        self.decoded_rom_ops_length = 0
         self.direct_rom_length = 0
         self.hram_poll_loop_ldh_offsets = {}
         self.hram_compare_b_loop_ldh_offsets = {}
@@ -800,7 +809,13 @@ class GbZ80Cpu(object):
 
         pc = registers['pc']
         direct_rom = self.direct_rom
-        if direct_rom is not None and pc < 0x8000:
+        if trace_enabled or self.opcode_counts is not None:
+            decoded_rom_ops = None
+        else:
+            decoded_rom_ops = self.decoded_rom_ops
+        if decoded_rom_ops is not None and pc < self.decoded_rom_ops_length:
+            op = decoded_rom_ops[pc]
+        elif direct_rom is not None and pc < 0x8000:
             op = direct_rom[pc] if pc < self.direct_rom_length else 0xFF
         else:
             op = sys_interface.read_byte(pc)
@@ -809,7 +824,22 @@ class GbZ80Cpu(object):
         executed_instructions = 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
-        if not trace_enabled and op == 0xF0:
+        if op < 0x100 and not INLINE_OPCODE_MASK[op]:
+            opcode, args = self.opcode_table[op]
+            opcode(*args)
+        elif op >= OP_FAST_HRAM_POLL_LOOP_BASE:
+            executed_instructions = self._fast_hram_poll_loop(
+                pc, op - OP_FAST_HRAM_POLL_LOOP_BASE, sys_interface, gpu
+            )
+        elif op == OP_FAST_LY_COMPARE_B_LOOP:
+            executed_instructions = self._fast_hram_compare_b_loop(
+                pc, sys_interface, gpu
+            )
+        elif op == OP_FAST_CP_HL_JR_NZ_LOOP:
+            executed_instructions = self._fast_cp_hl_jr_nz_loop(
+                pc, sys_interface, gpu
+            )
+        elif not trace_enabled and op == 0xF0:
             executed_instructions = self._fast_ldh_a_n(
                 pc, direct_rom, sys_interface, gpu, gb_doctor_test_mode
             )
@@ -861,49 +891,9 @@ class GbZ80Cpu(object):
             if not can_fold_cp_hl_loop:
                 registers['m'] = 2
             else:
-                ppu_m_until = 0x10000
-                if memory[0xFF40] & 0x80:
-                    remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
-                    if (
-                        gpu.linemode == 1
-                        and not gpu._line153_ly_reset
-                        and memory[0xFF44] == 153
-                    ):
-                        line153_remaining = 4 - gpu._mode_clock
-                        if line153_remaining < remaining:
-                            remaining = line153_remaining
-                    ppu_m_until = max(1, remaining // 4)
-
-                timer_m_until = 0x10000
-                if sys_interface.timer_enabled:
-                    period = 1 << sys_interface.timer_period_shift
-                    until_next_edge = period - (
-                        sys_interface.divider_counter & (period - 1)
-                    )
-                    edges_until_overflow = 0x100 - memory[0xFF05]
-                    timer_m_until = (
-                        until_next_edge
-                        + (edges_until_overflow - 1) * period
-                    )
-
-                loop_boundary = min(ppu_m_until, timer_m_until)
-                if loop_boundary <= 5:
-                    registers['m'] = 2
-                elif flags & FLAG_ZERO:
-                    registers['pc'] = (registers['pc'] + 2) & 0xFFFF
-                    registers['m'] = 4
-                    executed_instructions = 2
-                elif address == 0xFF44:
-                    loops = (loop_boundary - 1) // 5
-                    if loops < 1:
-                        loops = 1
-                    registers['pc'] = pc
-                    registers['m'] = loops * 5
-                    executed_instructions = loops * 2
-                else:
-                    registers['pc'] = pc
-                    registers['m'] = 5
-                    executed_instructions = 2
+                executed_instructions = self._finish_fast_cp_hl_jr_nz_loop(
+                    pc, sys_interface, gpu, memory, address, flags
+                )
         elif not trace_enabled and op == 0x20:
             pc = registers['pc']
             if direct_rom is not None and pc < 0x8000:
@@ -1092,30 +1082,7 @@ class GbZ80Cpu(object):
         ):
             n = poll_loops.get(pc)
             if n is not None:
-                memory = sys_interface.raw_memory
-                if (
-                    not (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
-                    and gpu.m_cycles_until_mode_transition() > 7
-                    and sys_interface.m_cycles_until_timer_interrupt() > 7
-                ):
-                    a = memory[0xFF00 + n]
-                    registers['a'] = a
-                    registers['f'] = FLAG_HALF_CARRY | (
-                        FLAG_ZERO if a == 0 else 0
-                    )
-                    if a == 0:
-                        registers['pc'] = pc
-                        registers['m'] = 7
-                    else:
-                        registers['pc'] = (pc + 5) & 0xFFFF
-                        registers['m'] = 6
-                    return 3
-
-                operand_pc = registers['pc']
-                registers['a'] = memory[0xFF00 + n]
-                registers['pc'] = (operand_pc + 1) & 0xFFFF
-                registers['m'] = 3
-                return 1
+                return self._fast_hram_poll_loop(pc, n, sys_interface, gpu)
 
         compare_b_loop_pcs = self.hram_compare_b_loop_ldh_offsets
         if (
@@ -1125,84 +1092,7 @@ class GbZ80Cpu(object):
             and not self.enable_interrupts_next_cycle
             and pc in compare_b_loop_pcs
         ):
-            memory = sys_interface.raw_memory
-            line = memory[0xFF44]
-            if not (memory[0xFF40] & 0x80):
-                a = 0
-            else:
-                mode_clock = gpu._mode_clock + 8
-                if gpu.linemode == 0 and mode_clock >= 204:
-                    a = (line + 1) & 0xFF
-                elif gpu.linemode == 1:
-                    if (
-                        line == 153
-                        and not gpu._line153_ly_reset
-                        and mode_clock >= 4
-                    ):
-                        a = 0
-                    elif mode_clock >= 456 and not gpu._line153_ly_reset:
-                        a = (line + 1) & 0xFF
-                    else:
-                        a = line
-                else:
-                    a = line
-
-            if memory[0xFFFF] & memory[0xFF0F] & 0x1F:
-                registers['a'] = a
-                registers['pc'] = (registers['pc'] + 1) & 0xFFFF
-                registers['m'] = 3
-                return 1
-
-            ppu_m_until = 0x10000
-            if memory[0xFF40] & 0x80:
-                remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
-                if (
-                    gpu.linemode == 1
-                    and not gpu._line153_ly_reset
-                    and memory[0xFF44] == 153
-                ):
-                    line153_remaining = 4 - gpu._mode_clock
-                    if line153_remaining < remaining:
-                        remaining = line153_remaining
-                ppu_m_until = remaining >> 2
-                if ppu_m_until < 1:
-                    ppu_m_until = 1
-
-            timer_m_until = 0x10000
-            if sys_interface.timer_enabled:
-                period = 1 << sys_interface.timer_period_shift
-                until_next_edge = period - (
-                    sys_interface.divider_counter & (period - 1)
-                )
-                edges_until_overflow = 0x100 - memory[0xFF05]
-                timer_m_until = (
-                    until_next_edge
-                    + (edges_until_overflow - 1) * period
-                )
-
-            loop_boundary = (
-                ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
-            )
-            if loop_boundary <= 7:
-                registers['a'] = a
-                registers['pc'] = (registers['pc'] + 1) & 0xFFFF
-                registers['m'] = 3
-                return 1
-
-            flags = CP_FLAG_TABLE[(a << 8) | registers['b']]
-            registers['a'] = a
-            registers['f'] = flags
-            if flags & FLAG_ZERO:
-                registers['pc'] = (pc + 5) & 0xFFFF
-                registers['m'] = 6
-                return 3
-
-            loops = (loop_boundary - 1) // 7
-            if loops < 1:
-                loops = 1
-            registers['pc'] = pc
-            registers['m'] = loops * 7
-            return loops * 3
+            return self._fast_hram_compare_b_loop(pc, sys_interface, gpu)
 
         operand_pc = registers['pc']
         if direct_rom is not None and operand_pc < 0x8000:
@@ -1218,6 +1108,185 @@ class GbZ80Cpu(object):
         registers['pc'] = (operand_pc + 1) & 0xFFFF
         registers['m'] = 3
         return 1
+
+    def _fast_hram_poll_loop(self, pc, n, sys_interface, gpu):
+        """Fast path for LDH A,(FF00+n); AND A; JR Z,-5."""
+        registers = self.registers
+        memory = sys_interface.raw_memory
+        if (
+            not self.gb_doctor_test_mode
+            and not self.enable_interrupts_next_cycle
+            and not (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+            and gpu.m_cycles_until_mode_transition() > 7
+            and sys_interface.m_cycles_until_timer_interrupt() > 7
+        ):
+            a = memory[0xFF00 + n]
+            registers['a'] = a
+            registers['f'] = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+            if a == 0:
+                registers['pc'] = pc
+                registers['m'] = 7
+            else:
+                registers['pc'] = (pc + 5) & 0xFFFF
+                registers['m'] = 6
+            return 3
+
+        operand_pc = registers['pc']
+        registers['a'] = memory[0xFF00 + n]
+        registers['pc'] = (operand_pc + 1) & 0xFFFF
+        registers['m'] = 3
+        return 1
+
+    def _fast_hram_compare_b_loop(self, pc, sys_interface, gpu):
+        """Fast path for LDH A,(LY); CP B; JR NZ,-5."""
+        registers = self.registers
+        memory = sys_interface.raw_memory
+        line = memory[0xFF44]
+        if not (memory[0xFF40] & 0x80):
+            a = 0
+        else:
+            mode_clock = gpu._mode_clock + 8
+            if gpu.linemode == 0 and mode_clock >= 204:
+                a = (line + 1) & 0xFF
+            elif gpu.linemode == 1:
+                if (
+                    line == 153
+                    and not gpu._line153_ly_reset
+                    and mode_clock >= 4
+                ):
+                    a = 0
+                elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                    a = (line + 1) & 0xFF
+                else:
+                    a = line
+            else:
+                a = line
+
+        if (
+            self.gb_doctor_test_mode
+            or self.enable_interrupts_next_cycle
+            or (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+        ):
+            registers['a'] = a
+            registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+            registers['m'] = 3
+            return 1
+
+        ppu_m_until = 0x10000
+        if memory[0xFF40] & 0x80:
+            remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+            if (
+                gpu.linemode == 1
+                and not gpu._line153_ly_reset
+                and memory[0xFF44] == 153
+            ):
+                line153_remaining = 4 - gpu._mode_clock
+                if line153_remaining < remaining:
+                    remaining = line153_remaining
+            ppu_m_until = remaining >> 2
+            if ppu_m_until < 1:
+                ppu_m_until = 1
+
+        timer_m_until = 0x10000
+        if sys_interface.timer_enabled:
+            period = 1 << sys_interface.timer_period_shift
+            until_next_edge = period - (
+                sys_interface.divider_counter & (period - 1)
+            )
+            edges_until_overflow = 0x100 - memory[0xFF05]
+            timer_m_until = until_next_edge + (edges_until_overflow - 1) * period
+
+        loop_boundary = ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
+        if loop_boundary <= 7:
+            registers['a'] = a
+            registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+            registers['m'] = 3
+            return 1
+
+        flags = CP_FLAG_TABLE[(a << 8) | registers['b']]
+        registers['a'] = a
+        registers['f'] = flags
+        if flags & FLAG_ZERO:
+            registers['pc'] = (pc + 5) & 0xFFFF
+            registers['m'] = 6
+            return 3
+
+        loops = (loop_boundary - 1) // 7
+        if loops < 1:
+            loops = 1
+        registers['pc'] = pc
+        registers['m'] = loops * 7
+        return loops * 3
+
+    def _fast_cp_hl_jr_nz_loop(self, pc, sys_interface, gpu):
+        """Fast path for CP (HL); JR NZ,-3."""
+        registers = self.registers
+        memory = sys_interface.raw_memory
+        address = (registers['h'] << 8) | registers['l']
+        if address == 0xFF44 and not sys_interface.memory.gb_doctor_test_mode:
+            value = memory[0xFF44]
+        else:
+            value = sys_interface.read_byte(address)
+        flags = CP_FLAG_TABLE[(registers['a'] << 8) | value]
+        registers['f'] = flags
+
+        if (
+            self.gb_doctor_test_mode
+            or self.enable_interrupts_next_cycle
+            or (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+        ):
+            registers['m'] = 2
+            return 1
+        return self._finish_fast_cp_hl_jr_nz_loop(
+            pc, sys_interface, gpu, memory, address, flags
+        )
+
+    def _finish_fast_cp_hl_jr_nz_loop(
+        self, pc, sys_interface, gpu, memory, address, flags
+    ):
+        """Finish the timing-sensitive fold for CP (HL); JR NZ,-3."""
+        registers = self.registers
+        ppu_m_until = 0x10000
+        if memory[0xFF40] & 0x80:
+            remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+            if (
+                gpu.linemode == 1
+                and not gpu._line153_ly_reset
+                and memory[0xFF44] == 153
+            ):
+                line153_remaining = 4 - gpu._mode_clock
+                if line153_remaining < remaining:
+                    remaining = line153_remaining
+            ppu_m_until = max(1, remaining // 4)
+
+        timer_m_until = 0x10000
+        if sys_interface.timer_enabled:
+            period = 1 << sys_interface.timer_period_shift
+            until_next_edge = period - (
+                sys_interface.divider_counter & (period - 1)
+            )
+            edges_until_overflow = 0x100 - memory[0xFF05]
+            timer_m_until = until_next_edge + (edges_until_overflow - 1) * period
+
+        loop_boundary = min(ppu_m_until, timer_m_until)
+        if loop_boundary <= 5:
+            registers['m'] = 2
+            return 1
+        if flags & FLAG_ZERO:
+            registers['pc'] = (registers['pc'] + 2) & 0xFFFF
+            registers['m'] = 4
+            return 2
+        if address == 0xFF44:
+            loops = (loop_boundary - 1) // 5
+            if loops < 1:
+                loops = 1
+            registers['pc'] = pc
+            registers['m'] = loops * 5
+            return loops * 2
+
+        registers['pc'] = pc
+        registers['m'] = 5
+        return 2
 
     def _fast_ldh_value(self, n, sys_interface, gpu):
         """Read the LDH target, including special LY timing behavior."""

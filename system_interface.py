@@ -10,6 +10,11 @@ from pathlib import Path
 import sys
 
 from cartridge import Cartridge
+from cpu import (
+    OP_FAST_CP_HL_JR_NZ_LOOP,
+    OP_FAST_HRAM_POLL_LOOP_BASE,
+    OP_FAST_LY_COMPARE_B_LOOP,
+)
 from joypad import Joypad
 
 
@@ -91,6 +96,8 @@ class GbSystemInterface(object):
         self.save_path = None
         self.direct_rom = None
         self.direct_rom_length = 0
+        self.decoded_rom_ops = None
+        self.decoded_rom_ops_length = 0
         self.timer_enabled = False
         self.timer_bit = self.TIMER_BITS[0]
         self.timer_period_shift = self.timer_bit + 1
@@ -168,6 +175,8 @@ class GbSystemInterface(object):
         self.cpu.direct_rom_length = self.direct_rom_length
         if self.boot_rom_enabled:
             self.cpu.direct_rom = None
+            self.cpu.decoded_rom_ops = None
+            self.cpu.decoded_rom_ops_length = 0
         self._scan_cpu_fast_paths()
 
         if self.boot_rom_enabled:
@@ -215,6 +224,7 @@ class GbSystemInterface(object):
         scan_limit = 0x8000 if self.cartridge.is_rom_only_type else 0x4000
         limit = min(scan_limit, self.direct_rom_length)
         direct_rom = self.direct_rom
+        decoded_rom_ops = list(direct_rom[:limit])
         hram_poll_loop_ldh_offsets = {}
         hram_compare_b_loop_ldh_pcs = set()
         cp_hl_jr_nz_loop_pcs = set()
@@ -228,6 +238,9 @@ class GbSystemInterface(object):
                 and direct_rom[pc + 4] == 0xFB
             ):
                 hram_poll_loop_ldh_offsets[pc] = direct_rom[pc + 1]
+                decoded_rom_ops[pc] = (
+                    OP_FAST_HRAM_POLL_LOOP_BASE + direct_rom[pc + 1]
+                )
 
             if (
                 direct_rom[pc] == 0xF0
@@ -237,6 +250,7 @@ class GbSystemInterface(object):
                 and direct_rom[pc + 4] == 0xFB
             ):
                 hram_compare_b_loop_ldh_pcs.add(pc)
+                decoded_rom_ops[pc] = OP_FAST_LY_COMPARE_B_LOOP
 
             if (
                 direct_rom[pc] == 0xBE
@@ -244,10 +258,19 @@ class GbSystemInterface(object):
                 and direct_rom[pc + 2] == 0xFD
             ):
                 cp_hl_jr_nz_loop_pcs.add(pc)
+                decoded_rom_ops[pc] = OP_FAST_CP_HL_JR_NZ_LOOP
 
         self.cpu.hram_poll_loop_ldh_offsets = hram_poll_loop_ldh_offsets
         self.cpu.hram_compare_b_loop_ldh_offsets = hram_compare_b_loop_ldh_pcs
         self.cpu.cp_hl_jr_nz_loop_pcs = cp_hl_jr_nz_loop_pcs
+        self.decoded_rom_ops = decoded_rom_ops
+        self.decoded_rom_ops_length = limit
+        if self.boot_rom_enabled:
+            self.cpu.decoded_rom_ops = None
+            self.cpu.decoded_rom_ops_length = 0
+        else:
+            self.cpu.decoded_rom_ops = decoded_rom_ops
+            self.cpu.decoded_rom_ops_length = limit
 
     def _load_boot_rom(self, bios_path):
         """Load an optional DMG/CGB boot ROM image."""
@@ -460,6 +483,8 @@ class GbSystemInterface(object):
                     self._capture_cgb_dmg_compat_base_palettes()
                 self.boot_rom_enabled = False
                 self.cpu.direct_rom = self.direct_rom
+                self.cpu.decoded_rom_ops = self.decoded_rom_ops
+                self.cpu.decoded_rom_ops_length = self.decoded_rom_ops_length
             return
 
         if self.cgb_dmg_compat_mode and 0xFF47 <= address <= 0xFF49:
