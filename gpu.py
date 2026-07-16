@@ -798,6 +798,32 @@ class GbGpu(object):
         cache[row_code] = cached
         return cached
 
+    def _cgb_obj_row_pixels(self, row_code, palette_data, palette_number, flipped):
+        """Return packed non-transparent CGB OBJ pixels for one tile row."""
+        cache = self._cgb_obj_row_cache[palette_number + (8 if flipped else 0)]
+        try:
+            return cache[row_code]
+        except KeyError:
+            pass
+
+        pixels = TILE_ROW_PIXELS[row_code]
+        palette = palette_data[palette_number]
+        row = bytearray()
+        if flipped:
+            for screen_pixel in range(8):
+                color_index = pixels[7 - screen_pixel]
+                if color_index:
+                    red, green, blue = palette[color_index]
+                    row.extend((screen_pixel, red, green, blue))
+        else:
+            for screen_pixel, color_index in enumerate(pixels):
+                if color_index:
+                    red, green, blue = palette[color_index]
+                    row.extend((screen_pixel, red, green, blue))
+        cached = bytes(row)
+        cache[row_code] = cached
+        return cached
+
     def _cgb_attr_row_is_zero(self, attr_vram, map_offset, tile_row):
         """Return whether a CGB BG/window attribute tilemap row is all zero."""
         cache_index = (32 if map_offset >= 0x1C00 else 0) + tile_row
@@ -1857,16 +1883,26 @@ class GbGpu(object):
                 diagnostics['cgb_sprite_scanlines'] = (
                     diagnostics.get('cgb_sprite_scanlines', 0) + 1
                 )
+                diagnostics['cgb_sprite_empty_scanlines'] = (
+                    diagnostics.get('cgb_sprite_empty_scanlines', 0) + 1
+                )
                 diagnostics['cgb_sprite_seconds'] = (
                     diagnostics.get('cgb_sprite_seconds', 0.0)
                     + time.perf_counter()
                     - start_seconds
                 )
             return
+        if diagnostics_enabled:
+            diagnostics['cgb_sprite_object_rows'] = (
+                diagnostics.get('cgb_sprite_object_rows', 0) + len(objects)
+            )
         claimed = self._sprite_claimed
         claimed[:] = self._empty_scanrow
         screen_data = self.screen_data
         screen_offset = line * 160 * 4
+        tile_row_codes = self.tile_row_codes
+        dmg_compat_mode = self.sys_interface.cgb_dmg_compat_mode
+        bg_priority_active = self._bg_priority_dirty
 
         for object_x, _, object_y, tile_index, attributes in objects:
             row = line - object_y
@@ -1877,22 +1913,124 @@ class GbGpu(object):
                 tile_index = (tile_index & 0xFE) + (row >> 3)
                 row &= 7
 
-            if not self.sys_interface.cgb_dmg_compat_mode and attributes & 0x08:
+            if not dmg_compat_mode and attributes & 0x08:
                 tile_index += 512
-            tile_row = self.tile_set[tile_index][row]
-            if self.sys_interface.cgb_dmg_compat_mode:
-                palette = palette_data[1 if attributes & 0x10 else 0]
+            if dmg_compat_mode:
+                palette_number = 1 if attributes & 0x10 else 0
             else:
-                palette = palette_data[attributes & 0x07]
+                palette_number = attributes & 0x07
+
+            if not diagnostics_enabled:
+                entries = self._cgb_obj_row_pixels(
+                    tile_row_codes[tile_index][row],
+                    palette_data,
+                    palette_number,
+                    bool(attributes & 0x20),
+                )
+                base_x = object_x - 8
+                needs_priority_check = bg_priority_active or (attributes & 0x80)
+                if 0 <= base_x <= 152:
+                    i = 0
+                    entries_len = len(entries)
+                    if not needs_priority_check:
+                        while i < entries_len:
+                            screen_x = base_x + entries[i]
+                            if not claimed[screen_x]:
+                                claimed[screen_x] = True
+                                offset = screen_offset + screen_x * 4
+                                screen_data[offset] = entries[i + 1]
+                                screen_data[offset + 1] = entries[i + 2]
+                                screen_data[offset + 2] = entries[i + 3]
+                                screen_data[offset + 3] = 255
+                            i += 4
+                    else:
+                        while i < entries_len:
+                            screen_x = base_x + entries[i]
+                            if not claimed[screen_x]:
+                                claimed[screen_x] = True
+                                if not (
+                                    (
+                                        self._bg_priority[screen_x]
+                                        or (attributes & 0x80)
+                                    )
+                                    and self._scanrow[screen_x] != 0
+                                ):
+                                    offset = screen_offset + screen_x * 4
+                                    screen_data[offset] = entries[i + 1]
+                                    screen_data[offset + 1] = entries[i + 2]
+                                    screen_data[offset + 2] = entries[i + 3]
+                                    screen_data[offset + 3] = 255
+                            i += 4
+                    continue
+
+                i = 0
+                entries_len = len(entries)
+                if not needs_priority_check:
+                    while i < entries_len:
+                        screen_x = base_x + entries[i]
+                        if 0 <= screen_x < 160 and not claimed[screen_x]:
+                            claimed[screen_x] = True
+                            offset = screen_offset + screen_x * 4
+                            screen_data[offset] = entries[i + 1]
+                            screen_data[offset + 1] = entries[i + 2]
+                            screen_data[offset + 2] = entries[i + 3]
+                            screen_data[offset + 3] = 255
+                        i += 4
+                else:
+                    while i < entries_len:
+                        screen_x = base_x + entries[i]
+                        if 0 <= screen_x < 160 and not claimed[screen_x]:
+                            claimed[screen_x] = True
+                            if not (
+                                (
+                                    self._bg_priority[screen_x]
+                                    or (attributes & 0x80)
+                                )
+                                and self._scanrow[screen_x] != 0
+                            ):
+                                offset = screen_offset + screen_x * 4
+                                screen_data[offset] = entries[i + 1]
+                                screen_data[offset + 1] = entries[i + 2]
+                                screen_data[offset + 2] = entries[i + 3]
+                                screen_data[offset + 3] = 255
+                        i += 4
+                continue
+
+            tile_row = self.tile_set[tile_index][row]
+            palette = palette_data[palette_number]
 
             for pixel in range(8):
+                if diagnostics_enabled:
+                    diagnostics['cgb_sprite_pixels_tested'] = (
+                        diagnostics.get('cgb_sprite_pixels_tested', 0) + 1
+                    )
                 screen_x = object_x - 8 + pixel
-                if not 0 <= screen_x < 160 or claimed[screen_x]:
+                if not 0 <= screen_x < 160:
+                    if diagnostics_enabled:
+                        diagnostics['cgb_sprite_pixels_offscreen'] = (
+                            diagnostics.get(
+                                'cgb_sprite_pixels_offscreen',
+                                0,
+                            ) + 1
+                        )
+                    continue
+                if claimed[screen_x]:
+                    if diagnostics_enabled:
+                        diagnostics['cgb_sprite_pixels_claimed'] = (
+                            diagnostics.get('cgb_sprite_pixels_claimed', 0) + 1
+                        )
                     continue
 
                 tile_x = 7 - pixel if attributes & 0x20 else pixel
                 color_index = tile_row[tile_x]
                 if color_index == 0:
+                    if diagnostics_enabled:
+                        diagnostics['cgb_sprite_pixels_transparent'] = (
+                            diagnostics.get(
+                                'cgb_sprite_pixels_transparent',
+                                0,
+                            ) + 1
+                        )
                     continue
 
                 claimed[screen_x] = True
@@ -1900,8 +2038,19 @@ class GbGpu(object):
                     self._bg_priority[screen_x]
                     or (attributes & 0x80)
                 ) and self._scanrow[screen_x] != 0:
+                    if diagnostics_enabled:
+                        diagnostics['cgb_sprite_pixels_priority_hidden'] = (
+                            diagnostics.get(
+                                'cgb_sprite_pixels_priority_hidden',
+                                0,
+                            ) + 1
+                        )
                     continue
 
+                if diagnostics_enabled:
+                    diagnostics['cgb_sprite_pixels_drawn'] = (
+                        diagnostics.get('cgb_sprite_pixels_drawn', 0) + 1
+                    )
                 red, green, blue = palette[color_index]
                 offset = screen_offset + screen_x * 4
                 screen_data[offset] = red

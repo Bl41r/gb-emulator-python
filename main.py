@@ -784,6 +784,34 @@ def print_gpu_diagnostics(gpu):
             f"{total_scanlines:,}, "
             f"{bg_seconds / total_scanlines * 1_000_000:.1f} us/scanline"
         )
+    sprite_scanlines = stats.get('cgb_sprite_scanlines', 0)
+    if sprite_scanlines:
+        sprite_seconds = stats.get('cgb_sprite_seconds', 0.0)
+        empty_scanlines = stats.get('cgb_sprite_empty_scanlines', 0)
+        object_rows = stats.get('cgb_sprite_object_rows', 0)
+        print(
+            "  CGB sprite scanlines: "
+            f"{sprite_scanlines:,}, "
+            f"{sprite_seconds / sprite_scanlines * 1_000_000:.1f} us/scanline, "
+            f"{empty_scanlines / sprite_scanlines * 100:.1f}% empty, "
+            f"{object_rows / sprite_scanlines:.2f} obj rows/line"
+        )
+    sprite_pixels = stats.get('cgb_sprite_pixels_tested', 0)
+    if sprite_pixels:
+        offscreen = stats.get('cgb_sprite_pixels_offscreen', 0)
+        claimed = stats.get('cgb_sprite_pixels_claimed', 0)
+        transparent = stats.get('cgb_sprite_pixels_transparent', 0)
+        hidden = stats.get('cgb_sprite_pixels_priority_hidden', 0)
+        drawn = stats.get('cgb_sprite_pixels_drawn', 0)
+        print(
+            "  CGB sprite pixels: "
+            f"{sprite_pixels:,} tested; "
+            f"{offscreen / sprite_pixels * 100:.1f}% offscreen, "
+            f"{claimed / sprite_pixels * 100:.1f}% claimed, "
+            f"{transparent / sprite_pixels * 100:.1f}% transparent, "
+            f"{hidden / sprite_pixels * 100:.1f}% priority-hidden, "
+            f"{drawn / sprite_pixels * 100:.1f}% drawn"
+        )
     tiles = stats.get('cgb_bg_tiles', 0)
     if tiles:
         simple = stats.get('cgb_bg_attr_zero', 0)
