@@ -1142,21 +1142,24 @@ class GbZ80Cpu(object):
         """Fast path for LDH A,(LY); CP B; JR NZ,-5."""
         registers = self.registers
         memory = sys_interface.raw_memory
+        lcdc = memory[0xFF40]
         line = memory[0xFF44]
-        if not (memory[0xFF40] & 0x80):
+        if not (lcdc & 0x80):
             a = 0
         else:
+            linemode = gpu.linemode
             mode_clock = gpu._mode_clock + 8
-            if gpu.linemode == 0 and mode_clock >= 204:
+            if linemode == 0 and mode_clock >= 204:
                 a = (line + 1) & 0xFF
-            elif gpu.linemode == 1:
+            elif linemode == 1:
+                line153_reset = gpu._line153_ly_reset
                 if (
                     line == 153
-                    and not gpu._line153_ly_reset
+                    and not line153_reset
                     and mode_clock >= 4
                 ):
                     a = 0
-                elif mode_clock >= 456 and not gpu._line153_ly_reset:
+                elif mode_clock >= 456 and not line153_reset:
                     a = (line + 1) & 0xFF
                 else:
                     a = line
@@ -1174,14 +1177,16 @@ class GbZ80Cpu(object):
             return 1
 
         ppu_m_until = 0x10000
-        if memory[0xFF40] & 0x80:
-            remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+        if lcdc & 0x80:
+            linemode = gpu.linemode
+            mode_clock = gpu._mode_clock
+            remaining = PPU_MODE_CYCLES[linemode] - mode_clock
             if (
-                gpu.linemode == 1
+                linemode == 1
                 and not gpu._line153_ly_reset
-                and memory[0xFF44] == 153
+                and line == 153
             ):
-                line153_remaining = 4 - gpu._mode_clock
+                line153_remaining = 4 - mode_clock
                 if line153_remaining < remaining:
                     remaining = line153_remaining
             ppu_m_until = remaining >> 2

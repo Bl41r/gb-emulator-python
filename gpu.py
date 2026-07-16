@@ -275,15 +275,14 @@ class GbGpu(object):
             byte1 = memory[base_addr]
             byte2 = memory[base_addr + 1]
 
-        row_pixels = self.tile_set[tile_index][row]
         row_code = 0
         for x in range(8):
             bit = 1 << (7 - x)
             lo = 1 if byte1 & bit else 0
             hi = 2 if byte2 & bit else 0
             color_id = lo + hi
-            row_pixels[x] = color_id
             row_code = (row_code << 2) | color_id
+        self.tile_set[tile_index][row] = TILE_ROW_PIXELS[row_code]
         self.tile_row_codes[tile_index][row] = row_code
 
         # print(f"Tile update: tile={tile_index}, row={row}, data={self.tile_set[tile_index][row]}")
@@ -327,8 +326,8 @@ class GbGpu(object):
     def _create_tile_set():
         return [
             [
-                bytearray(8), bytearray(8), bytearray(8), bytearray(8),
-                bytearray(8), bytearray(8), bytearray(8), bytearray(8)
+                bytes(8), bytes(8), bytes(8), bytes(8),
+                bytes(8), bytes(8), bytes(8), bytes(8)
             ] for i in range(1024)
         ]
 
