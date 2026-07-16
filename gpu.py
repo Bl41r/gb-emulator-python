@@ -999,7 +999,20 @@ class GbGpu(object):
                     )
                 else:
                     tile_index = tile_id
-                if attributes and not (attributes & 0xF8):
+                if attributes == 0x08:
+                    row_code = tile_row_codes[tile_index + 512][tile_pixel_row]
+                    try:
+                        pixels, rgba = palette0_cache[row_code]
+                        if diagnostics_enabled:
+                            diagnostics['cgb_palette0_cache_hits'] = (
+                                diagnostics.get('cgb_palette0_cache_hits', 0) + 1
+                            )
+                    except KeyError:
+                        pixels, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                elif attributes and not (attributes & 0xF8):
                     row_code = tile_row_codes[tile_index][tile_pixel_row]
                     cache = row_cache[attributes]
                     try:
@@ -1097,7 +1110,21 @@ class GbGpu(object):
                 tile_index = 256 + (tile_id - 256 if tile_id > 127 else tile_id)
             else:
                 tile_index = tile_id
-            if attributes and not (attributes & 0xF8):
+            if attributes == 0x08:
+                row_code = tile_row_codes[tile_index + 512][tile_pixel_row]
+                try:
+                    pixels, rgba = palette0_cache[row_code]
+                    if diagnostics_enabled:
+                        diagnostics['cgb_palette0_cache_hits'] = (
+                            diagnostics.get('cgb_palette0_cache_hits', 0) + 1
+                        )
+                except KeyError:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                bg_priority = 0
+            elif attributes and not (attributes & 0xF8):
                 row_code = tile_row_codes[tile_index][tile_pixel_row]
                 cache = row_cache[attributes]
                 try:
@@ -1430,6 +1457,8 @@ class GbGpu(object):
         if self._sprite_cache_dirty or self._sprite_cache_height != height:
             self._rebuild_sprite_cache(height)
         objects = self._sprite_scanlines[line]
+        if not objects:
+            return
         claimed = self._sprite_claimed
         claimed[:] = self._empty_scanrow
         screen_data = self.screen_data
@@ -1482,6 +1511,17 @@ class GbGpu(object):
         if self._sprite_cache_dirty or self._sprite_cache_height != height:
             self._rebuild_sprite_cache(height)
         objects = self._sprite_scanlines[line]
+        if not objects:
+            if diagnostics_enabled:
+                diagnostics['cgb_sprite_scanlines'] = (
+                    diagnostics.get('cgb_sprite_scanlines', 0) + 1
+                )
+                diagnostics['cgb_sprite_seconds'] = (
+                    diagnostics.get('cgb_sprite_seconds', 0.0)
+                    + time.perf_counter()
+                    - start_seconds
+                )
+            return
         claimed = self._sprite_claimed
         claimed[:] = self._empty_scanrow
         screen_data = self.screen_data
