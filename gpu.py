@@ -856,9 +856,26 @@ class GbGpu(object):
 
         x = 0
         if not signed_addressing:
-            while x < 160:
-                tile_index = memory[map_row_base + tile_col]
+            tile_index = memory[map_row_base + tile_col]
+            row_code = tile_row_codes[tile_index][tile_pixel_row]
+            try:
+                pixels, rgba = palette0_cache[row_code]
+            except KeyError:
+                pixels, rgba = self._cgb_palette0_row_rgba(
+                    row_code,
+                    palette_data,
+                )
+            run = 8 - tile_pixel_col
+            end = 8
+            scanrow[0:run] = pixels[tile_pixel_col:end]
+            screen_data[screen_offset:screen_offset + run * 4] = rgba[
+                tile_pixel_col * 4:end * 4
+            ]
+            x = run
+            tile_col = (tile_col + 1) & 31
 
+            while x <= 152:
+                tile_index = memory[map_row_base + tile_col]
                 row_code = tile_row_codes[tile_index][tile_pixel_row]
                 try:
                     pixels, rgba = palette0_cache[row_code]
@@ -867,19 +884,50 @@ class GbGpu(object):
                         row_code,
                         palette_data,
                     )
-                run = min(8 - tile_pixel_col, 160 - x)
-                end = tile_pixel_col + run
-                scanrow[x:x + run] = pixels[tile_pixel_col:end]
+                scanrow[x:x + 8] = pixels
                 offset = screen_offset + x * 4
-                screen_data[offset:offset + run * 4] = rgba[
-                    tile_pixel_col * 4:end * 4
-                ]
-                x += run
+                screen_data[offset:offset + 32] = rgba
+                x += 8
                 tile_col = (tile_col + 1) & 31
-                tile_pixel_col = 0
+
+            if x < 160:
+                tile_index = memory[map_row_base + tile_col]
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    pixels, rgba = palette0_cache[row_code]
+                except KeyError:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                run = 160 - x
+                scanrow[x:160] = pixels[:run]
+                offset = screen_offset + x * 4
+                screen_data[offset:screen_offset + 160 * 4] = rgba[:run * 4]
             return
 
-        while x < 160:
+        tile_id = memory[map_row_base + tile_col]
+        tile_index = 256 + (
+            tile_id - 256 if tile_id > 127 else tile_id
+        )
+        row_code = tile_row_codes[tile_index][tile_pixel_row]
+        try:
+            pixels, rgba = palette0_cache[row_code]
+        except KeyError:
+            pixels, rgba = self._cgb_palette0_row_rgba(
+                row_code,
+                palette_data,
+            )
+        run = 8 - tile_pixel_col
+        end = 8
+        scanrow[0:run] = pixels[tile_pixel_col:end]
+        screen_data[screen_offset:screen_offset + run * 4] = rgba[
+            tile_pixel_col * 4:end * 4
+        ]
+        x = run
+        tile_col = (tile_col + 1) & 31
+
+        while x <= 152:
             tile_id = memory[map_row_base + tile_col]
             tile_index = 256 + (
                 tile_id - 256 if tile_id > 127 else tile_id
@@ -893,16 +941,29 @@ class GbGpu(object):
                     row_code,
                     palette_data,
                 )
-            run = min(8 - tile_pixel_col, 160 - x)
-            end = tile_pixel_col + run
-            scanrow[x:x + run] = pixels[tile_pixel_col:end]
+            scanrow[x:x + 8] = pixels
             offset = screen_offset + x * 4
-            screen_data[offset:offset + run * 4] = rgba[
-                tile_pixel_col * 4:end * 4
-            ]
-            x += run
+            screen_data[offset:offset + 32] = rgba
+            x += 8
             tile_col = (tile_col + 1) & 31
-            tile_pixel_col = 0
+
+        if x < 160:
+            tile_id = memory[map_row_base + tile_col]
+            tile_index = 256 + (
+                tile_id - 256 if tile_id > 127 else tile_id
+            )
+            row_code = tile_row_codes[tile_index][tile_pixel_row]
+            try:
+                pixels, rgba = palette0_cache[row_code]
+            except KeyError:
+                pixels, rgba = self._cgb_palette0_row_rgba(
+                    row_code,
+                    palette_data,
+                )
+            run = 160 - x
+            scanrow[x:160] = pixels[:run]
+            offset = screen_offset + x * 4
+            screen_data[offset:screen_offset + 160 * 4] = rgba[:run * 4]
 
     def _render_cgb_background_scanline(self, line, lcdc, scroll_x, scroll_y):
         """Render a CGB background scanline using bank-1 tile attributes."""

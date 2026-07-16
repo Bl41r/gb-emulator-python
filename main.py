@@ -777,6 +777,15 @@ def print_gpu_diagnostics(gpu):
             f"and {stats.get('cgb_obj_palette_invalidations', 0):,} OBJ "
             "palette invalidations"
         )
+        redundant_vram = stats.get('cgb_vram_redundant_writes', 0)
+        if redundant_vram:
+            print(
+                "  CGB redundant VRAM writes skipped: "
+                f"{redundant_vram:,} total "
+                f"({stats.get('cgb_tile_data_redundant_writes', 0):,} "
+                "tile-data, "
+                f"{stats.get('cgb_tilemap_redundant_writes', 0):,} tilemap)"
+            )
         print(
             "  CGB palette writes: "
             f"BG {bg_palette_writes:,} writes "

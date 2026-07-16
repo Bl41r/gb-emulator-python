@@ -647,6 +647,25 @@ class GbSystemInterface(object):
             if self.raw_memory[0xFF4F] & 0x01:
                 offset = address - 0x8000
                 if self.cgb_vram_bank1[offset] == value:
+                    if self.gpu.diagnostics_enabled:
+                        diagnostics = self.gpu.diagnostics
+                        diagnostics['cgb_vram_redundant_writes'] = (
+                            diagnostics.get('cgb_vram_redundant_writes', 0) + 1
+                        )
+                        if address <= 0x97FF:
+                            diagnostics['cgb_tile_data_redundant_writes'] = (
+                                diagnostics.get(
+                                    'cgb_tile_data_redundant_writes',
+                                    0,
+                                ) + 1
+                            )
+                        else:
+                            diagnostics['cgb_tilemap_redundant_writes'] = (
+                                diagnostics.get(
+                                    'cgb_tilemap_redundant_writes',
+                                    0,
+                                ) + 1
+                            )
                     return
                 self.cgb_vram_bank1[offset] = value
                 if address <= 0x97FF:
@@ -655,6 +674,25 @@ class GbSystemInterface(object):
                     self.gpu.invalidate_cgb_attr_cache(address)
             else:
                 if self.raw_memory[address] == value:
+                    if self.gpu.diagnostics_enabled:
+                        diagnostics = self.gpu.diagnostics
+                        diagnostics['cgb_vram_redundant_writes'] = (
+                            diagnostics.get('cgb_vram_redundant_writes', 0) + 1
+                        )
+                        if address <= 0x97FF:
+                            diagnostics['cgb_tile_data_redundant_writes'] = (
+                                diagnostics.get(
+                                    'cgb_tile_data_redundant_writes',
+                                    0,
+                                ) + 1
+                            )
+                        else:
+                            diagnostics['cgb_tilemap_redundant_writes'] = (
+                                diagnostics.get(
+                                    'cgb_tilemap_redundant_writes',
+                                    0,
+                                ) + 1
+                            )
                     return
                 self.memory.write_byte(address, value)
                 if address <= 0x97FF:
