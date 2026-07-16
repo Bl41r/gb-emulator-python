@@ -509,12 +509,19 @@ class GbGpu(object):
         window_covers_scanline = window_visible and memory[GPU_WX] <= 7
 
         bg_enabled = bool(lcdc & 0x01) or self.cgb_mode
+        sprites_present = False
+        if lcdc & 0x02:
+            height = 16 if (lcdc & 0x04) else 8
+            if self._sprite_cache_dirty or self._sprite_cache_height != height:
+                self._rebuild_sprite_cache(height)
+            sprites_present = bool(self._sprite_scanlines[line])
         if bg_enabled and not window_covers_scanline:
             self._render_background_scanline(
                 line,
                 lcdc,
                 scroll_x,
                 scroll_y,
+                sprites_present,
             )
         elif not window_covers_scanline:
             self._scanrow[:] = self._empty_scanrow
@@ -526,6 +533,7 @@ class GbGpu(object):
                 line,
                 lcdc,
                 self._window_line,
+                sprites_present,
             )
             self._window_line += 1
 
@@ -562,10 +570,23 @@ class GbGpu(object):
         self._bg_priority[:] = original_priority
         self._bg_priority_dirty = True
 
-    def _render_background_scanline(self, line, lcdc, scroll_x, scroll_y):
+    def _render_background_scanline(
+        self,
+        line,
+        lcdc,
+        scroll_x,
+        scroll_y,
+        sprites_present=True,
+    ):
         """Render the background and retain its color IDs for OBJ priority."""
         if self.cgb_mode:
-            self._render_cgb_background_scanline(line, lcdc, scroll_x, scroll_y)
+            self._render_cgb_background_scanline(
+                line,
+                lcdc,
+                scroll_x,
+                scroll_y,
+                sprites_present,
+            )
             return
 
         memory = self.sys_interface.raw_memory
@@ -795,6 +816,7 @@ class GbGpu(object):
         lcdc,
         scroll_x,
         scroll_y,
+        write_scanrow=True,
     ):
         """Render a CGB BG row that uses only bank 0, palette 0 attributes."""
         sys_interface = self.sys_interface
@@ -814,6 +836,150 @@ class GbGpu(object):
 
         tile_col = scroll_x >> 3
         tile_pixel_col = scroll_x & 7
+        if not write_scanrow:
+            if tile_pixel_col == 0:
+                if not signed_addressing:
+                    for x in range(0, 160, 8):
+                        tile_index = memory[map_row_base + tile_col]
+
+                        row_code = tile_row_codes[tile_index][tile_pixel_row]
+                        try:
+                            _, rgba = palette0_cache[row_code]
+                        except KeyError:
+                            _, rgba = self._cgb_palette0_row_rgba(
+                                row_code,
+                                palette_data,
+                            )
+                        offset = screen_offset + x * 4
+                        screen_data[offset:offset + 32] = rgba
+                        tile_col = (tile_col + 1) & 31
+                    return
+
+                for x in range(0, 160, 8):
+                    tile_id = memory[map_row_base + tile_col]
+                    tile_index = 256 + (
+                        tile_id - 256 if tile_id > 127 else tile_id
+                    )
+
+                    row_code = tile_row_codes[tile_index][tile_pixel_row]
+                    try:
+                        _, rgba = palette0_cache[row_code]
+                    except KeyError:
+                        _, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                    offset = screen_offset + x * 4
+                    screen_data[offset:offset + 32] = rgba
+                    tile_col = (tile_col + 1) & 31
+                return
+
+            x = 0
+            if not signed_addressing:
+                tile_index = memory[map_row_base + tile_col]
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    _, rgba = palette0_cache[row_code]
+                except KeyError:
+                    _, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                run = 8 - tile_pixel_col
+                end = 8
+                screen_data[screen_offset:screen_offset + run * 4] = rgba[
+                    tile_pixel_col * 4:end * 4
+                ]
+                x = run
+                tile_col = (tile_col + 1) & 31
+
+                while x <= 152:
+                    tile_index = memory[map_row_base + tile_col]
+                    row_code = tile_row_codes[tile_index][tile_pixel_row]
+                    try:
+                        _, rgba = palette0_cache[row_code]
+                    except KeyError:
+                        _, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                    offset = screen_offset + x * 4
+                    screen_data[offset:offset + 32] = rgba
+                    x += 8
+                    tile_col = (tile_col + 1) & 31
+
+                if x < 160:
+                    tile_index = memory[map_row_base + tile_col]
+                    row_code = tile_row_codes[tile_index][tile_pixel_row]
+                    try:
+                        _, rgba = palette0_cache[row_code]
+                    except KeyError:
+                        _, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+                    run = 160 - x
+                    offset = screen_offset + x * 4
+                    screen_data[offset:screen_offset + 160 * 4] = rgba[:run * 4]
+                return
+
+            tile_id = memory[map_row_base + tile_col]
+            tile_index = 256 + (
+                tile_id - 256 if tile_id > 127 else tile_id
+            )
+            row_code = tile_row_codes[tile_index][tile_pixel_row]
+            try:
+                _, rgba = palette0_cache[row_code]
+            except KeyError:
+                _, rgba = self._cgb_palette0_row_rgba(
+                    row_code,
+                    palette_data,
+                )
+            run = 8 - tile_pixel_col
+            end = 8
+            screen_data[screen_offset:screen_offset + run * 4] = rgba[
+                tile_pixel_col * 4:end * 4
+            ]
+            x = run
+            tile_col = (tile_col + 1) & 31
+
+            while x <= 152:
+                tile_id = memory[map_row_base + tile_col]
+                tile_index = 256 + (
+                    tile_id - 256 if tile_id > 127 else tile_id
+                )
+
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    _, rgba = palette0_cache[row_code]
+                except KeyError:
+                    _, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                offset = screen_offset + x * 4
+                screen_data[offset:offset + 32] = rgba
+                x += 8
+                tile_col = (tile_col + 1) & 31
+
+            if x < 160:
+                tile_id = memory[map_row_base + tile_col]
+                tile_index = 256 + (
+                    tile_id - 256 if tile_id > 127 else tile_id
+                )
+                row_code = tile_row_codes[tile_index][tile_pixel_row]
+                try:
+                    _, rgba = palette0_cache[row_code]
+                except KeyError:
+                    _, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+                run = 160 - x
+                offset = screen_offset + x * 4
+                screen_data[offset:screen_offset + 160 * 4] = rgba[:run * 4]
+            return
+
         if tile_pixel_col == 0:
             if not signed_addressing:
                 for x in range(0, 160, 8):
@@ -964,7 +1130,14 @@ class GbGpu(object):
             offset = screen_offset + x * 4
             screen_data[offset:screen_offset + 160 * 4] = rgba[:run * 4]
 
-    def _render_cgb_background_scanline(self, line, lcdc, scroll_x, scroll_y):
+    def _render_cgb_background_scanline(
+        self,
+        line,
+        lcdc,
+        scroll_x,
+        scroll_y,
+        sprites_present=True,
+    ):
         """Render a CGB background scanline using bank-1 tile attributes."""
         diagnostics_enabled = self.diagnostics_enabled
         if diagnostics_enabled:
@@ -1002,6 +1175,7 @@ class GbGpu(object):
                 lcdc,
                 scroll_x,
                 scroll_y,
+                sprites_present,
             )
             if diagnostics_enabled:
                 diagnostics['cgb_bg_scanlines'] = (
@@ -1257,10 +1431,21 @@ class GbGpu(object):
                 - start_seconds
             )
 
-    def _render_window_scanline(self, line, lcdc, window_line):
+    def _render_window_scanline(
+        self,
+        line,
+        lcdc,
+        window_line,
+        sprites_present=True,
+    ):
         """Composite the LCD window over the background for one scanline."""
         if self.cgb_mode:
-            self._render_cgb_window_scanline(line, lcdc, window_line)
+            self._render_cgb_window_scanline(
+                line,
+                lcdc,
+                window_line,
+                sprites_present,
+            )
             return
 
         memory = self.sys_interface.raw_memory
@@ -1351,7 +1536,13 @@ class GbGpu(object):
             tile_col += 1
             tile_pixel_col = 0
 
-    def _render_cgb_window_scanline(self, line, lcdc, window_line):
+    def _render_cgb_window_scanline(
+        self,
+        line,
+        lcdc,
+        window_line,
+        sprites_present=True,
+    ):
         """Composite a CGB window scanline using bank-1 tile attributes."""
         diagnostics_enabled = self.diagnostics_enabled
         if diagnostics_enabled:
@@ -1378,6 +1569,96 @@ class GbGpu(object):
         priority = self._bg_priority
         priority_runs = self._priority_runs
         tile_row_codes = self.tile_row_codes
+        palette0_cache = self._cgb_bg_palette0_row_cache
+        write_scanrow = sprites_present
+
+        if self._cgb_attr_row_is_zero(
+            attr_vram,
+            map_offset,
+            window_line >> 3,
+        ):
+            if tile_pixel_col == 0 and not ((160 - x) & 7):
+                for screen_x in range(x, 160, 8):
+                    tile_index = memory[0x8000 + map_row_offset + tile_col]
+                    if signed_addressing:
+                        tile_index = 256 + (
+                            tile_index - 256 if tile_index > 127 else tile_index
+                        )
+                    row_code = tile_row_codes[tile_index][base_tile_pixel_row]
+                    try:
+                        pixels, rgba = palette0_cache[row_code]
+                    except KeyError:
+                        pixels, rgba = self._cgb_palette0_row_rgba(
+                            row_code,
+                            palette_data,
+                        )
+
+                    if write_scanrow:
+                        scanrow[screen_x:screen_x + 8] = pixels
+                    offset = screen_offset + screen_x * 4
+                    screen_data[offset:offset + 32] = rgba
+                    tile_col += 1
+                if diagnostics_enabled:
+                    diagnostics['cgb_window_scanlines'] = (
+                        diagnostics.get('cgb_window_scanlines', 0) + 1
+                    )
+                    diagnostics['cgb_window_attr_zero_fast_scanlines'] = (
+                        diagnostics.get(
+                            'cgb_window_attr_zero_fast_scanlines',
+                            0,
+                        ) + 1
+                    )
+                    diagnostics['cgb_window_seconds'] = (
+                        diagnostics.get('cgb_window_seconds', 0.0)
+                        + time.perf_counter()
+                        - start_seconds
+                    )
+                return
+
+            while x < 160:
+                tile_index = memory[0x8000 + map_row_offset + tile_col]
+                if signed_addressing:
+                    tile_index = 256 + (
+                        tile_index - 256 if tile_index > 127 else tile_index
+                    )
+                row_code = tile_row_codes[tile_index][base_tile_pixel_row]
+                try:
+                    pixels, rgba = palette0_cache[row_code]
+                except KeyError:
+                    pixels, rgba = self._cgb_palette0_row_rgba(
+                        row_code,
+                        palette_data,
+                    )
+
+                if tile_pixel_col == 0 and x <= 152:
+                    run = 8
+                else:
+                    run = min(8 - tile_pixel_col, 160 - x)
+                end = tile_pixel_col + run
+                if write_scanrow:
+                    scanrow[x:x + run] = pixels[tile_pixel_col:end]
+                offset = screen_offset + x * 4
+                screen_data[offset:offset + run * 4] = rgba[
+                    tile_pixel_col * 4:end * 4
+                ]
+                x += run
+
+                tile_col += 1
+                tile_pixel_col = 0
+
+            if diagnostics_enabled:
+                diagnostics['cgb_window_scanlines'] = (
+                    diagnostics.get('cgb_window_scanlines', 0) + 1
+                )
+                diagnostics['cgb_window_attr_zero_fast_scanlines'] = (
+                    diagnostics.get('cgb_window_attr_zero_fast_scanlines', 0) + 1
+                )
+                diagnostics['cgb_window_seconds'] = (
+                    diagnostics.get('cgb_window_seconds', 0.0)
+                    + time.perf_counter()
+                    - start_seconds
+                )
+            return
 
         if tile_pixel_col == 0 and not ((160 - x) & 7):
             priority_run = priority_runs[8]
