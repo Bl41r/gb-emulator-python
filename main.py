@@ -60,6 +60,7 @@ def main(
     audio=True,
     volume=10,
     opcode_stats=False,
+    cpu_diagnostics=False,
     gpu_diagnostics=False,
     screenshot_dir=None,
     screenshot_start_seconds=0.0,
@@ -80,6 +81,7 @@ def main(
     )
     gpu = GbGpu()
     gpu.diagnostics_enabled = gpu_diagnostics
+    cpu.diagnostics_enabled = cpu_diagnostics
     if opcode_stats:
         cpu.opcode_counts = [0] * 256
         cpu.cb_opcode_counts = [0] * 256
@@ -181,6 +183,10 @@ def main(
                     stats['measured_active'] = True
                     stats['measured_start_seconds'] = now
                     stats['measured_instructions'] = instructions
+                    if cpu_diagnostics:
+                        cpu.diagnostics = {}
+                    if gpu_diagnostics:
+                        gpu.diagnostics = {}
                     if audio_output is not None:
                         audio_output.reset_diagnostics(track_latency=True)
                 if stats['measured_active']:
@@ -292,6 +298,8 @@ def main(
         print_run_stats(stats, no_display)
         if opcode_stats:
             print_opcode_stats(cpu)
+        if cpu_diagnostics:
+            print_cpu_diagnostics(cpu)
         if gpu_diagnostics:
             print_gpu_diagnostics(gpu)
 
@@ -694,6 +702,68 @@ def print_opcode_stats(cpu, limit=20):
             )
 
 
+def print_cpu_diagnostics(cpu, limit=12):
+    """Print opt-in CPU fast-path diagnostic counters."""
+    stats = cpu.diagnostics
+    print("CPU diagnostics:")
+
+    ly_calls = stats.get('pseudo_ly_compare_b_calls', 0)
+    if ly_calls:
+        loops = stats.get('pseudo_ly_compare_b_loops', 0)
+        batches = stats.get('pseudo_ly_compare_b_loop_batches', 0)
+        m_cycles = stats.get('pseudo_ly_compare_b_m_cycles', 0)
+        boundary_fallbacks = stats.get(
+            'pseudo_ly_compare_b_boundary_fallbacks',
+            0,
+        )
+        avg_loop_batch = loops / batches if batches else 0
+        print(
+            "  LY compare-B pseudo-op: "
+            f"{ly_calls:,} calls, "
+            f"{loops:,} folded loop iterations, "
+            f"{avg_loop_batch:.1f} avg loops/batch, "
+            f"{m_cycles:,} M-cycles folded/tracked, "
+            f"{boundary_fallbacks:,} boundary fallbacks"
+        )
+        ly_pcs = stats.get('pseudo_ly_compare_b_pcs', {})
+        if ly_pcs:
+            print("  Top LY compare-B pseudo-op PCs:")
+            for pc, count in sorted(
+                ly_pcs.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:limit]:
+                percent = count / ly_calls * 100
+                print(f"    {pc:04X}: {count:>10,}  {percent:>5.2f}%")
+
+    poll_calls = stats.get('pseudo_hram_poll_calls', 0)
+    if poll_calls:
+        print(
+            "  HRAM poll pseudo-op: "
+            f"{poll_calls:,} calls, "
+            f"{stats.get('pseudo_hram_poll_instr', 0):,} folded instr, "
+            f"{stats.get('pseudo_hram_poll_fallbacks', 0):,} fallbacks"
+        )
+
+    cp_hl_calls = stats.get('pseudo_cp_hl_calls', 0)
+    if cp_hl_calls:
+        print(f"  CP (HL) loop pseudo-op: {cp_hl_calls:,} calls")
+
+    cb46_count = stats.get('cb46_count', 0)
+    if cb46_count:
+        print(f"  CB 46 BIT 0,(HL): {cb46_count:,} executions")
+        cb46_pcs = stats.get('cb46_pcs', {})
+        if cb46_pcs:
+            print(f"  Top CB 46 PCs:")
+            for pc, count in sorted(
+                cb46_pcs.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:limit]:
+                percent = count / cb46_count * 100
+                print(f"    {pc:04X}: {count:>10,}  {percent:>5.2f}%")
+
+
 def print_gpu_diagnostics(gpu):
     """Print opt-in GPU hot-path diagnostic counters."""
     stats = gpu.diagnostics
@@ -919,6 +989,11 @@ if __name__ == '__main__':
         help="count and print the most frequently executed opcodes",
     )
     parser.add_argument(
+        "--cpu-diagnostics",
+        action="store_true",
+        help="print opt-in CPU fast-path counters without disabling fast paths",
+    )
+    parser.add_argument(
         "--gpu-diagnostics",
         action="store_true",
         help="print opt-in GPU renderer counters and timing",
@@ -999,6 +1074,7 @@ if __name__ == '__main__':
                 audio=not args.no_audio,
                 volume=args.volume,
                 opcode_stats=args.opcode_stats,
+                cpu_diagnostics=args.cpu_diagnostics,
                 gpu_diagnostics=args.gpu_diagnostics,
                 screenshot_dir=args.screenshot_dir,
                 screenshot_start_seconds=args.screenshot_start_seconds,
@@ -1030,6 +1106,7 @@ if __name__ == '__main__':
             audio=not args.no_audio,
             volume=args.volume,
             opcode_stats=args.opcode_stats,
+            cpu_diagnostics=args.cpu_diagnostics,
             gpu_diagnostics=args.gpu_diagnostics,
             screenshot_dir=args.screenshot_dir,
             screenshot_start_seconds=args.screenshot_start_seconds,

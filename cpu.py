@@ -193,6 +193,8 @@ class GbZ80Cpu(object):
         self.cp_hl_jr_nz_loop_pcs = set()
         self.opcode_counts = None
         self.cb_opcode_counts = None
+        self.diagnostics_enabled = False
+        self.diagnostics = {}
         self.halt_m_cycles = 0
 
         # Register set
@@ -972,6 +974,14 @@ class GbZ80Cpu(object):
             registers['pc'] = (pc + 1) & 0xFFFF
 
             if cb_op == 0x46:
+                if self.diagnostics_enabled:
+                    diagnostics = self.diagnostics
+                    diagnostics['cb46_count'] = (
+                        diagnostics.get('cb46_count', 0) + 1
+                    )
+                    cb46_pcs = diagnostics.setdefault('cb46_pcs', {})
+                    cb_pc = (pc - 1) & 0xFFFF
+                    cb46_pcs[cb_pc] = cb46_pcs.get(cb_pc, 0) + 1
                 address = (registers['h'] << 8) | registers['l']
                 if (
                     0x8000 <= address <= 0x9FFF
@@ -1114,6 +1124,11 @@ class GbZ80Cpu(object):
         """Fast path for LDH A,(FF00+n); AND A; JR Z,-5."""
         registers = self.registers
         memory = sys_interface.raw_memory
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_hram_poll_calls'] = (
+                diagnostics.get('pseudo_hram_poll_calls', 0) + 1
+            )
         if (
             not self.gb_doctor_test_mode
             and not self.enable_interrupts_next_cycle
@@ -1130,12 +1145,24 @@ class GbZ80Cpu(object):
             else:
                 registers['pc'] = (pc + 5) & 0xFFFF
                 registers['m'] = 6
+            if self.diagnostics_enabled:
+                diagnostics['pseudo_hram_poll_instr'] = (
+                    diagnostics.get('pseudo_hram_poll_instr', 0) + 3
+                )
+                diagnostics['pseudo_hram_poll_m_cycles'] = (
+                    diagnostics.get('pseudo_hram_poll_m_cycles', 0)
+                    + registers['m']
+                )
             return 3
 
         operand_pc = registers['pc']
         registers['a'] = memory[0xFF00 + n]
         registers['pc'] = (operand_pc + 1) & 0xFFFF
         registers['m'] = 3
+        if self.diagnostics_enabled:
+            diagnostics['pseudo_hram_poll_fallbacks'] = (
+                diagnostics.get('pseudo_hram_poll_fallbacks', 0) + 1
+            )
         return 1
 
     def _fast_hram_compare_b_loop(self, pc, sys_interface, gpu):
@@ -1144,6 +1171,14 @@ class GbZ80Cpu(object):
         memory = sys_interface.raw_memory
         lcdc = memory[0xFF40]
         line = memory[0xFF44]
+        diagnostics = None
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_ly_compare_b_calls'] = (
+                diagnostics.get('pseudo_ly_compare_b_calls', 0) + 1
+            )
+            ly_pcs = diagnostics.setdefault('pseudo_ly_compare_b_pcs', {})
+            ly_pcs[pc] = ly_pcs.get(pc, 0) + 1
         if not (lcdc & 0x80):
             a = 0
         else:
@@ -1174,6 +1209,10 @@ class GbZ80Cpu(object):
             registers['a'] = a
             registers['pc'] = (registers['pc'] + 1) & 0xFFFF
             registers['m'] = 3
+            if diagnostics is not None:
+                diagnostics['pseudo_ly_compare_b_fallbacks'] = (
+                    diagnostics.get('pseudo_ly_compare_b_fallbacks', 0) + 1
+                )
             return 1
 
         ppu_m_until = 0x10000
@@ -1207,6 +1246,13 @@ class GbZ80Cpu(object):
             registers['a'] = a
             registers['pc'] = (registers['pc'] + 1) & 0xFFFF
             registers['m'] = 3
+            if diagnostics is not None:
+                diagnostics['pseudo_ly_compare_b_boundary_fallbacks'] = (
+                    diagnostics.get(
+                        'pseudo_ly_compare_b_boundary_fallbacks',
+                        0,
+                    ) + 1
+                )
             return 1
 
         flags = CP_FLAG_TABLE[(a << 8) | registers['b']]
@@ -1215,6 +1261,13 @@ class GbZ80Cpu(object):
         if flags & FLAG_ZERO:
             registers['pc'] = (pc + 5) & 0xFFFF
             registers['m'] = 6
+            if diagnostics is not None:
+                diagnostics['pseudo_ly_compare_b_exit_instr'] = (
+                    diagnostics.get('pseudo_ly_compare_b_exit_instr', 0) + 3
+                )
+                diagnostics['pseudo_ly_compare_b_m_cycles'] = (
+                    diagnostics.get('pseudo_ly_compare_b_m_cycles', 0) + 6
+                )
             return 3
 
         loops = (loop_boundary - 1) // 7
@@ -1222,12 +1275,28 @@ class GbZ80Cpu(object):
             loops = 1
         registers['pc'] = pc
         registers['m'] = loops * 7
+        if diagnostics is not None:
+            diagnostics['pseudo_ly_compare_b_loop_batches'] = (
+                diagnostics.get('pseudo_ly_compare_b_loop_batches', 0) + 1
+            )
+            diagnostics['pseudo_ly_compare_b_loops'] = (
+                diagnostics.get('pseudo_ly_compare_b_loops', 0) + loops
+            )
+            diagnostics['pseudo_ly_compare_b_m_cycles'] = (
+                diagnostics.get('pseudo_ly_compare_b_m_cycles', 0)
+                + registers['m']
+            )
         return loops * 3
 
     def _fast_cp_hl_jr_nz_loop(self, pc, sys_interface, gpu):
         """Fast path for CP (HL); JR NZ,-3."""
         registers = self.registers
         memory = sys_interface.raw_memory
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_cp_hl_calls'] = (
+                diagnostics.get('pseudo_cp_hl_calls', 0) + 1
+            )
         address = (registers['h'] << 8) | registers['l']
         if address == 0xFF44 and not sys_interface.memory.gb_doctor_test_mode:
             value = memory[0xFF44]
