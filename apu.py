@@ -1,6 +1,7 @@
 """DMG audio processing unit implementation."""
 
 from array import array
+import time
 
 import numpy as np
 
@@ -11,6 +12,8 @@ SAMPLE_RATE = 48_000
 FRAME_SEQUENCER_HZ = 512
 DMG_HIGH_PASS_CHARGE = 0.999958 ** (DMG_CLOCK_HZ / SAMPLE_RATE)
 HIGH_PASS_COEFFICIENTS = {}
+DAC_ENABLED_MASKS = {}
+DAC_DISABLED_MASKS = {}
 
 NR10 = 0xFF10
 NR11 = 0xFF11
@@ -108,6 +111,16 @@ def _apply_high_pass(samples, enabled, left_capacitor, right_capacitor):
 
     np.clip(output, -32768, 32767, out=output)
     return output.astype(np.int16), capacitors[0], capacitors[1]
+
+
+def _dac_enabled_mask(sample_count, enabled):
+    """Return a cached boolean DAC mask for a whole audio block."""
+    cache = DAC_ENABLED_MASKS if enabled else DAC_DISABLED_MASKS
+    mask = cache.get(sample_count)
+    if mask is None:
+        mask = np.full(sample_count, enabled, dtype=np.bool_)
+        cache[sample_count] = mask
+    return mask
 
 
 class SquareChannel(object):
@@ -390,6 +403,8 @@ class GbApu(object):
         self.frame_sequencer_step = 0
         self.high_pass_left_capacitor = 0.0
         self.high_pass_right_capacitor = 0.0
+        self.diagnostics_enabled = False
+        self.diagnostics = {}
 
     def write_register(self, address, value, cycle=0):
         """Record a register write and update CPU-visible channel status."""
@@ -430,21 +445,31 @@ class GbApu(object):
 
     def generate_frame(self):
         """Render one frame, applying register writes at cycle-derived samples."""
+        diagnostics_enabled = self.diagnostics_enabled
+        if diagnostics_enabled:
+            diagnostics = self.diagnostics
+            frame_start_seconds = time.perf_counter()
+            mix_start_seconds = frame_start_seconds
         frame_start = self.frame_start_cycle
         frame_end = frame_start + DMG_CYCLES_PER_FRAME
         start_sample = frame_start * SAMPLE_RATE // DMG_CLOCK_HZ
         end_sample = frame_end * SAMPLE_RATE // DMG_CLOCK_HZ
         sample_count = end_sample - start_sample
         samples = np.zeros((sample_count, 2), dtype=np.int16)
-        dac_enabled_data = bytearray(sample_count)
+        dac_enabled_data = None
+        initial_dacs_enabled = None
         events = self.events
         event_index = 0
         event_count = len(events)
+        event_sample_numbers = (
+            [
+                (cycle * SAMPLE_RATE + DMG_CLOCK_HZ - 1) // DMG_CLOCK_HZ
+                for cycle, _, _ in events
+            ]
+            if event_count
+            else ()
+        )
         apply_register = self._apply_register
-        sample_channel1 = self.channel1.sample
-        sample_channel2 = self.channel2.sample
-        sample_channel3 = self.channel3.sample
-        sample_channel4 = self.channel4.sample
         sequencer_remainder = self.frame_sequencer_remainder
         sequencer_step = self.frame_sequencer_step
         channel1 = self.channel1
@@ -452,6 +477,12 @@ class GbApu(object):
         channel3 = self.channel3
         channel4 = self.channel4
         memory = self.audio_memory
+        wave_level = (memory[NR32] >> 5) & 0x03
+        noise_tables = (
+            NOISE_JUMP_TABLES_7BIT
+            if channel4.width_mode
+            else NOISE_JUMP_TABLES_15BIT
+        )
         routing = memory[NR51]
         volume = memory[NR50]
         dacs_enabled = (
@@ -460,6 +491,13 @@ class GbApu(object):
             or channel3.dac_enabled
             or channel4.dac_enabled
         )
+        initial_active_mask = (
+            (1 if channel1.dac_enabled and channel1.enabled else 0)
+            | (2 if channel2.dac_enabled and channel2.enabled else 0)
+            | (4 if channel3.dac_enabled and channel3.enabled else 0)
+            | (8 if channel4.dac_enabled and channel4.enabled else 0)
+        )
+        initial_dacs_enabled = dacs_enabled
         high_pass_left_capacitor = self.high_pass_left_capacitor
         high_pass_right_capacitor = self.high_pass_right_capacitor
         right_scale = ((volume & 0x07) + 1) * 64
@@ -485,14 +523,20 @@ class GbApu(object):
             mixer_changed = False
             dac_changed = False
             if event_index < event_count:
-                sample_cycle_scaled = sample_number * DMG_CLOCK_HZ
                 while (
                     event_index < event_count
-                    and events[event_index][0] * SAMPLE_RATE
-                    <= sample_cycle_scaled
+                    and event_sample_numbers[event_index] <= sample_number
                 ):
                     _, address, value = events[event_index]
                     apply_register(address, value)
+                    if address in (NR30, NR32, NR33, NR34):
+                        wave_level = (memory[NR32] >> 5) & 0x03
+                    if address in (NR43, NR44):
+                        noise_tables = (
+                            NOISE_JUMP_TABLES_7BIT
+                            if channel4.width_mode
+                            else NOISE_JUMP_TABLES_15BIT
+                        )
                     mixer_changed |= address in (NR50, NR51)
                     dac_changed |= address in (
                         NR12,
@@ -528,15 +572,92 @@ class GbApu(object):
                     or channel3.dac_enabled
                     or channel4.dac_enabled
                 )
+                if dac_enabled_data is None:
+                    dac_enabled_data = bytearray(sample_count)
+                    if initial_dacs_enabled and index:
+                        dac_enabled_data[:index] = b"\x01" * index
 
-            sample1 = sample_channel1()
-            sample2 = sample_channel2()
-            sample3 = sample_channel3(memory)
-            sample4 = sample_channel4()
+            if not channel1.dac_enabled:
+                sample1 = 0
+            else:
+                digital = 0
+                if channel1.enabled:
+                    digital = (
+                        channel1.volume
+                        if channel1.phase < channel1.duty_ratio
+                        else 0
+                    )
+                    channel1.phase += channel1.phase_step
+                    if channel1.phase >= 1.0:
+                        channel1.phase -= int(channel1.phase)
+                sample1 = 15 - digital * 2
+
+            if not channel2.dac_enabled:
+                sample2 = 0
+            else:
+                digital = 0
+                if channel2.enabled:
+                    digital = (
+                        channel2.volume
+                        if channel2.phase < channel2.duty_ratio
+                        else 0
+                    )
+                    channel2.phase += channel2.phase_step
+                    if channel2.phase >= 1.0:
+                        channel2.phase -= int(channel2.phase)
+                sample2 = 15 - digital * 2
+
+            if not channel3.dac_enabled:
+                sample3 = 0
+            else:
+                digital = 0
+                if channel3.enabled:
+                    phase = channel3.phase
+                    sample_index = int(phase) & 31
+                    packed = memory[WAVE_RAM_START + (sample_index >> 1)]
+                    digital = (
+                        packed >> 4
+                        if not (sample_index & 1)
+                        else packed & 0x0F
+                    )
+                    phase += channel3.phase_step
+                    if phase >= 32.0:
+                        phase %= 32.0
+                    channel3.phase = phase
+
+                    digital = digital >> (wave_level - 1) if wave_level else 0
+                sample3 = 15 - digital * 2
+
+            if not channel4.dac_enabled:
+                sample4 = 0
+            elif not channel4.enabled:
+                sample4 = 15
+            else:
+                digital = 0
+                phase = channel4.phase + channel4.phase_step
+                steps = int(phase)
+                if not steps:
+                    channel4.phase = phase
+                    if channel4.volume and channel4.lfsr & 1:
+                        digital = channel4.volume
+                else:
+                    phase -= steps
+                    lfsr = channel4.lfsr
+                    jump = 0
+                    while steps:
+                        if steps & 1:
+                            lfsr = noise_tables[jump][lfsr]
+                        steps >>= 1
+                        jump += 1
+                    channel4.phase = phase
+                    channel4.lfsr = lfsr
+                    if channel4.volume and lfsr & 1:
+                        digital = channel4.volume
+                sample4 = 15 - digital * 2
             if all_routes:
-                right = left = sample1 + sample2 + sample3 + sample4
+                left = right = sample1 + sample2 + sample3 + sample4
             elif shared_routes:
-                right = left = (
+                left = right = (
                     sample1 * right_routes[0]
                     + sample2 * right_routes[1]
                     + sample3 * right_routes[2]
@@ -557,7 +678,8 @@ class GbApu(object):
                 )
             samples[index, 0] = left * left_scale
             samples[index, 1] = right * right_scale
-            dac_enabled_data[index] = dacs_enabled
+            if dac_enabled_data is not None:
+                dac_enabled_data[index] = dacs_enabled
             sequencer_remainder += FRAME_SEQUENCER_HZ
             if sequencer_remainder >= SAMPLE_RATE:
                 sequencer_remainder -= SAMPLE_RATE
@@ -574,6 +696,8 @@ class GbApu(object):
                     channel4.clock_envelope()
                 sequencer_step = (sequencer_step + 1) & 7
 
+        if diagnostics_enabled:
+            high_pass_start_seconds = time.perf_counter()
         if event_index:
             del events[:event_index]
         self.frame_start_cycle = frame_end
@@ -585,12 +709,42 @@ class GbApu(object):
             high_pass_right_capacitor,
         ) = _apply_high_pass(
             samples,
-            np.frombuffer(dac_enabled_data, dtype=np.uint8) != 0,
+            (
+                np.frombuffer(dac_enabled_data, dtype=np.uint8) != 0
+                if dac_enabled_data is not None
+                else _dac_enabled_mask(sample_count, dacs_enabled)
+            ),
             high_pass_left_capacitor,
             high_pass_right_capacitor,
         )
         self.high_pass_left_capacitor = high_pass_left_capacitor
         self.high_pass_right_capacitor = high_pass_right_capacitor
+        if diagnostics_enabled:
+            end_seconds = time.perf_counter()
+            diagnostics['frames'] = diagnostics.get('frames', 0) + 1
+            diagnostics['samples'] = diagnostics.get('samples', 0) + sample_count
+            diagnostics['events_applied'] = (
+                diagnostics.get('events_applied', 0) + event_index
+            )
+            active_masks = diagnostics.setdefault('active_masks', {})
+            active_masks[initial_active_mask] = (
+                active_masks.get(initial_active_mask, 0) + 1
+            )
+            diagnostics['mix_seconds'] = (
+                diagnostics.get('mix_seconds', 0.0)
+                + high_pass_start_seconds
+                - mix_start_seconds
+            )
+            diagnostics['high_pass_seconds'] = (
+                diagnostics.get('high_pass_seconds', 0.0)
+                + end_seconds
+                - high_pass_start_seconds
+            )
+            diagnostics['total_seconds'] = (
+                diagnostics.get('total_seconds', 0.0)
+                + end_seconds
+                - frame_start_seconds
+            )
 
         # Keep status reads useful after length/envelope processing. Any
         # writes queued just beyond this frame will update it on their own.

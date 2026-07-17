@@ -62,6 +62,7 @@ def main(
     opcode_stats=False,
     cpu_diagnostics=False,
     gpu_diagnostics=False,
+    audio_diagnostics=False,
     screenshot_dir=None,
     screenshot_start_seconds=0.0,
     screenshot_end_seconds=None,
@@ -87,6 +88,8 @@ def main(
         cpu.cb_opcode_counts = [0] * 256
     audio_enabled = audio and not no_display and not uncapped
     apu = GbApu(gb_memory.memory) if audio_enabled else None
+    if apu is not None:
+        apu.diagnostics_enabled = audio_diagnostics
 
     if GB_DR_TEST_MODE:
         caption = build_window_caption(filename, test_mode=True)
@@ -148,6 +151,11 @@ def main(
         'measured_instructions': 0,
         'measured_draw_seconds': 0.0,
         'measured_sleep_seconds': 0.0,
+        'audio_generated_frames': 0,
+        'audio_queued_frames': 0,
+        'audio_dropped_frames': 0,
+        'audio_generate_seconds': 0.0,
+        'audio_max_generate_seconds': 0.0,
     }
     if stats['measured_active']:
         stats['measured_start_seconds'] = stats['start_seconds']
@@ -189,6 +197,9 @@ def main(
                         gpu.diagnostics = {}
                     if audio_output is not None:
                         audio_output.reset_diagnostics(track_latency=True)
+                    reset_audio_generation_diagnostics(stats)
+                    if apu is not None and audio_diagnostics:
+                        apu.diagnostics = {}
                 if stats['measured_active']:
                     stats['measured_frames'] += 1
                 if screenshot_dir_path is not None:
@@ -238,10 +249,22 @@ def main(
                         )
                         frames_to_drop = max(0, frames_due - 3)
                         for _ in range(frames_to_drop):
+                            audio_start = time.perf_counter()
                             apu.generate_frame()
+                            record_audio_generation(
+                                stats,
+                                time.perf_counter() - audio_start,
+                                queued=False,
+                            )
                             next_audio_cycle += DMG_CYCLES_PER_FRAME
                         while cpu_cycle >= next_audio_cycle:
+                            audio_start = time.perf_counter()
                             audio_output.queue(apu.generate_frame())
+                            record_audio_generation(
+                                stats,
+                                time.perf_counter() - audio_start,
+                                queued=True,
+                            )
                             next_audio_cycle += DMG_CYCLES_PER_FRAME
                     if should_draw_frame(stats['frames'], frameskip):
                         draw_start = time.perf_counter()
@@ -293,6 +316,10 @@ def main(
             audio_output.print_latency_diagnostics()
             audio_output.print_underrun_diagnostics()
             audio_output.close()
+        if audio_diagnostics:
+            print_audio_generation_diagnostics(stats)
+            if apu is not None:
+                print_apu_internal_diagnostics(apu)
         if not no_display:
             pygame.quit()
         print_run_stats(stats, no_display)
@@ -539,6 +566,92 @@ class PygameAudioOutput(object):
         if self.started:
             self.device.pause(1)
         self.device.close()
+
+
+def reset_audio_generation_diagnostics(stats):
+    """Reset APU generation timing counters at the measured warmup boundary."""
+    stats['audio_generated_frames'] = 0
+    stats['audio_queued_frames'] = 0
+    stats['audio_dropped_frames'] = 0
+    stats['audio_generate_seconds'] = 0.0
+    stats['audio_max_generate_seconds'] = 0.0
+
+
+def record_audio_generation(stats, elapsed, queued):
+    """Track one generated APU frame for audio performance diagnostics."""
+    stats['audio_generated_frames'] += 1
+    if queued:
+        stats['audio_queued_frames'] += 1
+    else:
+        stats['audio_dropped_frames'] += 1
+    stats['audio_generate_seconds'] += elapsed
+    if elapsed > stats['audio_max_generate_seconds']:
+        stats['audio_max_generate_seconds'] = elapsed
+
+
+def print_audio_generation_diagnostics(stats):
+    """Print timing for APU frame generation."""
+    generated = stats.get('audio_generated_frames', 0)
+    print("Audio generation diagnostics:")
+    if not generated:
+        print("  no APU frames generated")
+        return
+
+    total_seconds = stats.get('audio_generate_seconds', 0.0)
+    print(
+        "  APU frames: "
+        f"{generated:,} generated, "
+        f"{stats.get('audio_queued_frames', 0):,} queued, "
+        f"{stats.get('audio_dropped_frames', 0):,} dropped"
+    )
+    print(
+        "  APU time: "
+        f"{total_seconds:.3f}s total, "
+        f"{total_seconds / generated * 1_000:.3f} ms/frame avg, "
+        f"{stats.get('audio_max_generate_seconds', 0.0) * 1_000:.3f} ms max"
+    )
+
+
+def print_apu_internal_diagnostics(apu):
+    """Print internal APU timing counters."""
+    stats = apu.diagnostics
+    frames = stats.get('frames', 0)
+    if not frames:
+        print("  APU internals: no measured frames")
+        return
+
+    total_seconds = stats.get('total_seconds', 0.0)
+    mix_seconds = stats.get('mix_seconds', 0.0)
+    high_pass_seconds = stats.get('high_pass_seconds', 0.0)
+    samples = stats.get('samples', 0)
+    events = stats.get('events_applied', 0)
+    print(
+        "  APU internals: "
+        f"{samples:,} samples, "
+        f"{events:,} register events, "
+        f"{events / frames:.2f} events/frame"
+    )
+    print(
+        "  APU split: "
+        f"mix {mix_seconds:.3f}s "
+        f"({mix_seconds / total_seconds * 100:.1f}%), "
+        f"high-pass {high_pass_seconds:.3f}s "
+        f"({high_pass_seconds / total_seconds * 100:.1f}%)"
+    )
+    active_masks = stats.get('active_masks', {})
+    if active_masks:
+        labels = ("ch1", "ch2", "ch3", "ch4")
+        mask_text = []
+        for mask, count in sorted(
+            active_masks.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:6]:
+            active = "+".join(
+                label for bit, label in enumerate(labels) if mask & (1 << bit)
+            ) or "none"
+            mask_text.append(f"{active} {count / frames * 100:.1f}%")
+        print(f"  APU active masks: {', '.join(mask_text)}")
 
 
 def should_draw_frame(frame_number, frameskip):
@@ -1027,6 +1140,11 @@ if __name__ == '__main__':
         help="print opt-in GPU renderer counters and timing",
     )
     parser.add_argument(
+        "--audio-diagnostics",
+        action="store_true",
+        help="print opt-in APU generation timing counters",
+    )
+    parser.add_argument(
         "--screenshot-dir",
         help="write diagnostic framebuffer PNGs to this directory",
     )
@@ -1104,6 +1222,7 @@ if __name__ == '__main__':
                 opcode_stats=args.opcode_stats,
                 cpu_diagnostics=args.cpu_diagnostics,
                 gpu_diagnostics=args.gpu_diagnostics,
+                audio_diagnostics=args.audio_diagnostics,
                 screenshot_dir=args.screenshot_dir,
                 screenshot_start_seconds=args.screenshot_start_seconds,
                 screenshot_end_seconds=args.screenshot_end_seconds,
@@ -1136,6 +1255,7 @@ if __name__ == '__main__':
             opcode_stats=args.opcode_stats,
             cpu_diagnostics=args.cpu_diagnostics,
             gpu_diagnostics=args.gpu_diagnostics,
+            audio_diagnostics=args.audio_diagnostics,
             screenshot_dir=args.screenshot_dir,
             screenshot_start_seconds=args.screenshot_start_seconds,
             screenshot_end_seconds=args.screenshot_end_seconds,
