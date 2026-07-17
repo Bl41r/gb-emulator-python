@@ -180,8 +180,10 @@ def main(
             instructions += execute_next_operation()
 
             if gpu.frame_ready:
+                completed_frames = gpu.frame_ready_count
+                gpu.frame_ready_count = 0
                 gpu.frame_ready = False
-                stats['frames'] += 1
+                stats['frames'] += completed_frames
                 stats['instructions'] = instructions
                 now = time.perf_counter()
                 if (
@@ -201,7 +203,7 @@ def main(
                     if apu is not None and audio_diagnostics:
                         apu.diagnostics = {}
                 if stats['measured_active']:
-                    stats['measured_frames'] += 1
+                    stats['measured_frames'] += completed_frames
                 if screenshot_dir_path is not None:
                     elapsed = now - stats['start_seconds']
                     if screenshot_start_frame is not None:
@@ -282,7 +284,8 @@ def main(
                             stats['measured_drawn_frames'] += 1
                     if pace_frames:
                         next_frame_deadline, slept = pace_frame(
-                            next_frame_deadline
+                            next_frame_deadline,
+                            completed_frames,
                         )
                         stats['sleep_seconds'] += slept
                         if stats['measured_active']:
@@ -659,9 +662,10 @@ def should_draw_frame(frame_number, frameskip):
     return (frame_number - 1) % frameskip == 0
 
 
-def pace_frame(deadline):
+def pace_frame(deadline, frame_count=1):
     """Wait for the next DMG frame boundary without accumulating lag."""
     now = time.perf_counter()
+    deadline += DMG_FRAME_SECONDS * (frame_count - 1)
     delay = deadline - now
     waited = 0.0
     if delay > 0:
@@ -829,6 +833,14 @@ def print_cpu_diagnostics(cpu, limit=12):
             'pseudo_ly_compare_b_boundary_fallbacks',
             0,
         )
+        aggressive_batches = stats.get(
+            'pseudo_ly_compare_b_aggressive_batches',
+            0,
+        )
+        aggressive_blocked_irq = stats.get(
+            'pseudo_ly_compare_b_aggressive_blocked_irq',
+            0,
+        )
         avg_loop_batch = loops / batches if batches else 0
         print(
             "  LY compare-B pseudo-op: "
@@ -836,7 +848,9 @@ def print_cpu_diagnostics(cpu, limit=12):
             f"{loops:,} folded loop iterations, "
             f"{avg_loop_batch:.1f} avg loops/batch, "
             f"{m_cycles:,} M-cycles folded/tracked, "
-            f"{boundary_fallbacks:,} boundary fallbacks"
+            f"{boundary_fallbacks:,} boundary fallbacks, "
+            f"{aggressive_batches:,} aggressive batches, "
+            f"{aggressive_blocked_irq:,} IRQ-blocked aggressive attempts"
         )
         ly_pcs = stats.get('pseudo_ly_compare_b_pcs', {})
         if ly_pcs:

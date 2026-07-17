@@ -98,6 +98,7 @@ class GbGpu(object):
         self.diagnostics_enabled = False
         self.diagnostics = {}
         self.frame_ready = False
+        self.frame_ready_count = 0
         self.screen_data = bytearray([255] * (160 * 144 * 4))
         self.screen_buffer = np.frombuffer(
             self.screen_data,
@@ -151,14 +152,16 @@ class GbGpu(object):
 
     def step(self, m):
         """Perform one step."""
-        if not (self.sys_interface.raw_memory[GPU_LCDC] & 0x80):
+        memory = self.sys_interface.raw_memory
+        if not (memory[GPU_LCDC] & 0x80):
             return
 
         self._mode_clock += m
-        linemode = self.linemode
-        if linemode == 0:
-            if self._mode_clock >= 204:
-                memory = self.sys_interface.raw_memory
+        while True:
+            linemode = self.linemode
+            if linemode == 0:
+                if self._mode_clock < 204:
+                    return
                 self._mode_clock -= 204
                 curr_line = memory[GPU_LY]
                 memory[GPU_LY] = (curr_line + 1) & 0xFF
@@ -166,29 +169,31 @@ class GbGpu(object):
                 if curr_line == 143:
                     self.linemode = 1  # enter V-Blank
                     self.frame_ready = True
+                    self.frame_ready_count += 1
                     memory[0xFF0F] |= 0x01  # Set V-Blank flag
                 else:
                     self.linemode = 2
 
                 self._update_stat_register()
-        elif linemode == 1:
-            memory = self.sys_interface.raw_memory
-            if (
-                memory[GPU_LY] == 153
-                and not self._line153_ly_reset
-                and self._mode_clock >= 4
-            ):
-                # On DMG hardware LY reads as 0 after the first four dots of
-                # VBlank line 153, before mode 2 for scanline 0 begins.
-                memory[GPU_LY] = 0
-                self._line153_ly_reset = True
-                # Do not latch/request a new STAT edge for this synthetic LY=0
-                # window. CGB raster code that targets the first visible band
-                # can otherwise run during VBlank and leave line 0 using stale
-                # scroll until the real visible-frame split catches up.
-                self._update_stat_register(request_irq=False)
+            elif linemode == 1:
+                if (
+                    memory[GPU_LY] == 153
+                    and not self._line153_ly_reset
+                    and self._mode_clock >= 4
+                ):
+                    # On DMG hardware LY reads as 0 after the first four dots of
+                    # VBlank line 153, before mode 2 for scanline 0 begins.
+                    memory[GPU_LY] = 0
+                    self._line153_ly_reset = True
+                    # Do not latch/request a new STAT edge for this synthetic
+                    # LY=0 window. CGB raster code that targets the first
+                    # visible band can otherwise run during VBlank and leave
+                    # line 0 using stale scroll until the real visible-frame
+                    # split catches up.
+                    self._update_stat_register(request_irq=False)
 
-            if self._mode_clock >= 456:
+                if self._mode_clock < 456:
+                    return
                 self._mode_clock -= 456
                 if self._line153_ly_reset:
                     self._line153_ly_reset = False
@@ -199,26 +204,93 @@ class GbGpu(object):
                     memory[GPU_LY] = (memory[GPU_LY] + 1) & 0xFF
 
                 self._update_stat_register()
-        elif linemode == 2:
-            if self._mode_clock >= 80:
+            elif linemode == 2:
+                if self._mode_clock < 80:
+                    return
                 self._mode_clock -= 80
-                memory = self.sys_interface.raw_memory
                 self._scanline_scroll_x = memory[GPU_SCX]
                 self._scanline_scroll_y = memory[GPU_SCY]
                 self.linemode = 3   # Switch to VRAM mode
                 self._update_stat_register()
-        else:
-            if self._mode_clock >= 172:
+            else:
+                if self._mode_clock < 172:
+                    return
                 self._mode_clock -= 172
                 self.linemode = 0   # Switch to H-Blank mode
                 self._update_stat_register()
                 self._renderscan()
 
+    def m_cycles_until_ly(self, target_line):
+        """Return M-cycles until LY next reaches ``target_line``.
+
+        This is used by CPU pseudo-op wait loops. It simulates only the PPU
+        line/mode counters, without mutating render state, and caps the search
+        to one full frame. The returned value is intentionally rounded up so a
+        caller that advances by this many M-cycles will not stop before the
+        target line is visible.
+        """
+        memory = self.sys_interface.raw_memory
+        if not (memory[GPU_LCDC] & 0x80):
+            return 0x10000
+
+        target_line &= 0xFF
+        line = memory[GPU_LY]
+        if line == target_line:
+            return 0
+
+        linemode = self.linemode
+        mode_clock = self._mode_clock
+        line153_reset = self._line153_ly_reset
+        elapsed = 0
+        max_elapsed = 456 * 154
+
+        while elapsed < max_elapsed:
+            if linemode == 1 and line == 153 and not line153_reset:
+                remaining = 4 - mode_clock
+                if remaining <= 0:
+                    remaining = 1
+                elapsed += remaining
+                mode_clock += remaining
+                line = 0
+                line153_reset = True
+                if line == target_line:
+                    return max(1, (elapsed + 3) >> 2)
+                continue
+
+            remaining = GPU_MODE_CYCLES[linemode] - mode_clock
+            if remaining <= 0:
+                remaining = 1
+            elapsed += remaining
+            mode_clock = 0
+
+            if linemode == 0:
+                if line == 143:
+                    linemode = 1
+                else:
+                    linemode = 2
+                line = (line + 1) & 0xFF
+            elif linemode == 1:
+                if line153_reset:
+                    line153_reset = False
+                    linemode = 2
+                else:
+                    line = (line + 1) & 0xFF
+            elif linemode == 2:
+                linemode = 3
+            else:
+                linemode = 0
+
+            if line == target_line:
+                return max(1, (elapsed + 3) >> 2)
+
+        return 0x10000
+
     def consume_frame_ready(self):
         """Return whether a frame completed, clearing the notification."""
         if not self.frame_ready:
             return False
-        self.frame_ready = False
+        self.frame_ready_count -= 1
+        self.frame_ready = self.frame_ready_count > 0
         return True
 
     def m_cycles_until_mode_transition(self):
@@ -458,6 +530,7 @@ class GbGpu(object):
         self.linemode = 2 if is_enabled else 0
         if not is_enabled:
             self.frame_ready = False
+            self.frame_ready_count = 0
         self._update_stat_register()
 
     def write_lyc(self, value):

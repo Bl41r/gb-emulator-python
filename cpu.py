@@ -1201,10 +1201,14 @@ class GbZ80Cpu(object):
             else:
                 a = line
 
+        interrupts_can_fire = bool(registers['ime'])
         if (
             self.gb_doctor_test_mode
             or self.enable_interrupts_next_cycle
-            or (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+            or (
+                interrupts_can_fire
+                and (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+            )
         ):
             registers['a'] = a
             registers['pc'] = (registers['pc'] + 1) & 0xFFFF
@@ -1215,6 +1219,7 @@ class GbZ80Cpu(object):
                 )
             return 1
 
+        interrupt_enable = memory[0xFFFF]
         ppu_m_until = 0x10000
         if lcdc & 0x80:
             linemode = gpu.linemode
@@ -1242,6 +1247,50 @@ class GbZ80Cpu(object):
             timer_m_until = until_next_edge + (edges_until_overflow - 1) * period
 
         loop_boundary = ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
+        if lcdc & 0x80:
+            if not (
+                interrupts_can_fire
+                and (interrupt_enable & memory[0xFF0F] & 0x07)
+            ):
+                # This intentionally does not stop at future STAT edges. The
+                # folded instruction sequence is a pure LY wait loop, so
+                # respecting pending interrupts and upcoming VBlank/timer
+                # interrupts gives us the important CPU-observable boundaries
+                # while avoiding thousands of Python wakeups per frame.
+                ly_m_until = gpu.m_cycles_until_ly(registers['b'])
+                interrupt_m_until = 0x10000
+                if interrupts_can_fire and interrupt_enable & 0x01:
+                    if line >= 144:
+                        interrupt_m_until = 1
+                    else:
+                        interrupt_m_until = gpu.m_cycles_until_ly(144)
+                if (
+                    interrupts_can_fire
+                    and interrupt_enable & 0x04
+                    and timer_m_until < interrupt_m_until
+                ):
+                    interrupt_m_until = timer_m_until
+                aggressive_boundary = (
+                    ly_m_until
+                    if ly_m_until < interrupt_m_until
+                    else interrupt_m_until
+                )
+                if aggressive_boundary > loop_boundary:
+                    loop_boundary = aggressive_boundary
+                    if diagnostics is not None:
+                        diagnostics['pseudo_ly_compare_b_aggressive_batches'] = (
+                            diagnostics.get(
+                                'pseudo_ly_compare_b_aggressive_batches',
+                                0,
+                            ) + 1
+                        )
+            elif diagnostics is not None:
+                diagnostics['pseudo_ly_compare_b_aggressive_blocked_irq'] = (
+                    diagnostics.get(
+                        'pseudo_ly_compare_b_aggressive_blocked_irq',
+                        0,
+                    ) + 1
+                )
         if loop_boundary <= 7:
             registers['a'] = a
             registers['pc'] = (registers['pc'] + 1) & 0xFFFF
