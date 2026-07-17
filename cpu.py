@@ -996,6 +996,69 @@ class GbZ80Cpu(object):
                     flags |= FLAG_ZERO
                 registers['f'] = flags
                 registers['m'] = 4
+                if self.opcode_counts is None and not trace_enabled:
+                    branch_pc = registers['pc']
+                    if direct_rom is not None and branch_pc < 0x8000:
+                        branch_op = (
+                            direct_rom[branch_pc]
+                            if branch_pc < self.direct_rom_length
+                            else 0xFF
+                        )
+                    else:
+                        branch_op = sys_interface.read_byte(branch_pc)
+
+                    if branch_op == 0x28:
+                        operand_pc = (branch_pc + 1) & 0xFFFF
+                        if direct_rom is not None and operand_pc < 0x8000:
+                            offset = (
+                                direct_rom[operand_pc]
+                                if operand_pc < self.direct_rom_length
+                                else 0xFF
+                            )
+                        else:
+                            offset = sys_interface.read_byte(operand_pc)
+                        next_pc = (branch_pc + 2) & 0xFFFF
+                        if flags & FLAG_ZERO:
+                            if offset >= 0x80:
+                                offset -= 0x100
+                            registers['pc'] = (next_pc + offset) & 0xFFFF
+                            registers['m'] = 7
+                        else:
+                            registers['pc'] = next_pc
+                            registers['m'] = 6
+                        executed_instructions = 2
+                        if self.diagnostics_enabled:
+                            diagnostics['cb46_branch_folded'] = (
+                                diagnostics.get('cb46_branch_folded', 0) + 1
+                            )
+                    elif branch_op == 0xC2:
+                        operand_pc = (branch_pc + 1) & 0xFFFF
+                        if direct_rom is not None and operand_pc < 0x8000:
+                            lo = (
+                                direct_rom[operand_pc]
+                                if operand_pc < self.direct_rom_length
+                                else 0xFF
+                            )
+                            hi_pc = branch_pc + 2
+                            hi = (
+                                direct_rom[hi_pc]
+                                if hi_pc < self.direct_rom_length
+                                else 0xFF
+                            )
+                        else:
+                            lo = sys_interface.read_byte(operand_pc)
+                            hi = sys_interface.read_byte((branch_pc + 2) & 0xFFFF)
+                        if flags & FLAG_ZERO:
+                            registers['pc'] = (branch_pc + 3) & 0xFFFF
+                            registers['m'] = 7
+                        else:
+                            registers['pc'] = (hi << 8) | lo
+                            registers['m'] = 8
+                        executed_instructions = 2
+                        if self.diagnostics_enabled:
+                            diagnostics['cb46_branch_folded'] = (
+                                diagnostics.get('cb46_branch_folded', 0) + 1
+                            )
             else:
                 register_index = cb_op & 0x07
                 if 0x40 <= cb_op < 0x80 and register_index != 6:

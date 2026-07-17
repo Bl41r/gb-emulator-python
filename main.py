@@ -878,7 +878,11 @@ def print_cpu_diagnostics(cpu, limit=12):
 
     cb46_count = stats.get('cb46_count', 0)
     if cb46_count:
-        print(f"  CB 46 BIT 0,(HL): {cb46_count:,} executions")
+        folded = stats.get('cb46_branch_folded', 0)
+        print(
+            f"  CB 46 BIT 0,(HL): {cb46_count:,} executions, "
+            f"{folded:,} branch folds"
+        )
         cb46_pcs = stats.get('cb46_pcs', {})
         if cb46_pcs:
             print(f"  Top CB 46 PCs:")
