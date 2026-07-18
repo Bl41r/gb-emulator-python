@@ -137,11 +137,14 @@ CB_REGISTER_NAMES = ('b', 'c', 'd', 'e', 'h', 'l', None, 'a')
 PPU_MODE_CYCLES = (204, 456, 80, 172)
 OP_FAST_LY_COMPARE_B_LOOP = 0x100
 OP_FAST_CP_HL_JR_NZ_LOOP = 0x101
+OP_FAST_STAT_MODE_POLL_LOOP = 0x102
+OP_FAST_LY_ZERO_LOOP = 0x103
+OP_FAST_ROM_BIT_DECODE_OUTPUT_LOOP = 0x104
 PSEUDO_OPCODE_BASE = 0x100
 OP_FAST_HRAM_POLL_LOOP_BASE = 0x200
 INLINE_OPCODE_MASK = bytearray(256)
 for _op in (0x05, 0x12, 0x20, 0x21, 0x22, 0x23, 0x28, 0x2A,
-            0xA7, 0xB8, 0xBE, 0xCB, 0xF0):
+            0x3D, 0xA7, 0xB8, 0xBE, 0xCB, 0xF0):
     INLINE_OPCODE_MASK[_op] = 1
 my_counter = 0
 
@@ -193,8 +196,16 @@ class GbZ80Cpu(object):
         self.cp_hl_jr_nz_loop_pcs = set()
         self.opcode_counts = None
         self.cb_opcode_counts = None
+        self.slow_diagnostics_enabled = False
+        self.slow_opcode_counts = [0] * 0x300
+        self.slow_cb_opcode_counts = [0] * 256
+        self.slow_pc_counts = {}
+        self.slow_instruction_count = 0
         self.diagnostics_enabled = False
         self.diagnostics = {}
+        self.pc_sample_start = None
+        self.pc_sample_end = None
+        self.pc_sample_limit = 20
         self.halt_m_cycles = 0
 
         # Register set
@@ -766,7 +777,28 @@ class GbZ80Cpu(object):
         self.pseudo_opcode_table = [
             self._fast_hram_compare_b_loop,
             self._fast_cp_hl_jr_nz_loop,
+            self._fast_stat_mode_poll_loop,
+            self._fast_ly_zero_loop,
+            self._fast_rom_bit_decode_output_loop,
         ]
+
+    def reset_slow_diagnostics_window(self):
+        """Clear per-frame slow-diagnostic counters."""
+        self.slow_opcode_counts = [0] * 0x300
+        self.slow_cb_opcode_counts = [0] * 256
+        self.slow_pc_counts = {}
+        self.slow_instruction_count = 0
+
+    def consume_slow_diagnostics_window(self):
+        """Return and reset per-frame slow-diagnostic counters."""
+        snapshot = {
+            'opcode_counts': self.slow_opcode_counts,
+            'cb_opcode_counts': self.slow_cb_opcode_counts,
+            'pc_counts': self.slow_pc_counts,
+            'instructions': self.slow_instruction_count,
+        }
+        self.reset_slow_diagnostics_window()
+        return snapshot
 
     def execute_next_operation(self):
         global my_counter
@@ -815,6 +847,35 @@ class GbZ80Cpu(object):
                     gpu.step(m_cycles * 4)
 
         pc = registers['pc']
+        if (
+            self.diagnostics_enabled
+            and self.pc_sample_start is not None
+            and self.pc_sample_start <= pc <= self.pc_sample_end
+        ):
+            diagnostics = self.diagnostics
+            diagnostics['pc_sample_hits'] = (
+                diagnostics.get('pc_sample_hits', 0) + 1
+            )
+            pc_counts = diagnostics.setdefault('pc_sample_pcs', {})
+            pc_counts[pc] = pc_counts.get(pc, 0) + 1
+            samples = diagnostics.setdefault('pc_sample_registers', [])
+            if len(samples) < self.pc_sample_limit:
+                samples.append(
+                    (
+                        pc,
+                        registers['a'],
+                        registers['f'],
+                        registers['b'],
+                        registers['c'],
+                        registers['d'],
+                        registers['e'],
+                        registers['h'],
+                        registers['l'],
+                        registers['sp'],
+                        sys_interface.raw_memory[0xFF44],
+                        gpu.linemode,
+                    )
+                )
         direct_rom = self.direct_rom
         if trace_enabled or self.opcode_counts is not None:
             decoded_rom_ops = None
@@ -828,6 +889,12 @@ class GbZ80Cpu(object):
             op = sys_interface.read_byte(pc)
         if self.opcode_counts is not None:
             self.opcode_counts[op] += 1
+        if self.slow_diagnostics_enabled:
+            if op < len(self.slow_opcode_counts):
+                self.slow_opcode_counts[op] += 1
+            pc_counts = self.slow_pc_counts
+            pc_counts[pc] = pc_counts.get(pc, 0) + 1
+            self.slow_instruction_count += 1
         executed_instructions = 1
         registers['pc'] = (pc + 1) & 0xFFFF
 
@@ -930,6 +997,23 @@ class GbZ80Cpu(object):
             registers['b'] = result
             registers['f'] = flags
             registers['m'] = 1
+        elif not trace_enabled and op == 0x3D:
+            if (
+                self.opcode_counts is None
+                and not self.enable_interrupts_next_cycle
+                and pc >= 0xC000
+            ):
+                next_pc = (pc + 1) & 0xFFFF
+                op1 = sys_interface.raw_memory[next_pc]
+                op2 = sys_interface.raw_memory[(pc + 2) & 0xFFFF]
+                if op1 == 0x20 and op2 == 0xFD:
+                    executed_instructions = self._fast_dec_a_jr_nz_loop(
+                        pc, sys_interface, gpu
+                    )
+                else:
+                    self._dec_a()
+            else:
+                self._dec_a()
         elif not trace_enabled and op == 0x21:
             pc = registers['pc']
             if direct_rom is not None and pc < 0x8000:
@@ -971,6 +1055,8 @@ class GbZ80Cpu(object):
                 cb_op = sys_interface.read_byte(pc)
             if self.cb_opcode_counts is not None:
                 self.cb_opcode_counts[cb_op] += 1
+            if self.slow_diagnostics_enabled:
+                self.slow_cb_opcode_counts[cb_op] += 1
             registers['pc'] = (pc + 1) & 0xFFFF
 
             if cb_op == 0x46:
@@ -1428,6 +1514,470 @@ class GbZ80Cpu(object):
             pc, sys_interface, gpu, memory, address, flags
         )
 
+    def _fast_stat_mode_poll_loop(self, pc, sys_interface, gpu):
+        """Fast path for LD A,(C); AND B; DEC A; JR NZ,-5 STAT polls."""
+        registers = self.registers
+        memory = sys_interface.raw_memory
+        diagnostics = None
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_stat_mode_poll_calls'] = (
+                diagnostics.get('pseudo_stat_mode_poll_calls', 0) + 1
+            )
+
+        if registers['c'] != 0x41 or registers['b'] != 0x03:
+            registers['a'] = sys_interface.read_byte(0xFF00 + registers['c'])
+            registers['m'] = 2
+            if diagnostics is not None:
+                diagnostics['pseudo_stat_mode_poll_fallbacks'] = (
+                    diagnostics.get('pseudo_stat_mode_poll_fallbacks', 0) + 1
+                )
+            return 1
+
+        stat_mode = memory[0xFF41] & 0x03
+        if stat_mode == 1:
+            registers['a'] = 0
+            registers['f'] = FLAG_ZERO | FLAG['sub']
+            registers['pc'] = (pc + 5) & 0xFFFF
+            registers['m'] = 6
+            if diagnostics is not None:
+                diagnostics['pseudo_stat_mode_poll_exits'] = (
+                    diagnostics.get('pseudo_stat_mode_poll_exits', 0) + 1
+                )
+                diagnostics['pseudo_stat_mode_poll_m_cycles'] = (
+                    diagnostics.get('pseudo_stat_mode_poll_m_cycles', 0) + 6
+                )
+            return 4
+
+        interrupts_can_fire = bool(registers['ime'])
+        if (
+            self.gb_doctor_test_mode
+            or self.enable_interrupts_next_cycle
+            or (
+                interrupts_can_fire
+                and (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+            )
+        ):
+            registers['a'] = memory[0xFF41]
+            registers['m'] = 2
+            if diagnostics is not None:
+                diagnostics['pseudo_stat_mode_poll_fallbacks'] = (
+                    diagnostics.get('pseudo_stat_mode_poll_fallbacks', 0) + 1
+                )
+            return 1
+
+        ppu_m_until = gpu.m_cycles_until_linemode(1)
+        timer_m_until = sys_interface.m_cycles_until_timer_interrupt()
+        loop_boundary = ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
+        if loop_boundary <= 7:
+            registers['a'] = memory[0xFF41]
+            registers['m'] = 2
+            if diagnostics is not None:
+                diagnostics['pseudo_stat_mode_poll_boundary_fallbacks'] = (
+                    diagnostics.get(
+                        'pseudo_stat_mode_poll_boundary_fallbacks',
+                        0,
+                    ) + 1
+                )
+            return 1
+
+        loops = (loop_boundary - 1) // 7
+        if loops < 1:
+            loops = 1
+        registers['a'] = (stat_mode - 1) & 0xFF
+        flags = FLAG['sub']
+        if stat_mode == 0:
+            flags |= FLAG_HALF_CARRY
+        registers['f'] = flags
+        registers['pc'] = pc
+        registers['m'] = loops * 7
+        if diagnostics is not None:
+            diagnostics['pseudo_stat_mode_poll_batches'] = (
+                diagnostics.get('pseudo_stat_mode_poll_batches', 0) + 1
+            )
+            diagnostics['pseudo_stat_mode_poll_loops'] = (
+                diagnostics.get('pseudo_stat_mode_poll_loops', 0) + loops
+            )
+            diagnostics['pseudo_stat_mode_poll_m_cycles'] = (
+                diagnostics.get('pseudo_stat_mode_poll_m_cycles', 0)
+                + registers['m']
+            )
+        return loops * 4
+
+    def _fast_ly_zero_loop(self, pc, sys_interface, gpu):
+        """Fast path for LDH A,(LY); AND A; JR NZ,-5."""
+        registers = self.registers
+        memory = sys_interface.raw_memory
+        lcdc = memory[0xFF40]
+        line = memory[0xFF44]
+        diagnostics = None
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_ly_zero_calls'] = (
+                diagnostics.get('pseudo_ly_zero_calls', 0) + 1
+            )
+            ly_zero_pcs = diagnostics.setdefault('pseudo_ly_zero_pcs', {})
+            ly_zero_pcs[pc] = ly_zero_pcs.get(pc, 0) + 1
+
+        if not (lcdc & 0x80):
+            a = 0
+        else:
+            linemode = gpu.linemode
+            mode_clock = gpu._mode_clock + 8
+            if linemode == 0 and mode_clock >= 204:
+                a = (line + 1) & 0xFF
+            elif linemode == 1:
+                line153_reset = gpu._line153_ly_reset
+                if line == 153 and not line153_reset and mode_clock >= 4:
+                    a = 0
+                elif mode_clock >= 456 and not line153_reset:
+                    a = (line + 1) & 0xFF
+                else:
+                    a = line
+            else:
+                a = line
+
+        interrupts_can_fire = bool(registers['ime'])
+        if (
+            self.gb_doctor_test_mode
+            or self.enable_interrupts_next_cycle
+            or (
+                interrupts_can_fire
+                and (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+            )
+        ):
+            registers['a'] = a
+            registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+            registers['m'] = 3
+            if diagnostics is not None:
+                diagnostics['pseudo_ly_zero_fallbacks'] = (
+                    diagnostics.get('pseudo_ly_zero_fallbacks', 0) + 1
+                )
+            return 1
+
+        registers['a'] = a
+        flags = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+        if flags & FLAG_ZERO:
+            registers['f'] = flags
+            registers['pc'] = (pc + 5) & 0xFFFF
+            registers['m'] = 6
+            if diagnostics is not None:
+                diagnostics['pseudo_ly_zero_exits'] = (
+                    diagnostics.get('pseudo_ly_zero_exits', 0) + 1
+                )
+                diagnostics['pseudo_ly_zero_m_cycles'] = (
+                    diagnostics.get('pseudo_ly_zero_m_cycles', 0) + 6
+                )
+            return 3
+
+        ppu_m_until = 0x10000
+        if lcdc & 0x80:
+            linemode = gpu.linemode
+            mode_clock = gpu._mode_clock
+            remaining = PPU_MODE_CYCLES[linemode] - mode_clock
+            if (
+                linemode == 1
+                and not gpu._line153_ly_reset
+                and line == 153
+            ):
+                line153_remaining = 4 - mode_clock
+                if line153_remaining < remaining:
+                    remaining = line153_remaining
+            ppu_m_until = remaining >> 2
+            if ppu_m_until < 1:
+                ppu_m_until = 1
+
+        timer_m_until = sys_interface.m_cycles_until_timer_interrupt()
+        loop_boundary = ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
+        interrupt_enable = memory[0xFFFF]
+        if lcdc & 0x80:
+            if not (
+                interrupts_can_fire
+                and (interrupt_enable & memory[0xFF0F] & 0x07)
+            ):
+                ly_m_until = gpu.m_cycles_until_ly(0)
+                interrupt_m_until = 0x10000
+                if interrupts_can_fire and interrupt_enable & 0x01:
+                    if line >= 144:
+                        interrupt_m_until = 1
+                    else:
+                        interrupt_m_until = gpu.m_cycles_until_ly(144)
+                if (
+                    interrupts_can_fire
+                    and interrupt_enable & 0x04
+                    and timer_m_until < interrupt_m_until
+                ):
+                    interrupt_m_until = timer_m_until
+                aggressive_boundary = (
+                    ly_m_until
+                    if ly_m_until < interrupt_m_until
+                    else interrupt_m_until
+                )
+                if aggressive_boundary > loop_boundary:
+                    loop_boundary = aggressive_boundary
+                    if diagnostics is not None:
+                        diagnostics['pseudo_ly_zero_aggressive_batches'] = (
+                            diagnostics.get(
+                                'pseudo_ly_zero_aggressive_batches',
+                                0,
+                            ) + 1
+                        )
+            elif diagnostics is not None:
+                diagnostics['pseudo_ly_zero_aggressive_blocked_irq'] = (
+                    diagnostics.get(
+                        'pseudo_ly_zero_aggressive_blocked_irq',
+                        0,
+                    ) + 1
+                )
+
+        if loop_boundary <= 7:
+            registers['pc'] = (registers['pc'] + 1) & 0xFFFF
+            registers['m'] = 3
+            if diagnostics is not None:
+                diagnostics['pseudo_ly_zero_boundary_fallbacks'] = (
+                    diagnostics.get(
+                        'pseudo_ly_zero_boundary_fallbacks',
+                        0,
+                    ) + 1
+                )
+            return 1
+
+        loops = (loop_boundary - 1) // 7
+        if loops < 1:
+            loops = 1
+        registers['f'] = flags
+        registers['pc'] = pc
+        registers['m'] = loops * 7
+        if diagnostics is not None:
+            diagnostics['pseudo_ly_zero_batches'] = (
+                diagnostics.get('pseudo_ly_zero_batches', 0) + 1
+            )
+            diagnostics['pseudo_ly_zero_loops'] = (
+                diagnostics.get('pseudo_ly_zero_loops', 0) + loops
+            )
+            diagnostics['pseudo_ly_zero_m_cycles'] = (
+                diagnostics.get('pseudo_ly_zero_m_cycles', 0)
+                + registers['m']
+            )
+        return loops * 3
+
+    def _fast_rom_bit_decode_output_loop(self, pc, sys_interface, gpu):
+        """Fold an exact ROM-table bit decoder until one output byte is ready.
+
+        This matches a compact decompression inner loop used by some ROMs:
+
+            LD H,$3F; LD A,(HL); DEC H; RL C; JR C,+3;
+            DEC H; SWAP A; RLA; JR C,...
+
+        The folded range performs ROM/table reads and register updates only.
+        It stops before the following LD (DE),A write so normal memory side
+        effects still happen through the ordinary CPU path.
+        """
+        registers = self.registers
+        if (
+            self.gb_doctor_test_mode
+            or self.enable_interrupts_next_cycle
+            or registers['ime']
+        ):
+            return self._fallback_fast_rom_bit_decode_output_loop(pc)
+
+        direct_rom = self.direct_rom
+        direct_rom_length = self.direct_rom_length
+        read_byte = sys_interface.read_byte
+
+        def read_fast(address):
+            if (
+                direct_rom is not None
+                and address < 0x8000
+                and address < direct_rom_length
+            ):
+                return direct_rom[address]
+            return read_byte(address)
+
+        a = registers['a']
+        f = registers['f']
+        b = registers['b']
+        c = registers['c']
+        d = registers['d']
+        e = registers['e']
+        h = registers['h']
+        l = registers['l']
+        sp = registers['sp']
+        m_cycles = 0
+        instructions = 0
+        iterations = 0
+        max_iterations = 512
+
+        while iterations < max_iterations:
+            iterations += 1
+
+            # 3A75: LD H,$3F
+            h = 0x3F
+            m_cycles += 2
+            instructions += 1
+
+            # 3A77: LD A,(HL)
+            a = read_fast((h << 8) | l)
+            m_cycles += 2
+            instructions += 1
+
+            # 3A78: DEC H
+            old_h = h
+            h = (h - 1) & 0xFF
+            f = (f & FLAG_CARRY) | FLAG['sub']
+            if h == 0:
+                f |= FLAG_ZERO
+            if (old_h & 0x0F) == 0:
+                f |= FLAG_HALF_CARRY
+            m_cycles += 1
+            instructions += 1
+
+            # 3A79: CB 11 / RL C
+            carry_in = 1 if f & FLAG_CARRY else 0
+            carry_out = c & 0x80
+            c = ((c << 1) & 0xFF) | carry_in
+            f = FLAG_CARRY if carry_out else 0
+            if c == 0:
+                f |= FLAG_ZERO
+            m_cycles += 2
+            instructions += 1
+
+            # 3A7B: JR C,+3
+            if f & FLAG_CARRY:
+                m_cycles += 3
+            else:
+                m_cycles += 2
+                # 3A7D: DEC H
+                old_h = h
+                h = (h - 1) & 0xFF
+                f = (f & FLAG_CARRY) | FLAG['sub']
+                if h == 0:
+                    f |= FLAG_ZERO
+                if (old_h & 0x0F) == 0:
+                    f |= FLAG_HALF_CARRY
+                m_cycles += 1
+
+                # 3A7E: CB 37 / SWAP A
+                a = ((a & 0x0F) << 4) | (a >> 4)
+                f = FLAG_ZERO if a == 0 else 0
+                m_cycles += 2
+                instructions += 2
+            instructions += 1
+
+            # 3A80: RLA
+            carry_in = 1 if f & FLAG_CARRY else 0
+            carry_out = a & 0x80
+            a = ((a << 1) & 0xFF) | carry_in
+            f = FLAG_CARRY if carry_out else 0
+            m_cycles += 1
+            instructions += 1
+
+            # 3A81: JR C,-18. If not taken, output byte is ready at 3A83.
+            if not (f & FLAG_CARRY):
+                m_cycles += 2
+                instructions += 1
+                registers['a'] = a
+                registers['f'] = f
+                registers['b'] = b
+                registers['c'] = c
+                registers['d'] = d
+                registers['e'] = e
+                registers['h'] = h
+                registers['l'] = l
+                registers['sp'] = sp
+                registers['pc'] = (pc + 14) & 0xFFFF
+                registers['m'] = m_cycles
+                if self.diagnostics_enabled:
+                    diagnostics = self.diagnostics
+                    diagnostics['pseudo_rom_bit_decode_calls'] = (
+                        diagnostics.get('pseudo_rom_bit_decode_calls', 0) + 1
+                    )
+                    diagnostics['pseudo_rom_bit_decode_iterations'] = (
+                        diagnostics.get('pseudo_rom_bit_decode_iterations', 0)
+                        + iterations
+                    )
+                    diagnostics['pseudo_rom_bit_decode_m_cycles'] = (
+                        diagnostics.get('pseudo_rom_bit_decode_m_cycles', 0)
+                        + m_cycles
+                    )
+                return instructions
+
+            m_cycles += 3
+            instructions += 1
+
+            # 3A71: LD L,(HL)
+            l = read_fast((h << 8) | l)
+            m_cycles += 2
+            instructions += 1
+
+            # 3A72: DEC B
+            old_b = b
+            b = (b - 1) & 0xFF
+            f = (f & FLAG_CARRY) | FLAG['sub']
+            if b == 0:
+                f |= FLAG_ZERO
+            if (old_b & 0x0F) == 0:
+                f |= FLAG_HALF_CARRY
+            m_cycles += 1
+            instructions += 1
+
+            # 3A73: JR Z,-10
+            if b != 0:
+                m_cycles += 2
+                instructions += 1
+                continue
+
+            m_cycles += 3
+            instructions += 1
+
+            # 3A6B: POP BC; 3A6C: DEC SP; 3A6D: LD B,$08; 3A6F: JR +4
+            c = read_fast(sp)
+            b = read_fast((sp + 1) & 0xFFFF)
+            sp = (sp + 2) & 0xFFFF
+            m_cycles += 3
+            sp = (sp - 1) & 0xFFFF
+            m_cycles += 2
+            b = 0x08
+            m_cycles += 2
+            m_cycles += 3
+            instructions += 4
+
+        registers['a'] = a
+        registers['f'] = f
+        registers['b'] = b
+        registers['c'] = c
+        registers['d'] = d
+        registers['e'] = e
+        registers['h'] = h
+        registers['l'] = l
+        registers['sp'] = sp
+        registers['pc'] = pc
+        registers['m'] = m_cycles
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_rom_bit_decode_limit_exits'] = (
+                diagnostics.get('pseudo_rom_bit_decode_limit_exits', 0) + 1
+            )
+        return instructions
+
+    def _fallback_fast_rom_bit_decode_output_loop(self, pc):
+        """Execute the first instruction of the ROM bit decoder normally."""
+        registers = self.registers
+        direct_rom = self.direct_rom
+        next_pc = pc + 1
+        if direct_rom is not None and next_pc < self.direct_rom_length:
+            registers['h'] = direct_rom[next_pc]
+        else:
+            registers['h'] = self.sys_interface.read_byte(next_pc & 0xFFFF)
+        registers['pc'] = (pc + 2) & 0xFFFF
+        registers['m'] = 2
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_rom_bit_decode_fallbacks'] = (
+                diagnostics.get('pseudo_rom_bit_decode_fallbacks', 0) + 1
+            )
+        return 1
+
     def _finish_fast_cp_hl_jr_nz_loop(
         self, pc, sys_interface, gpu, memory, address, flags
     ):
@@ -1474,6 +2024,88 @@ class GbZ80Cpu(object):
         registers['pc'] = pc
         registers['m'] = 5
         return 2
+
+    def _fast_dec_a_jr_nz_loop(self, pc, sys_interface, gpu):
+        """Fast path for DEC A; JR NZ,-3 countdown loops in ROM/RAM/HRAM."""
+        registers = self.registers
+        memory = sys_interface.raw_memory
+        diagnostics = None
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_dec_a_loop_calls'] = (
+                diagnostics.get('pseudo_dec_a_loop_calls', 0) + 1
+            )
+
+        interrupts_can_fire = bool(registers['ime'])
+        if (
+            self.gb_doctor_test_mode
+            or (
+                interrupts_can_fire
+                and (memory[0xFFFF] & memory[0xFF0F] & 0x1F)
+            )
+        ):
+            self._dec_a()
+            return 1
+
+        ppu_m_until = 0x10000
+        if memory[0xFF40] & 0x80:
+            remaining = PPU_MODE_CYCLES[gpu.linemode] - gpu._mode_clock
+            if (
+                gpu.linemode == 1
+                and not gpu._line153_ly_reset
+                and memory[0xFF44] == 153
+            ):
+                line153_remaining = 4 - gpu._mode_clock
+                if line153_remaining < remaining:
+                    remaining = line153_remaining
+            ppu_m_until = max(1, remaining // 4)
+
+        timer_m_until = sys_interface.m_cycles_until_timer_interrupt()
+        loop_boundary = ppu_m_until if ppu_m_until < timer_m_until else timer_m_until
+        if loop_boundary <= 4:
+            self._dec_a()
+            return 1
+
+        a = registers['a']
+        iterations_until_zero = a if a else 256
+        max_iterations = (loop_boundary - 1) // 4
+        if max_iterations < 1:
+            self._dec_a()
+            return 1
+        iterations = (
+            iterations_until_zero
+            if iterations_until_zero < max_iterations
+            else max_iterations
+        )
+
+        old_a = a
+        a = (a - iterations) & 0xFF
+        registers['a'] = a
+        flags = (registers['f'] & FLAG_CARRY) | FLAG['sub']
+        if a == 0:
+            flags |= FLAG_ZERO
+        last_dec_input = (old_a - iterations + 1) & 0xFF
+        if (last_dec_input & 0x0F) == 0:
+            flags |= FLAG_HALF_CARRY
+        registers['f'] = flags
+
+        if iterations == iterations_until_zero:
+            registers['pc'] = (pc + 3) & 0xFFFF
+            registers['m'] = (iterations - 1) * 4 + 3
+        else:
+            registers['pc'] = pc
+            registers['m'] = iterations * 4
+
+        if diagnostics is not None:
+            diagnostics['pseudo_dec_a_loop_iterations'] = (
+                diagnostics.get('pseudo_dec_a_loop_iterations', 0)
+                + iterations
+            )
+            diagnostics['pseudo_dec_a_loop_m_cycles'] = (
+                diagnostics.get('pseudo_dec_a_loop_m_cycles', 0)
+                + registers['m']
+            )
+        return iterations * 2
 
     def _fast_ldh_value(self, n, sys_interface, gpu):
         """Read the LDH target, including special LY timing behavior."""

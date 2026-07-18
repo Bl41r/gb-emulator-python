@@ -285,6 +285,62 @@ class GbGpu(object):
 
         return 0x10000
 
+    def m_cycles_until_linemode(self, target_mode):
+        """Return M-cycles until the PPU next reaches ``target_mode``."""
+        memory = self.sys_interface.raw_memory
+        if not (memory[GPU_LCDC] & 0x80):
+            return 0x10000
+
+        target_mode &= 0x03
+        if self.linemode == target_mode:
+            return 0
+
+        line = memory[GPU_LY]
+        linemode = self.linemode
+        mode_clock = self._mode_clock
+        line153_reset = self._line153_ly_reset
+        elapsed = 0
+        max_elapsed = 456 * 154
+
+        while elapsed < max_elapsed:
+            if linemode == 1 and line == 153 and not line153_reset:
+                remaining = 4 - mode_clock
+                if remaining <= 0:
+                    remaining = 1
+                elapsed += remaining
+                mode_clock += remaining
+                line = 0
+                line153_reset = True
+                continue
+
+            remaining = GPU_MODE_CYCLES[linemode] - mode_clock
+            if remaining <= 0:
+                remaining = 1
+            elapsed += remaining
+            mode_clock = 0
+
+            if linemode == 0:
+                if line == 143:
+                    linemode = 1
+                else:
+                    linemode = 2
+                line = (line + 1) & 0xFF
+            elif linemode == 1:
+                if line153_reset:
+                    line153_reset = False
+                    linemode = 2
+                else:
+                    line = (line + 1) & 0xFF
+            elif linemode == 2:
+                linemode = 3
+            else:
+                linemode = 0
+
+            if linemode == target_mode:
+                return max(1, (elapsed + 3) >> 2)
+
+        return 0x10000
+
     def consume_frame_ready(self):
         """Return whether a frame completed, clearing the notification."""
         if not self.frame_ready:

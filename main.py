@@ -73,6 +73,15 @@ def main(
     gbc=False,
     bios=None,
     metrics_warmup_seconds=20.0,
+    slow_diagnostics=False,
+    slow_diagnostics_start_seconds=0.0,
+    slow_diagnostics_end_seconds=None,
+    slow_frame_threshold=1.25,
+    slow_diagnostics_limit=12,
+    phase_diagnostics=False,
+    phase_diagnostics_seconds=5.0,
+    pc_sample_range=None,
+    pc_sample_limit=20,
 ):
     gb_memory = GbMemory(skip_bios=False, gb_doctor_test_mode=GB_DR_TEST_MODE)
     cpu = GbZ80Cpu(
@@ -80,9 +89,22 @@ def main(
         gb_doctor_test_mode=GB_DR_TEST_MODE,
         trace_enabled=trace,
     )
+    slow_diagnostics_active = (
+        slow_diagnostics
+        and slow_diagnostics_start_seconds <= 0
+        and (
+            slow_diagnostics_end_seconds is None
+            or slow_diagnostics_end_seconds > 0
+        )
+    )
+    cpu.slow_diagnostics_enabled = slow_diagnostics_active
     gpu = GbGpu()
     gpu.diagnostics_enabled = gpu_diagnostics
     cpu.diagnostics_enabled = cpu_diagnostics
+    if pc_sample_range is not None:
+        cpu.diagnostics_enabled = True
+        cpu.pc_sample_start, cpu.pc_sample_end = pc_sample_range
+        cpu.pc_sample_limit = pc_sample_limit
     if opcode_stats:
         cpu.opcode_counts = [0] * 256
         cpu.cb_opcode_counts = [0] * 256
@@ -174,6 +196,15 @@ def main(
     pace_frames = not no_display and not uncapped
     next_frame_deadline = stats['start_seconds'] + DMG_FRAME_SECONDS
     next_audio_cycle = DMG_CYCLES_PER_FRAME
+    phase_snapshot = make_phase_snapshot(stats, audio_output)
+    phase_start_seconds = stats['start_seconds']
+    phase_index = 1
+    slow_last_frame_seconds = stats['start_seconds']
+    slow_last_underrun_events = 0
+    slow_events_printed = 0
+    slow_event_limit_reached = False
+    if slow_diagnostics_active:
+        cpu.reset_slow_diagnostics_window()
 
     try:
         while True:
@@ -186,11 +217,26 @@ def main(
                 stats['frames'] += completed_frames
                 stats['instructions'] = instructions
                 now = time.perf_counter()
+                slow_frame_elapsed = 0.0
+                slow_underrun_delta = 0
+                frame_slow_diagnostics_active = slow_diagnostics_active
+                if frame_slow_diagnostics_active:
+                    slow_frame_elapsed = now - slow_last_frame_seconds
+                    slow_last_frame_seconds = now
+                    if audio_output is not None:
+                        current_underrun_events = audio_output.underrun_events
+                        slow_underrun_delta = (
+                            current_underrun_events
+                            - slow_last_underrun_events
+                        )
+                        slow_last_underrun_events = current_underrun_events
+                slow_activated_this_frame = False
                 if (
                     not stats['measured_active']
                     and now - stats['start_seconds'] >= metrics_warmup_seconds
                 ):
                     stats['measured_active'] = True
+                    slow_activated_this_frame = True
                     stats['measured_start_seconds'] = now
                     stats['measured_instructions'] = instructions
                     if cpu_diagnostics:
@@ -202,8 +248,69 @@ def main(
                     reset_audio_generation_diagnostics(stats)
                     if apu is not None and audio_diagnostics:
                         apu.diagnostics = {}
+                    if frame_slow_diagnostics_active:
+                        cpu.reset_slow_diagnostics_window()
+                        slow_last_frame_seconds = now
+                        if audio_output is not None:
+                            slow_last_underrun_events = audio_output.underrun_events
                 if stats['measured_active']:
                     stats['measured_frames'] += completed_frames
+                if frame_slow_diagnostics_active:
+                    slow_snapshot = cpu.consume_slow_diagnostics_window()
+                    if stats['measured_active'] and not slow_activated_this_frame:
+                        expected_seconds = DMG_FRAME_SECONDS * completed_frames
+                        slow_ratio = (
+                            slow_frame_elapsed / expected_seconds
+                            if expected_seconds > 0 else 0.0
+                        )
+                        is_slow_frame = slow_ratio >= slow_frame_threshold
+                        has_underrun = slow_underrun_delta > 0
+                        if (
+                            (is_slow_frame or has_underrun)
+                            and slow_events_printed < slow_diagnostics_limit
+                        ):
+                            slow_events_printed += 1
+                            print_slow_frame_diagnostic(
+                                cpu,
+                                sys_interface,
+                                slow_snapshot,
+                                frame=stats['frames'],
+                                completed_frames=completed_frames,
+                                elapsed_seconds=slow_frame_elapsed,
+                                expected_seconds=expected_seconds,
+                                underrun_events=slow_underrun_delta,
+                                event_number=slow_events_printed,
+                            )
+                        elif (
+                            (is_slow_frame or has_underrun)
+                            and not slow_event_limit_reached
+                        ):
+                            slow_event_limit_reached = True
+                            print(
+                                "Slow diagnostics: event print limit reached; "
+                                "suppressing additional frame snapshots"
+                            )
+                if slow_diagnostics:
+                    elapsed_for_slow_diagnostics = now - stats['start_seconds']
+                    next_slow_diagnostics_active = (
+                        elapsed_for_slow_diagnostics
+                        >= slow_diagnostics_start_seconds
+                        and (
+                            slow_diagnostics_end_seconds is None
+                            or elapsed_for_slow_diagnostics
+                            < slow_diagnostics_end_seconds
+                        )
+                    )
+                    if next_slow_diagnostics_active != slow_diagnostics_active:
+                        slow_diagnostics_active = next_slow_diagnostics_active
+                        cpu.slow_diagnostics_enabled = slow_diagnostics_active
+                        if slow_diagnostics_active:
+                            cpu.reset_slow_diagnostics_window()
+                            slow_last_frame_seconds = now
+                            if audio_output is not None:
+                                slow_last_underrun_events = (
+                                    audio_output.underrun_events
+                                )
                 if screenshot_dir_path is not None:
                     elapsed = now - stats['start_seconds']
                     if screenshot_start_frame is not None:
@@ -291,6 +398,23 @@ def main(
                         if stats['measured_active']:
                             stats['measured_sleep_seconds'] += slept
                     update_caption(caption, stats)
+
+                if phase_diagnostics:
+                    phase_now = time.perf_counter()
+                    if phase_now - phase_start_seconds >= phase_diagnostics_seconds:
+                        next_phase_snapshot = make_phase_snapshot(stats, audio_output)
+                        print_phase_diagnostic(
+                            phase_index,
+                            phase_start_seconds - stats['start_seconds'],
+                            phase_now - stats['start_seconds'],
+                            phase_snapshot,
+                            next_phase_snapshot,
+                            no_display,
+                            audio_output,
+                        )
+                        phase_snapshot = next_phase_snapshot
+                        phase_start_seconds = phase_now
+                        phase_index += 1
 
                 if max_frames is not None and stats['frames'] >= max_frames:
                     break
@@ -780,6 +904,79 @@ def print_run_stats(stats, no_display):
         )
 
 
+def make_phase_snapshot(stats, audio_output):
+    """Return low-overhead counters for phase/bucket diagnostics."""
+    return {
+        'seconds': time.perf_counter(),
+        'frames': stats['frames'],
+        'drawn_frames': stats['drawn_frames'],
+        'instructions': stats['instructions'],
+        'draw_seconds': stats['draw_seconds'],
+        'sleep_seconds': stats['sleep_seconds'],
+        'audio_generated_frames': stats['audio_generated_frames'],
+        'audio_queued_frames': stats['audio_queued_frames'],
+        'audio_dropped_frames': stats['audio_dropped_frames'],
+        'audio_generate_seconds': stats['audio_generate_seconds'],
+        'audio_underruns': audio_output.underruns if audio_output is not None else 0,
+        'audio_underrun_events': (
+            audio_output.underrun_events if audio_output is not None else 0
+        ),
+        'audio_callbacks': audio_output.callbacks if audio_output is not None else 0,
+    }
+
+
+def print_phase_diagnostic(
+    phase_index,
+    start_elapsed,
+    end_elapsed,
+    start,
+    end,
+    no_display,
+    audio_output,
+):
+    """Print low-overhead performance counters for one time bucket."""
+    elapsed = max(end['seconds'] - start['seconds'], 0.000001)
+    frames = end['frames'] - start['frames']
+    drawn_frames = end['drawn_frames'] - start['drawn_frames']
+    instructions = end['instructions'] - start['instructions']
+    draw_seconds = end['draw_seconds'] - start['draw_seconds']
+    sleep_seconds = end['sleep_seconds'] - start['sleep_seconds']
+    emulation_seconds = elapsed - draw_seconds - sleep_seconds
+    generated = end['audio_generated_frames'] - start['audio_generated_frames']
+    queued = end['audio_queued_frames'] - start['audio_queued_frames']
+    dropped = end['audio_dropped_frames'] - start['audio_dropped_frames']
+    audio_seconds = end['audio_generate_seconds'] - start['audio_generate_seconds']
+    underruns = end['audio_underruns'] - start['audio_underruns']
+    underrun_events = end['audio_underrun_events'] - start['audio_underrun_events']
+    callbacks = end['audio_callbacks'] - start['audio_callbacks']
+    queue_ms = audio_output.queued_milliseconds() if audio_output is not None else 0.0
+    audio_avg_ms = (audio_seconds / generated * 1000) if generated else 0.0
+    print(
+        "Phase diagnostic "
+        f"#{phase_index} ({start_elapsed:.1f}-{end_elapsed:.1f}s): "
+        f"{frames} frames, {frames / elapsed:.2f} fps, "
+        f"{instructions / elapsed:,.0f} instr/s"
+    )
+    if not no_display:
+        print(
+            "  phase timing: "
+            f"{drawn_frames} drawn, "
+            f"{draw_seconds:.3f}s draw, "
+            f"{sleep_seconds:.3f}s pace, "
+            f"{emulation_seconds:.3f}s emu/event"
+        )
+    if generated or callbacks or underruns:
+        print(
+            "  phase audio: "
+            f"{generated} generated ({queued} queued, {dropped} dropped), "
+            f"{audio_avg_ms:.3f} ms/frame APU, "
+            f"{underrun_events} underrun events, "
+            f"{underruns} underrun callbacks, "
+            f"{callbacks} callbacks, "
+            f"{queue_ms:.1f} ms queued"
+        )
+
+
 def print_opcode_stats(cpu, limit=20):
     """Print the most frequently executed base and CB-prefixed opcodes."""
     total = sum(cpu.opcode_counts)
@@ -817,6 +1014,163 @@ def print_opcode_stats(cpu, limit=20):
                 f"  CB {opcode:02X} {handler.__name__:<15} "
                 f"{count:>10,}  {percent:>5.2f}%  {args}"
             )
+
+
+def print_slow_frame_diagnostic(
+    cpu,
+    sys_interface,
+    snapshot,
+    frame,
+    completed_frames,
+    elapsed_seconds,
+    expected_seconds,
+    underrun_events,
+    event_number,
+    limit=8,
+):
+    """Print the hot opcodes/PCs for one slow or underrun-adjacent frame."""
+    opcode_counts = snapshot['opcode_counts']
+    cb_opcode_counts = snapshot['cb_opcode_counts']
+    pc_counts = snapshot['pc_counts']
+    dispatches = snapshot['instructions']
+    ratio = elapsed_seconds / expected_seconds if expected_seconds else 0.0
+    reasons = []
+    if ratio >= 1.0:
+        reasons.append(f"{ratio:.2f}x frame budget")
+    if underrun_events:
+        reasons.append(f"{underrun_events} audio underrun event(s)")
+    reason_text = ", ".join(reasons) if reasons else "manual snapshot"
+    print(
+        "Slow diagnostic "
+        f"#{event_number}: frame {frame} "
+        f"({completed_frames} completed), "
+        f"{elapsed_seconds * 1000:.1f} ms elapsed vs "
+        f"{expected_seconds * 1000:.1f} ms expected; "
+        f"{dispatches:,} CPU dispatches; {reason_text}"
+    )
+
+    ranked_ops = sorted(
+        enumerate(opcode_counts),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if ranked_ops and ranked_ops[0][1]:
+        print("  Hot opcodes in this frame:")
+        for opcode, count in ranked_ops[:limit]:
+            if not count:
+                break
+            print(f"    {format_slow_opcode(cpu, opcode):<28} {count:>8,}")
+
+    ranked_cb = sorted(
+        enumerate(cb_opcode_counts),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if ranked_cb and ranked_cb[0][1]:
+        print("  Hot CB opcodes in this frame:")
+        for opcode, count in ranked_cb[:min(limit, 5)]:
+            if not count:
+                break
+            handler, args = cpu.cb_map[opcode]
+            print(
+                f"    CB {opcode:02X} {handler.__name__:<15} "
+                f"{count:>8,}  {args}"
+            )
+
+    ranked_pcs = sorted(
+        pc_counts.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if ranked_pcs:
+        print("  Hot PCs in this frame:")
+        for pc, count in ranked_pcs[:limit]:
+            print(
+                f"    {pc:04X}: {count:>8,}  "
+                f"{format_memory_window(sys_interface, pc)}"
+            )
+
+
+def format_slow_opcode(cpu, opcode):
+    """Format normal and pseudo opcodes for slow-frame diagnostics."""
+    if opcode < 0x100:
+        handler, _args = cpu.opcode_map[opcode]
+        return f"{opcode:02X} {handler.__name__}"
+    if opcode >= 0x200:
+        return f"{opcode:03X} HRAM poll pseudo"
+    pseudo_index = opcode - 0x100
+    if 0 <= pseudo_index < len(cpu.pseudo_opcode_table):
+        return f"{opcode:03X} {cpu.pseudo_opcode_table[pseudo_index].__name__}"
+    return f"{opcode:03X} pseudo"
+
+
+def parse_pc_sample_range(value):
+    """Parse an inclusive diagnostic PC range like 3A71-3A83."""
+    try:
+        start_text, end_text = value.split("-", 1)
+        start = int(start_text, 16)
+        end = int(end_text, 16)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "expected hex range like 3A71-3A83"
+        ) from error
+    if not 0 <= start <= 0xFFFF or not 0 <= end <= 0xFFFF or end < start:
+        raise argparse.ArgumentTypeError(
+            "expected an inclusive 16-bit hex range like 3A71-3A83"
+        )
+    return start, end
+
+
+def format_memory_window(sys_interface, pc, before=2, after=8):
+    """Format live memory bytes around a hot PC without invoking MMIO reads."""
+    start = max(0, pc - before)
+    end = min(0x10000, pc + after)
+    parts = []
+    for address in range(start, end):
+        byte = diagnostic_memory_byte(sys_interface, address)
+        if address == pc:
+            parts.append(f"[{byte:02X}]")
+        else:
+            parts.append(f"{byte:02X}")
+    return f"{memory_region_name(pc):>6}  " + " ".join(parts)
+
+
+def diagnostic_memory_byte(sys_interface, address):
+    """Read bytes for diagnostics without triggering MMIO side effects."""
+    if (
+        sys_interface.boot_rom_enabled
+        and sys_interface.boot_rom is not None
+        and address < len(sys_interface.boot_rom)
+    ):
+        return sys_interface.boot_rom[address]
+    if sys_interface.cartridge is not None and address < 0x8000:
+        return sys_interface.cartridge.rom_window[address]
+    return sys_interface.raw_memory[address]
+
+
+def memory_region_name(address):
+    """Return a compact Game Boy memory-region label for diagnostics."""
+    if address < 0x4000:
+        return "ROM0"
+    if address < 0x8000:
+        return "ROMX"
+    if address < 0xA000:
+        return "VRAM"
+    if address < 0xC000:
+        return "SRAM"
+    if address < 0xE000:
+        return "WRAM"
+    if address < 0xFE00:
+        return "ECHO"
+    if address < 0xFEA0:
+        return "OAM"
+    if address < 0xFF00:
+        return "BAD"
+    if address < 0xFF80:
+        return "IO"
+    if address < 0xFFFF:
+        return "HRAM"
+    return "IE"
 
 
 def print_cpu_diagnostics(cpu, limit=12):
@@ -876,6 +1230,97 @@ def print_cpu_diagnostics(cpu, limit=12):
     if cp_hl_calls:
         print(f"  CP (HL) loop pseudo-op: {cp_hl_calls:,} calls")
 
+    stat_poll_calls = stats.get('pseudo_stat_mode_poll_calls', 0)
+    if stat_poll_calls:
+        loops = stats.get('pseudo_stat_mode_poll_loops', 0)
+        batches = stats.get('pseudo_stat_mode_poll_batches', 0)
+        m_cycles = stats.get('pseudo_stat_mode_poll_m_cycles', 0)
+        fallbacks = stats.get('pseudo_stat_mode_poll_fallbacks', 0)
+        boundary_fallbacks = stats.get(
+            'pseudo_stat_mode_poll_boundary_fallbacks',
+            0,
+        )
+        exits = stats.get('pseudo_stat_mode_poll_exits', 0)
+        avg_loops = loops / batches if batches else 0
+        print(
+            "  STAT mode poll pseudo-op: "
+            f"{stat_poll_calls:,} calls, "
+            f"{loops:,} folded loop iterations, "
+            f"{avg_loops:.1f} avg loops/batch, "
+            f"{m_cycles:,} M-cycles folded/tracked, "
+            f"{exits:,} exits, "
+            f"{fallbacks:,} fallbacks, "
+            f"{boundary_fallbacks:,} boundary fallbacks"
+        )
+
+    ly_zero_calls = stats.get('pseudo_ly_zero_calls', 0)
+    if ly_zero_calls:
+        loops = stats.get('pseudo_ly_zero_loops', 0)
+        batches = stats.get('pseudo_ly_zero_batches', 0)
+        m_cycles = stats.get('pseudo_ly_zero_m_cycles', 0)
+        exits = stats.get('pseudo_ly_zero_exits', 0)
+        fallbacks = stats.get('pseudo_ly_zero_fallbacks', 0)
+        boundary_fallbacks = stats.get('pseudo_ly_zero_boundary_fallbacks', 0)
+        aggressive_batches = stats.get(
+            'pseudo_ly_zero_aggressive_batches',
+            0,
+        )
+        aggressive_blocked_irq = stats.get(
+            'pseudo_ly_zero_aggressive_blocked_irq',
+            0,
+        )
+        avg_loops = loops / batches if batches else 0
+        print(
+            "  LY zero pseudo-op: "
+            f"{ly_zero_calls:,} calls, "
+            f"{loops:,} folded loop iterations, "
+            f"{avg_loops:.1f} avg loops/batch, "
+            f"{m_cycles:,} M-cycles folded/tracked, "
+            f"{exits:,} exits, "
+            f"{fallbacks:,} fallbacks, "
+            f"{boundary_fallbacks:,} boundary fallbacks, "
+            f"{aggressive_batches:,} aggressive batches, "
+            f"{aggressive_blocked_irq:,} IRQ-blocked aggressive attempts"
+        )
+        ly_zero_pcs = stats.get('pseudo_ly_zero_pcs', {})
+        if ly_zero_pcs:
+            print("  Top LY zero pseudo-op PCs:")
+            for pc, count in sorted(
+                ly_zero_pcs.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:limit]:
+                percent = count / ly_zero_calls * 100
+                print(f"    {pc:04X}: {count:>10,}  {percent:>5.2f}%")
+
+    dec_a_calls = stats.get('pseudo_dec_a_loop_calls', 0)
+    if dec_a_calls:
+        iterations = stats.get('pseudo_dec_a_loop_iterations', 0)
+        m_cycles = stats.get('pseudo_dec_a_loop_m_cycles', 0)
+        avg_iterations = iterations / dec_a_calls if dec_a_calls else 0
+        print(
+            "  DEC A loop pseudo-op: "
+            f"{dec_a_calls:,} calls, "
+            f"{iterations:,} iterations, "
+            f"{avg_iterations:.1f} avg iterations/call, "
+            f"{m_cycles:,} M-cycles folded/tracked"
+        )
+
+    bit_decode_calls = stats.get('pseudo_rom_bit_decode_calls', 0)
+    if bit_decode_calls:
+        iterations = stats.get('pseudo_rom_bit_decode_iterations', 0)
+        m_cycles = stats.get('pseudo_rom_bit_decode_m_cycles', 0)
+        avg_iterations = iterations / bit_decode_calls if bit_decode_calls else 0
+        print(
+            "  ROM bit-decode pseudo-op: "
+            f"{bit_decode_calls:,} calls, "
+            f"{iterations:,} decoder iterations, "
+            f"{avg_iterations:.1f} avg iterations/call, "
+            f"{m_cycles:,} M-cycles folded/tracked, "
+            f"{stats.get('pseudo_rom_bit_decode_fallbacks', 0):,} fallbacks, "
+            f"{stats.get('pseudo_rom_bit_decode_limit_exits', 0):,} limit exits"
+        )
+
     cb46_count = stats.get('cb46_count', 0)
     if cb46_count:
         folded = stats.get('cb46_branch_folded', 0)
@@ -893,6 +1338,43 @@ def print_cpu_diagnostics(cpu, limit=12):
             )[:limit]:
                 percent = count / cb46_count * 100
                 print(f"    {pc:04X}: {count:>10,}  {percent:>5.2f}%")
+
+    pc_sample_hits = stats.get('pc_sample_hits', 0)
+    if pc_sample_hits:
+        print(f"  PC sample range: {pc_sample_hits:,} hits")
+        sampled_pcs = stats.get('pc_sample_pcs', {})
+        if sampled_pcs:
+            print("  Top sampled PCs:")
+            for pc, count in sorted(
+                sampled_pcs.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:limit]:
+                percent = count / pc_sample_hits * 100
+                print(f"    {pc:04X}: {count:>10,}  {percent:>5.2f}%")
+        samples = stats.get('pc_sample_registers', [])
+        if samples:
+            print("  Sampled register states:")
+            for (
+                pc,
+                a,
+                f,
+                b,
+                c,
+                d,
+                e,
+                h,
+                l,
+                sp,
+                ly,
+                linemode,
+            ) in samples:
+                print(
+                    f"    PC:{pc:04X} AF:{a:02X}{f:02X} "
+                    f"BC:{b:02X}{c:02X} DE:{d:02X}{e:02X} "
+                    f"HL:{h:02X}{l:02X} SP:{sp:04X} "
+                    f"LY:{ly:02X} mode:{linemode}"
+                )
 
 
 def print_gpu_diagnostics(gpu):
@@ -1163,6 +1645,71 @@ if __name__ == '__main__':
         help="print opt-in APU generation timing counters",
     )
     parser.add_argument(
+        "--slow-diagnostics",
+        action="store_true",
+        help=(
+            "print per-frame opcode/PC snapshots when a frame is slow or "
+            "audio underruns"
+        ),
+    )
+    parser.add_argument(
+        "--slow-frame-threshold",
+        type=float,
+        default=1.25,
+        help=(
+            "slow diagnostic trigger as a multiple of one frame budget "
+            "(default: 1.25)"
+        ),
+    )
+    parser.add_argument(
+        "--slow-diagnostics-start-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "elapsed runtime before collecting slow frame snapshots "
+            "(default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--slow-diagnostics-end-seconds",
+        type=float,
+        help="elapsed runtime after which slow frame snapshots stop",
+    )
+    parser.add_argument(
+        "--slow-diagnostics-limit",
+        type=int,
+        default=12,
+        help="maximum slow diagnostic frame snapshots to print (default: 12)",
+    )
+    parser.add_argument(
+        "--phase-diagnostics",
+        action="store_true",
+        help=(
+            "print low-overhead FPS/audio buckets for spotting front-loaded "
+            "slowdowns"
+        ),
+    )
+    parser.add_argument(
+        "--phase-diagnostics-seconds",
+        type=float,
+        default=5.0,
+        help="seconds per phase diagnostic bucket (default: 5)",
+    )
+    parser.add_argument(
+        "--pc-sample-range",
+        type=parse_pc_sample_range,
+        help=(
+            "inclusive hex PC range to sample in CPU diagnostics, "
+            "for example 3A71-3A83"
+        ),
+    )
+    parser.add_argument(
+        "--pc-sample-limit",
+        type=int,
+        default=20,
+        help="maximum register samples to keep for --pc-sample-range",
+    )
+    parser.add_argument(
         "--screenshot-dir",
         help="write diagnostic framebuffer PNGs to this directory",
     )
@@ -1221,6 +1768,25 @@ if __name__ == '__main__':
         parser.error("--volume must be between 0 and 100")
     if args.metrics_warmup_seconds < 0:
         parser.error("--metrics-warmup-seconds must be 0 or greater")
+    if args.slow_frame_threshold <= 0:
+        parser.error("--slow-frame-threshold must be greater than 0")
+    if args.slow_diagnostics_start_seconds < 0:
+        parser.error("--slow-diagnostics-start-seconds must be 0 or greater")
+    if (
+        args.slow_diagnostics_end_seconds is not None
+        and args.slow_diagnostics_end_seconds
+        <= args.slow_diagnostics_start_seconds
+    ):
+        parser.error(
+            "--slow-diagnostics-end-seconds must be greater than "
+            "--slow-diagnostics-start-seconds"
+        )
+    if args.slow_diagnostics_limit < 1:
+        parser.error("--slow-diagnostics-limit must be 1 or greater")
+    if args.phase_diagnostics_seconds <= 0:
+        parser.error("--phase-diagnostics-seconds must be greater than 0")
+    if args.pc_sample_limit < 1:
+        parser.error("--pc-sample-limit must be 1 or greater")
 
     if args.profile:
         profiler = cProfile.Profile()
@@ -1251,6 +1817,17 @@ if __name__ == '__main__':
                 gbc=args.gbc,
                 bios=args.bios,
                 metrics_warmup_seconds=args.metrics_warmup_seconds,
+                slow_diagnostics=args.slow_diagnostics,
+                slow_diagnostics_start_seconds=(
+                    args.slow_diagnostics_start_seconds
+                ),
+                slow_diagnostics_end_seconds=args.slow_diagnostics_end_seconds,
+                slow_frame_threshold=args.slow_frame_threshold,
+                slow_diagnostics_limit=args.slow_diagnostics_limit,
+                phase_diagnostics=args.phase_diagnostics,
+                phase_diagnostics_seconds=args.phase_diagnostics_seconds,
+                pc_sample_range=args.pc_sample_range,
+                pc_sample_limit=args.pc_sample_limit,
             )
         finally:
             profiler.disable()
@@ -1284,4 +1861,13 @@ if __name__ == '__main__':
             gbc=args.gbc,
             bios=args.bios,
             metrics_warmup_seconds=args.metrics_warmup_seconds,
+            slow_diagnostics=args.slow_diagnostics,
+            slow_diagnostics_start_seconds=args.slow_diagnostics_start_seconds,
+            slow_diagnostics_end_seconds=args.slow_diagnostics_end_seconds,
+            slow_frame_threshold=args.slow_frame_threshold,
+            slow_diagnostics_limit=args.slow_diagnostics_limit,
+            phase_diagnostics=args.phase_diagnostics,
+            phase_diagnostics_seconds=args.phase_diagnostics_seconds,
+            pc_sample_range=args.pc_sample_range,
+            pc_sample_limit=args.pc_sample_limit,
         )
