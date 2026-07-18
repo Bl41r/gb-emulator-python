@@ -76,6 +76,8 @@ def main(
     slow_diagnostics=False,
     slow_diagnostics_start_seconds=0.0,
     slow_diagnostics_end_seconds=None,
+    slow_diagnostics_after_input_sequence=None,
+    slow_diagnostics_input_window_seconds=8.0,
     slow_frame_threshold=1.25,
     slow_diagnostics_limit=12,
     phase_diagnostics=False,
@@ -89,8 +91,13 @@ def main(
         gb_doctor_test_mode=GB_DR_TEST_MODE,
         trace_enabled=trace,
     )
+    slow_diagnostics_waiting_for_input = (
+        slow_diagnostics_after_input_sequence is not None
+    )
+    slow_diagnostics_sequence_index = 0
     slow_diagnostics_active = (
         slow_diagnostics
+        and not slow_diagnostics_waiting_for_input
         and slow_diagnostics_start_seconds <= 0
         and (
             slow_diagnostics_end_seconds is None
@@ -290,7 +297,7 @@ def main(
                                 "Slow diagnostics: event print limit reached; "
                                 "suppressing additional frame snapshots"
                             )
-                if slow_diagnostics:
+                if slow_diagnostics and not slow_diagnostics_waiting_for_input:
                     elapsed_for_slow_diagnostics = now - stats['start_seconds']
                     next_slow_diagnostics_active = (
                         elapsed_for_slow_diagnostics
@@ -347,6 +354,45 @@ def main(
                 )
                 if not no_display:
                     pressed_buttons.extend(handle_events(sys_interface))
+                if slow_diagnostics_waiting_for_input and pressed_buttons:
+                    for button in pressed_buttons:
+                        expected_button = slow_diagnostics_after_input_sequence[
+                            slow_diagnostics_sequence_index
+                        ]
+                        if button == expected_button:
+                            slow_diagnostics_sequence_index += 1
+                            if slow_diagnostics_sequence_index == len(
+                                slow_diagnostics_after_input_sequence
+                            ):
+                                trigger_elapsed = (
+                                    time.perf_counter() - stats['start_seconds']
+                                )
+                                slow_diagnostics_start_seconds = trigger_elapsed
+                                slow_diagnostics_end_seconds = (
+                                    trigger_elapsed
+                                    + slow_diagnostics_input_window_seconds
+                                )
+                                slow_diagnostics_waiting_for_input = False
+                                slow_diagnostics_active = True
+                                cpu.slow_diagnostics_enabled = True
+                                cpu.reset_slow_diagnostics_window()
+                                slow_last_frame_seconds = time.perf_counter()
+                                if audio_output is not None:
+                                    slow_last_underrun_events = (
+                                        audio_output.underrun_events
+                                    )
+                                print(
+                                    "Slow diagnostics armed after input "
+                                    "sequence "
+                                    f"{','.join(slow_diagnostics_after_input_sequence)} "
+                                    f"at {trigger_elapsed:.2f}s"
+                                )
+                                break
+                        elif button == slow_diagnostics_after_input_sequence[0]:
+                            slow_diagnostics_sequence_index = 1
+                        else:
+                            slow_diagnostics_sequence_index = 0
+                if not no_display:
                     if pressed_buttons and audio_output is not None:
                         audio_output.start_latency_tracking()
                     if audio_enabled and audio_output is not None:
@@ -1121,6 +1167,25 @@ def parse_pc_sample_range(value):
     return start, end
 
 
+def parse_button_sequence(value):
+    """Parse a comma-separated button sequence for diagnostics."""
+    buttons = tuple(part.strip().lower() for part in value.split(","))
+    valid_buttons = {"right", "left", "up", "down", "a", "b", "select", "start"}
+    if not buttons or any(not button for button in buttons):
+        raise argparse.ArgumentTypeError(
+            "expected comma-separated buttons, for example start,a,a,a"
+        )
+    unknown = [button for button in buttons if button not in valid_buttons]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            "unknown button(s): {}; expected one of {}".format(
+                ", ".join(unknown),
+                ", ".join(sorted(valid_buttons)),
+            )
+        )
+    return buttons
+
+
 def format_memory_window(sys_interface, pc, before=2, after=8):
     """Format live memory bytes around a hot PC without invoking MMIO reads."""
     start = max(0, pc - before)
@@ -1676,6 +1741,23 @@ if __name__ == '__main__':
         help="elapsed runtime after which slow frame snapshots stop",
     )
     parser.add_argument(
+        "--slow-diagnostics-after-input-sequence",
+        type=parse_button_sequence,
+        help=(
+            "arm slow diagnostics after a comma-separated button sequence, "
+            "for example start,a,a,a"
+        ),
+    )
+    parser.add_argument(
+        "--slow-diagnostics-input-window-seconds",
+        type=float,
+        default=8.0,
+        help=(
+            "seconds to collect after --slow-diagnostics-after-input-sequence "
+            "fires (default: 8)"
+        ),
+    )
+    parser.add_argument(
         "--slow-diagnostics-limit",
         type=int,
         default=12,
@@ -1781,6 +1863,8 @@ if __name__ == '__main__':
             "--slow-diagnostics-end-seconds must be greater than "
             "--slow-diagnostics-start-seconds"
         )
+    if args.slow_diagnostics_input_window_seconds <= 0:
+        parser.error("--slow-diagnostics-input-window-seconds must be greater than 0")
     if args.slow_diagnostics_limit < 1:
         parser.error("--slow-diagnostics-limit must be 1 or greater")
     if args.phase_diagnostics_seconds <= 0:
@@ -1822,6 +1906,12 @@ if __name__ == '__main__':
                     args.slow_diagnostics_start_seconds
                 ),
                 slow_diagnostics_end_seconds=args.slow_diagnostics_end_seconds,
+                slow_diagnostics_after_input_sequence=(
+                    args.slow_diagnostics_after_input_sequence
+                ),
+                slow_diagnostics_input_window_seconds=(
+                    args.slow_diagnostics_input_window_seconds
+                ),
                 slow_frame_threshold=args.slow_frame_threshold,
                 slow_diagnostics_limit=args.slow_diagnostics_limit,
                 phase_diagnostics=args.phase_diagnostics,
@@ -1864,6 +1954,12 @@ if __name__ == '__main__':
             slow_diagnostics=args.slow_diagnostics,
             slow_diagnostics_start_seconds=args.slow_diagnostics_start_seconds,
             slow_diagnostics_end_seconds=args.slow_diagnostics_end_seconds,
+            slow_diagnostics_after_input_sequence=(
+                args.slow_diagnostics_after_input_sequence
+            ),
+            slow_diagnostics_input_window_seconds=(
+                args.slow_diagnostics_input_window_seconds
+            ),
             slow_frame_threshold=args.slow_frame_threshold,
             slow_diagnostics_limit=args.slow_diagnostics_limit,
             phase_diagnostics=args.phase_diagnostics,
