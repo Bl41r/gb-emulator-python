@@ -16,6 +16,7 @@ from cpu import (
     OP_FAST_LY_COMPARE_B_LOOP,
     OP_FAST_LY_ZERO_LOOP,
     OP_FAST_ROM_BIT_DECODE_OUTPUT_LOOP,
+    OP_FAST_ROM_BIT_READER_HELPER,
     OP_FAST_STAT_MODE_POLL_LOOP,
 )
 from joypad import Joypad
@@ -298,6 +299,23 @@ class GbSystemInterface(object):
                 and direct_rom[pc + 13] == 0xEE
             ):
                 decoded_rom_ops[pc] = OP_FAST_ROM_BIT_DECODE_OUTPUT_LOOP
+
+            if (
+                direct_rom[pc] == 0x1A
+                and direct_rom[pc + 1] == 0xA1
+                and direct_rom[pc + 2] == 0xCB
+                and direct_rom[pc + 3] == 0x31
+                and direct_rom[pc + 4] == 0xCB
+                and direct_rom[pc + 5] == 0x79
+                and direct_rom[pc + 6] == 0x20
+                and direct_rom[pc + 7] == 0x03
+                and direct_rom[pc + 8] == 0xCB
+                and direct_rom[pc + 9] == 0x37
+                and direct_rom[pc + 10] == 0xC9
+                and direct_rom[pc + 11] == 0x13
+                and direct_rom[pc + 12] == 0xC9
+            ):
+                decoded_rom_ops[pc] = OP_FAST_ROM_BIT_READER_HELPER
 
         self.cpu.hram_poll_loop_ldh_offsets = hram_poll_loop_ldh_offsets
         self.cpu.hram_compare_b_loop_ldh_offsets = hram_compare_b_loop_ldh_pcs

@@ -140,6 +140,7 @@ OP_FAST_CP_HL_JR_NZ_LOOP = 0x101
 OP_FAST_STAT_MODE_POLL_LOOP = 0x102
 OP_FAST_LY_ZERO_LOOP = 0x103
 OP_FAST_ROM_BIT_DECODE_OUTPUT_LOOP = 0x104
+OP_FAST_ROM_BIT_READER_HELPER = 0x105
 PSEUDO_OPCODE_BASE = 0x100
 OP_FAST_HRAM_POLL_LOOP_BASE = 0x200
 INLINE_OPCODE_MASK = bytearray(256)
@@ -780,6 +781,7 @@ class GbZ80Cpu(object):
             self._fast_stat_mode_poll_loop,
             self._fast_ly_zero_loop,
             self._fast_rom_bit_decode_output_loop,
+            self._fast_rom_bit_reader_helper,
         ]
 
     def reset_slow_diagnostics_window(self):
@@ -1762,16 +1764,17 @@ class GbZ80Cpu(object):
         return loops * 3
 
     def _fast_rom_bit_decode_output_loop(self, pc, sys_interface, gpu):
-        """Fold an exact ROM-table bit decoder until one output byte is ready.
+        """Fold an exact ROM-table bit decoder and its byte-output tail.
 
         This matches a compact decompression inner loop used by some ROMs:
 
             LD H,$3F; LD A,(HL); DEC H; RL C; JR C,+3;
             DEC H; SWAP A; RLA; JR C,...
 
-        The folded range performs ROM/table reads and register updates only.
-        It stops before the following LD (DE),A write so normal memory side
-        effects still happen through the ordinary CPU path.
+        The bit decoder selects a ROM/table byte by leaving its source address
+        in HL. This helper then performs the following LD A,(HL); LD (DE),A;
+        INC E tail and stops at either the next DEC B loop entry or the row
+        boundary, where the routine's more complex outer bookkeeping resumes.
         """
         registers = self.registers
         if (
@@ -1876,6 +1879,47 @@ class GbZ80Cpu(object):
             if not (f & FLAG_CARRY):
                 m_cycles += 2
                 instructions += 1
+                # 3A83: LD A,(HL)
+                a = read_fast((h << 8) | l)
+                m_cycles += 2
+                instructions += 1
+
+                # 3A84: LD (DE),A
+                self._fast_write8((d << 8) | e, a, sys_interface)
+                m_cycles += 2
+                instructions += 1
+
+                # 3A85: INC E
+                e = (e + 1) & 0xFF
+                m_cycles += 1
+                instructions += 1
+
+                # 3A86: LD L,$FE
+                l = 0xFE
+                m_cycles += 2
+                instructions += 1
+
+                # 3A88: LD A,E
+                a = e
+                m_cycles += 1
+                instructions += 1
+
+                # 3A89: AND $0F
+                a &= 0x0F
+                f = FLAG_HALF_CARRY | (FLAG_ZERO if a == 0 else 0)
+                m_cycles += 2
+                instructions += 1
+
+                if a != 0:
+                    # 3A8B: JR NZ,-27 -> 3A72
+                    m_cycles += 3
+                    next_pc = pc - 3
+                else:
+                    # 3A8B: JR NZ not taken; outer row/block logic follows.
+                    m_cycles += 2
+                    next_pc = pc + 24
+                instructions += 1
+
                 registers['a'] = a
                 registers['f'] = f
                 registers['b'] = b
@@ -1885,7 +1929,7 @@ class GbZ80Cpu(object):
                 registers['h'] = h
                 registers['l'] = l
                 registers['sp'] = sp
-                registers['pc'] = (pc + 14) & 0xFFFF
+                registers['pc'] = next_pc & 0xFFFF
                 registers['m'] = m_cycles
                 if self.diagnostics_enabled:
                     diagnostics = self.diagnostics
@@ -1900,6 +1944,17 @@ class GbZ80Cpu(object):
                         diagnostics.get('pseudo_rom_bit_decode_m_cycles', 0)
                         + m_cycles
                     )
+                    diagnostics['pseudo_rom_bit_decode_tail_writes'] = (
+                        diagnostics.get('pseudo_rom_bit_decode_tail_writes', 0)
+                        + 1
+                    )
+                    if a == 0:
+                        diagnostics['pseudo_rom_bit_decode_row_exits'] = (
+                            diagnostics.get(
+                                'pseudo_rom_bit_decode_row_exits',
+                                0,
+                            ) + 1
+                        )
                 return instructions
 
             m_cycles += 3
@@ -1975,6 +2030,112 @@ class GbZ80Cpu(object):
             diagnostics = self.diagnostics
             diagnostics['pseudo_rom_bit_decode_fallbacks'] = (
                 diagnostics.get('pseudo_rom_bit_decode_fallbacks', 0) + 1
+            )
+        return 1
+
+    def _fast_rom_bit_reader_helper(self, pc, sys_interface, gpu):
+        """Fold an exact ROM bitreader helper including its RET."""
+        registers = self.registers
+        if (
+            self.gb_doctor_test_mode
+            or self.enable_interrupts_next_cycle
+        ):
+            return self._fallback_fast_rom_bit_reader_helper(sys_interface)
+
+        memory = sys_interface.raw_memory
+        if registers['ime']:
+            interrupt_enable = memory[0xFFFF]
+            if interrupt_enable & memory[0xFF0F] & 0x1F:
+                return self._fallback_fast_rom_bit_reader_helper(
+                    sys_interface
+                )
+
+            interrupt_m_until = 0x10000
+            if interrupt_enable & 0x01:
+                line = memory[0xFF44]
+                if line >= 144:
+                    interrupt_m_until = 1
+                else:
+                    interrupt_m_until = gpu.m_cycles_until_ly(144)
+            if interrupt_enable & 0x02:
+                stat_m_until = gpu.m_cycles_until_mode_transition()
+                if stat_m_until < interrupt_m_until:
+                    interrupt_m_until = stat_m_until
+            if interrupt_enable & 0x04:
+                timer_m_until = sys_interface.m_cycles_until_timer_interrupt()
+                if timer_m_until < interrupt_m_until:
+                    interrupt_m_until = timer_m_until
+            if interrupt_m_until <= 16:
+                return self._fallback_fast_rom_bit_reader_helper(
+                    sys_interface
+                )
+
+        direct_rom = self.direct_rom
+        value = self._fast_read8(
+            (registers['d'] << 8) | registers['e'],
+            direct_rom,
+            sys_interface,
+        )
+
+        # LD A,(DE); AND C
+        a = value & registers['c']
+
+        # SWAP C
+        c = registers['c']
+        c = ((c & 0x0F) << 4) | (c >> 4)
+        registers['c'] = c
+
+        # BIT 7,C after SWAP C. SWAP clears carry, so BIT preserves carry=0.
+        if c & 0x80:
+            flags = FLAG_HALF_CARRY
+            # JR NZ,+3; INC DE; RET
+            de = (((registers['d'] << 8) | registers['e']) + 1) & 0xFFFF
+            registers['d'] = (de >> 8) & 0xFF
+            registers['e'] = de & 0xFF
+            m_cycles = 16
+        else:
+            flags = FLAG_ZERO | FLAG_HALF_CARRY
+            # JR NZ not taken; SWAP A; RET
+            a = ((a & 0x0F) << 4) | (a >> 4)
+            flags = FLAG_ZERO if a == 0 else 0
+            m_cycles = 15
+
+        sp = registers['sp']
+        lo = self._fast_read8(sp, direct_rom, sys_interface)
+        hi = self._fast_read8((sp + 1) & 0xFFFF, direct_rom, sys_interface)
+        registers['sp'] = (sp + 2) & 0xFFFF
+        registers['pc'] = (hi << 8) | lo
+        registers['a'] = a
+        registers['f'] = flags
+        registers['m'] = m_cycles
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_rom_bit_reader_calls'] = (
+                diagnostics.get('pseudo_rom_bit_reader_calls', 0) + 1
+            )
+            diagnostics['pseudo_rom_bit_reader_m_cycles'] = (
+                diagnostics.get('pseudo_rom_bit_reader_m_cycles', 0) + m_cycles
+            )
+            if c & 0x80:
+                diagnostics['pseudo_rom_bit_reader_de_increments'] = (
+                    diagnostics.get('pseudo_rom_bit_reader_de_increments', 0)
+                    + 1
+                )
+        return 7
+
+    def _fallback_fast_rom_bit_reader_helper(self, sys_interface):
+        """Execute the first instruction of the ROM bitreader normally."""
+        registers = self.registers
+        registers['a'] = self._fast_read8(
+            (registers['d'] << 8) | registers['e'],
+            self.direct_rom,
+            sys_interface,
+        )
+        registers['m'] = 2
+        if self.diagnostics_enabled:
+            diagnostics = self.diagnostics
+            diagnostics['pseudo_rom_bit_reader_fallbacks'] = (
+                diagnostics.get('pseudo_rom_bit_reader_fallbacks', 0) + 1
             )
         return 1
 

@@ -1382,8 +1382,21 @@ def print_cpu_diagnostics(cpu, limit=12):
             f"{iterations:,} decoder iterations, "
             f"{avg_iterations:.1f} avg iterations/call, "
             f"{m_cycles:,} M-cycles folded/tracked, "
+            f"{stats.get('pseudo_rom_bit_decode_tail_writes', 0):,} tail writes, "
+            f"{stats.get('pseudo_rom_bit_decode_row_exits', 0):,} row exits, "
             f"{stats.get('pseudo_rom_bit_decode_fallbacks', 0):,} fallbacks, "
             f"{stats.get('pseudo_rom_bit_decode_limit_exits', 0):,} limit exits"
+        )
+
+    bit_reader_calls = stats.get('pseudo_rom_bit_reader_calls', 0)
+    if bit_reader_calls:
+        m_cycles = stats.get('pseudo_rom_bit_reader_m_cycles', 0)
+        print(
+            "  ROM bit-reader pseudo-op: "
+            f"{bit_reader_calls:,} calls, "
+            f"{m_cycles:,} M-cycles folded/tracked, "
+            f"{stats.get('pseudo_rom_bit_reader_de_increments', 0):,} DE increments, "
+            f"{stats.get('pseudo_rom_bit_reader_fallbacks', 0):,} fallbacks"
         )
 
     cb46_count = stats.get('cb46_count', 0)
